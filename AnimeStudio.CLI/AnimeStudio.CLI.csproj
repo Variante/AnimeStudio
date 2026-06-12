@@ -26,6 +26,17 @@
   </ItemGroup>
 
 	<ItemGroup>
+		<ContentWithTargetPath Include="..\AnimeStudio.Libraries\x86\AnimeStudio.FBXNative.dll">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<TargetPath>x86\AnimeStudio.FBXNative.dll</TargetPath>
+		</ContentWithTargetPath>
+		<ContentWithTargetPath Include="..\AnimeStudio.Libraries\x64\AnimeStudio.FBXNative.dll">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<TargetPath>x64\AnimeStudio.FBXNative.dll</TargetPath>
+		</ContentWithTargetPath>
+	</ItemGroup>
+
+	<ItemGroup>
 		<ContentWithTargetPath Include="..\AnimeStudio.Libraries\x86\acl.dll">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<TargetPath>x86\acl.dll</TargetPath>
@@ -70,8 +81,8 @@
 	</ItemGroup>
 
   <Target Name="CopyExtraFiles" AfterTargets="AfterBuild">
-  	<Copy SourceFiles="$(SolutionDir)AnimeStudio.Libraries\x86\AnimeStudio.FBXNative.dll" DestinationFolder="$(TargetDir)x86" ContinueOnError="true" />
-  	<Copy SourceFiles="$(SolutionDir)AnimeStudio.Libraries\x64\AnimeStudio.FBXNative.dll" DestinationFolder="$(TargetDir)x64" ContinueOnError="true" />
+  	<Copy SourceFiles="$(AnimeStudioLibrariesDir)x86\AnimeStudio.FBXNative.dll" DestinationFolder="$(TargetDir)x86" ContinueOnError="true" />
+  	<Copy SourceFiles="$(AnimeStudioLibrariesDir)x64\AnimeStudio.FBXNative.dll" DestinationFolder="$(TargetDir)x64" ContinueOnError="true" />
   </Target>
   
   <Target Name="PublishExtraFiles" AfterTargets="Publish">

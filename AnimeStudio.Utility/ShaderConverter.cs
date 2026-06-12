@@ -37,6 +37,11 @@ namespace AnimeStudio
                 }
             }
 
+            if (shader.subShaderBlobs != null && shader.subShaderBlobs.Count > 0)
+            {
+                return header + ConvertSerializedShader(shader, shader.subShaderBlobs);
+            }
+
             if (shader.compressedBlob != null) //5.5 and up
             {
                 return header + ConvertSerializedShader(shader);
@@ -45,25 +50,52 @@ namespace AnimeStudio
             return header + Encoding.UTF8.GetString(shader.m_Script);
         }
 
+        private static string ConvertSerializedShader(Shader shader, IReadOnlyList<SubShaderBlob> subShaderBlobs)
+        {
+            if (subShaderBlobs.Count == 1)
+            {
+                return ConvertSerializedShader(shader, subShaderBlobs[0]);
+            }
+
+            var sb = new StringBuilder();
+            foreach (var subShaderBlob in subShaderBlobs)
+            {
+                sb.Append($"// Endfield Shader LOD {subShaderBlob.m_ShaderLOD}\n");
+                sb.Append(ConvertSerializedShader(shader, subShaderBlob));
+                sb.Append("\n");
+            }
+            return sb.ToString();
+        }
+
+        private static string ConvertSerializedShader(Shader shader, SubShaderBlob subShaderBlob)
+        {
+            return ConvertSerializedShader(shader, subShaderBlob.m_CompressedBlob, subShaderBlob.m_Offsets, subShaderBlob.m_CompressedLengths, subShaderBlob.m_DecompressedLengths);
+        }
+
         private static string ConvertSerializedShader(Shader shader)
+        {
+            return ConvertSerializedShader(shader, shader.compressedBlob, shader.offsets, shader.compressedLengths, shader.decompressedLengths);
+        }
+
+        private static string ConvertSerializedShader(Shader shader, byte[] compressedBlob, uint[][] offsets, uint[][] compressedLengths, uint[][] decompressedLengths)
         {
             var length = shader.platforms.Length;
             var shaderPrograms = new ShaderProgram[length];
             for (var i = 0; i < length; i++)
             {
-                for (var j = 0; j < shader.offsets[i].Length; j++)
+                for (var j = 0; j < offsets[i].Length; j++)
                 {
-                    var offset = shader.offsets[i][j];
-                    var compressedLength = shader.compressedLengths[i][j];
-                    var decompressedLength = shader.decompressedLengths[i][j];
+                    var offset = offsets[i][j];
+                    var compressedLength = compressedLengths[i][j];
+                    var decompressedLength = decompressedLengths[i][j];
                     var decompressedBytes = new byte[decompressedLength];
                     if (shader.assetsFile.game.Type.IsGISubGroup())
                     {
-                        Buffer.BlockCopy(shader.compressedBlob, (int)offset, decompressedBytes, 0, (int)decompressedLength);
+                        Buffer.BlockCopy(compressedBlob, (int)offset, decompressedBytes, 0, (int)decompressedLength);
                     }
                     else
                     {
-                        var numWrite = LZ4.Instance.Decompress(shader.compressedBlob.AsSpan().Slice((int)offset, (int)compressedLength), decompressedBytes.AsSpan().Slice(0, (int)decompressedLength));
+                        var numWrite = LZ4.Instance.Decompress(compressedBlob.AsSpan().Slice((int)offset, (int)compressedLength), decompressedBytes.AsSpan().Slice(0, (int)decompressedLength));
                         if (numWrite != decompressedLength)
                         {
                             throw new IOException($"Lz4 decompression error, write {numWrite} bytes but expected {decompressedLength} bytes");

@@ -637,14 +637,21 @@ namespace AnimeStudio
                         return;
                     }
                     var objectReader = new ObjectReader(assetsFile.reader, assetsFile, objectInfo, Game);
+                    Object obj;
                     try
                     {
-                        Object obj = objectReader.type switch
+                        obj = objectReader.type switch
                         {
                             ClassIDType.Animation when ClassIDType.Animation.CanParse() => new Animation(objectReader),
                             ClassIDType.AnimationClip when ClassIDType.AnimationClip.CanParse() => new AnimationClip(objectReader),
                             ClassIDType.Animator when ClassIDType.Animator.CanParse() => new Animator(objectReader),
-                            ClassIDType.AnimatorController when ClassIDType.AnimatorController.CanParse() => new AnimatorController(objectReader),
+                            // Endfield AnimatorController assets currently serialize fields the handwritten parser
+                            // does not understand. Use the generic type-tree object instead of constructing a
+                            // partially parsed controller and falling back later.
+                            ClassIDType.AnimatorController
+                                when ClassIDType.AnimatorController.CanParse()
+                                && !(objectReader.Game.Type.IsArknightsEndfieldCB3() || objectReader.Game.Type.IsArknightsEndfield())
+                                    => new AnimatorController(objectReader),
                             ClassIDType.AnimatorOverrideController when ClassIDType.AnimatorOverrideController.CanParse() => new AnimatorOverrideController(objectReader),
                             ClassIDType.AssetBundle when ClassIDType.AssetBundle.CanParse() => new AssetBundle(objectReader),
                             ClassIDType.AudioClip when ClassIDType.AudioClip.CanParse() => new AudioClip(objectReader),
@@ -674,19 +681,39 @@ namespace AnimeStudio
                             ClassIDType.NapAssetBundleIndexAsset when ClassIDType.NapAssetBundleIndexAsset.CanParse() => new NapAssetBundleIndexAsset(objectReader),
                             _ => new Object(objectReader),
                         };
-                        assetsFile.AddObject(obj);
                     }
                     catch (Exception e)
                     {
-                        var sb = new StringBuilder();
-                        sb.AppendLine("Unable to load object")
-                            .AppendLine($"Assets {assetsFile.fileName}")
-                            .AppendLine($"Path {assetsFile.originalPath}")
-                            .AppendLine($"Type {objectReader.type}")
-                            .AppendLine($"PathID {objectInfo.m_PathID}")
-                            .Append(e);
-                        Logger.Error(sb.ToString());
+                        try
+                        {
+                            if (objectReader.serializedType?.m_Type == null)
+                            {
+                                throw;
+                            }
+
+                            obj = new Object(objectReader);
+                            Logger.Warning(
+                                $"Falling back to generic type-tree export for {objectReader.type} " +
+                                $"at PathID {objectInfo.m_PathID} in {assetsFile.fileName}: {e.GetType().Name}: {e.Message}"
+                            );
+                            Logger.Verbose($"Generic type-tree fallback detail: {e}");
+                        }
+                        catch (Exception fallbackException)
+                        {
+                            var sb = new StringBuilder();
+                            sb.AppendLine("Unable to load object")
+                                .AppendLine($"Assets {assetsFile.fileName}")
+                                .AppendLine($"Path {assetsFile.originalPath}")
+                                .AppendLine($"Type {objectReader.type}")
+                                .AppendLine($"PathID {objectInfo.m_PathID}")
+                                .AppendLine($"Primary error: {e}")
+                                .Append($"Fallback error: {fallbackException}");
+                            Logger.Error(sb.ToString());
+                            continue;
+                        }
                     }
+
+                    assetsFile.AddObject(obj);
 
                     Progress.Report(++i, progressCount);
                 }

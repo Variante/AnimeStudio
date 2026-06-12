@@ -82,7 +82,7 @@ namespace AnimeStudio
         {
             var binaryReader = GetReader();
             binaryReader.BaseStream.Position = offset;
-            using (var writer = File.OpenWrite(path))
+            using (var writer = File.Create(path))
             {
                 binaryReader.BaseStream.CopyTo(writer, size);
             }

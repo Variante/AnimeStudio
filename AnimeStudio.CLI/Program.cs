@@ -47,11 +47,17 @@ namespace AnimeStudio.CLI
                 AssetsHelper.Minimal = Settings.Default.minimalAssetMap;
                 AssetsHelper.SetUnityVersion(o.UnityVersion);
 
-                TypeFlags.SetTypes(JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Settings.Default.types));
+                var configuredTypes = JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Settings.Default.types)
+                    ?? new Dictionary<ClassIDType, (bool, bool)>();
+                TypeFlags.SetTypes(configuredTypes);
 
                 var classTypeFilter = Array.Empty<ClassIDType>();
                 if (!o.TypeFilter.IsNullOrEmpty())
                 {
+                    // When the CLI receives an explicit type list, treat it as the full parse/export surface
+                    // instead of layering it on top of the default settings from App.config.
+                    TypeFlags.SetTypes(new Dictionary<ClassIDType, (bool, bool)>());
+
                     var exportTexture2D = false;
                     var exportMaterial = false;
                     var classTypeFilterList = new List<ClassIDType>();
@@ -138,6 +144,17 @@ namespace AnimeStudio.CLI
                 if (o.DummyDllFolder != null)
                 {
                     assemblyLoader.Load(o.DummyDllFolder.FullName);
+                }
+
+                if (o.FilterDataFile != null && o.FilterDataFile.Exists)
+                {
+                    var filterJson = File.ReadAllText(o.FilterDataFile.FullName);
+                    var filterItems = JsonConvert.DeserializeObject<List<AssetsManager.AssetFilterDataItem>>(filterJson);
+                    if (filterItems != null && filterItems.Count > 0)
+                    {
+                        assetsManager.FilterData.Items.AddRange(filterItems);
+                        Logger.Info($"[FilterData] Loaded {filterItems.Count} items from {o.FilterDataFile.FullName}");
+                    }
                 }
 
                 Logger.Info("Scanning for files...");

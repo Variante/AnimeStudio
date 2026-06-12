@@ -232,7 +232,7 @@ namespace AnimeStudio
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputFile));
 
-            using (var binaryFile = File.OpenWrite(outputFile))
+            using (var binaryFile = File.Create(outputFile))
             using (var writer = new BinaryWriter(binaryFile))
             {
                 writer.Write(BaseFolder);

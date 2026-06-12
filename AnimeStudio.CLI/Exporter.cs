@@ -2,9 +2,12 @@
 using Newtonsoft.Json.Converters;
 using System.Buffers.Binary;
 using System;
+using System.Collections;
+using System.Collections.Specialized;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -12,6 +15,34 @@ namespace AnimeStudio.CLI
 {
     internal static class Exporter
     {
+        private const int MaxSafeFileNameLength = 120;
+        private const int MonoBehaviourBaseTypeTreeNodeCount = 12;
+        private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM1",
+            "COM2",
+            "COM3",
+            "COM4",
+            "COM5",
+            "COM6",
+            "COM7",
+            "COM8",
+            "COM9",
+            "LPT1",
+            "LPT2",
+            "LPT3",
+            "LPT4",
+            "LPT5",
+            "LPT6",
+            "LPT7",
+            "LPT8",
+            "LPT9",
+        };
+
         public static bool ExportTexture2D(AssetItem item, string exportPath)
         {
             var m_Texture2D = (Texture2D)item.Asset;
@@ -25,7 +56,7 @@ namespace AnimeStudio.CLI
                     return false;
                 using (image)
                 {
-                    using (var file = File.OpenWrite(exportFullPath))
+                    using (var file = File.Create(exportFullPath))
                     {
                         image.WriteToStream(file, type);
                     }
@@ -180,17 +211,364 @@ namespace AnimeStudio.CLI
             {
                 if (!TryExportFile(exportPath, item, ".json", out var exportFullPath))
                     return false;
-                var type = m_MonoBehaviour.ToType();
+                OrderedDictionary type = null;
+                TypeTree exportTypeTree = m_MonoBehaviour.serializedType?.m_Type;
+                string typeTreeSource = exportTypeTree != null ? "serializedType" : "none";
+                Exception builtInTypeTreeException = null;
+                Exception decodeException = null;
+                try
+                {
+                    type = m_MonoBehaviour.ToType();
+                }
+                catch (Exception ex)
+                {
+                    builtInTypeTreeException = ex;
+                    decodeException = ex;
+                }
+
+                if (type == null && Studio.assemblyLoader.Loaded)
+                {
+                    try
+                    {
+                        var scriptTypeTree = Studio.MonoBehaviourToTypeTree(m_MonoBehaviour);
+                        if (scriptTypeTree?.m_Nodes?.Count > MonoBehaviourBaseTypeTreeNodeCount)
+                        {
+                            if (builtInTypeTreeException != null)
+                            {
+                                Logger.Warning(
+                                    $"Retrying MonoBehaviour {item.Text} with a script-derived type tree after " +
+                                    $"{builtInTypeTreeException.GetType().Name}: {builtInTypeTreeException.Message}"
+                                );
+                            }
+                            type = m_MonoBehaviour.ToType(scriptTypeTree);
+                            if (type != null)
+                            {
+                                exportTypeTree = scriptTypeTree;
+                                typeTreeSource = "scriptDerived";
+                                decodeException = null;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        decodeException = ex;
+                        Logger.Warning(
+                            $"Script-derived MonoBehaviour decode failed for {item.Text}: " +
+                            $"{ex.GetType().Name}: {ex.Message}"
+                        );
+                    }
+                }
+
+                var rawData = m_MonoBehaviour.GetRawData();
+                var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+
                 if (type == null)
                 {
-                    var m_Type = Studio.MonoBehaviourToTypeTree(m_MonoBehaviour);
-                    type = m_MonoBehaviour.ToType(m_Type);
+                    if (decodeException != null)
+                    {
+                        Logger.Warning(
+                            $"Exporting MonoBehaviour {item.Text} as metadata-only JSON after " +
+                            $"{decodeException.GetType().Name}: {decodeException.Message}"
+                        );
+                        var fallback = new OrderedDictionary
+                        {
+                            { "$animestudio", BuildMonoBehaviourExportMetadata(
+                                item,
+                                m_MonoBehaviour,
+                                rawData,
+                                exportTypeTree,
+                                typeTreeSource,
+                                rawSidecar,
+                                decodeException,
+                                null
+                            ) },
+                            { "type", item.TypeString },
+                            { "name", item.Text ?? "" },
+                            { "pathId", item.m_PathID },
+                            { "decodeError", $"{decodeException.GetType().Name}: {decodeException.Message}" },
+                        };
+                        var fallbackText = JsonConvert.SerializeObject(fallback, Formatting.Indented);
+                        File.WriteAllText(exportFullPath, fallbackText);
+                        return true;
+                    }
+                    return false;
                 }
+                // Embed export metadata so consumers can rebuild PathID links and
+                // tie script-derived MonoBehaviours back to their runtime class.
+                // Stored under "$animestudio" to avoid colliding with real fields.
+                var meta = BuildMonoBehaviourExportMetadata(
+                    item,
+                    m_MonoBehaviour,
+                    rawData,
+                    exportTypeTree,
+                    typeTreeSource,
+                    rawSidecar,
+                    builtInTypeTreeException,
+                    type
+                );
+                type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
                 File.WriteAllText(exportFullPath, str);
             }
 
              return true;
+        }
+
+        private static OrderedDictionary BuildMonoBehaviourExportMetadata(
+            AssetItem item,
+            MonoBehaviour m_MonoBehaviour,
+            byte[] rawData,
+            TypeTree exportTypeTree,
+            string typeTreeSource,
+            string rawSidecar,
+            Exception builtInTypeTreeException,
+            OrderedDictionary payload
+        )
+        {
+            var meta = BuildObjectExportMetadata(item, rawData, exportTypeTree, typeTreeSource, rawSidecar, payload);
+            meta["scriptFileId"] = m_MonoBehaviour.m_Script.m_FileID;
+            meta["scriptPathId"] = m_MonoBehaviour.m_Script.m_PathID;
+
+            if (m_MonoBehaviour.m_Script.TryGet(out var m_Script))
+            {
+                var scriptNamespace = m_Script.m_Namespace ?? "";
+                var scriptClass = m_Script.m_ClassName ?? "";
+                meta["scriptClassName"] = scriptClass;
+                meta["scriptNamespace"] = scriptNamespace;
+                meta["scriptFullName"] = string.IsNullOrEmpty(scriptNamespace)
+                    ? scriptClass
+                    : $"{scriptNamespace}.{scriptClass}";
+                meta["scriptAssemblyName"] = m_Script.m_AssemblyName ?? "";
+            }
+
+            if (builtInTypeTreeException != null)
+            {
+                meta["serializedTypeTreeError"] = $"{builtInTypeTreeException.GetType().Name}: {builtInTypeTreeException.Message}";
+            }
+
+            return meta;
+        }
+
+        private static OrderedDictionary BuildObjectExportMetadata(
+            AssetItem item,
+            byte[] rawData,
+            TypeTree exportTypeTree,
+            string typeTreeSource,
+            string rawSidecar,
+            object payload
+        )
+        {
+            var meta = new OrderedDictionary
+            {
+                { "pathId", item.m_PathID },
+                { "type", item.TypeString },
+                { "classId", (int)item.Type },
+                { "name", item.Text ?? "" },
+                { "sourceFile", item.SourceFile?.fileName ?? "" },
+                { "sourceOriginalPath", item.SourceFile?.originalPath ?? "" },
+                { "container", item.Container ?? "" },
+                { "byteSize", item.Asset.byteSize },
+                { "rawDataLength", rawData?.Length ?? 0 },
+                { "rawDataSha256", rawData != null ? Convert.ToHexString(SHA256.HashData(rawData)).ToLowerInvariant() : "" },
+                { "typeTreeSource", typeTreeSource ?? "none" },
+                { "typeTreeNodeCount", exportTypeTree?.m_Nodes?.Count ?? 0 },
+            };
+
+            var fieldPaths = BuildTypeTreeFieldPaths(exportTypeTree);
+            if (fieldPaths.Count > 0)
+            {
+                meta["typeTreeFieldPaths"] = fieldPaths;
+            }
+
+            var refs = CollectPPtrReferences(payload, item.Asset);
+            if (refs.Count > 0)
+            {
+                meta["pptrReferences"] = refs;
+            }
+
+            if (!string.IsNullOrEmpty(rawSidecar))
+            {
+                meta["rawDataSidecar"] = rawSidecar;
+            }
+
+            return meta;
+        }
+
+        private static List<string> BuildTypeTreeFieldPaths(TypeTree typeTree)
+        {
+            var fields = new List<string>();
+            var nodes = typeTree?.m_Nodes;
+            if (nodes == null || nodes.Count == 0)
+            {
+                return fields;
+            }
+
+            var stack = new List<string>();
+            foreach (var node in nodes)
+            {
+                var level = Math.Max(0, node.m_Level);
+                while (stack.Count > level)
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                }
+                while (stack.Count < level)
+                {
+                    stack.Add("");
+                }
+
+                if (stack.Count == level)
+                {
+                    stack.Add(node.m_Name ?? "");
+                }
+                else
+                {
+                    stack[level] = node.m_Name ?? "";
+                }
+
+                if (level == 0)
+                {
+                    continue;
+                }
+
+                var pathParts = stack
+                    .Take(level + 1)
+                    .Skip(1)
+                    .Where(part => !string.IsNullOrEmpty(part));
+                fields.Add($"{string.Join(".", pathParts)}:{node.m_Type}");
+            }
+
+            return fields;
+        }
+
+        private static List<OrderedDictionary> CollectPPtrReferences(object payload, Object owner)
+        {
+            var refs = new List<OrderedDictionary>();
+            CollectPPtrReferences(payload, owner, "$", refs);
+            return refs;
+        }
+
+        private static void CollectPPtrReferences(object value, Object owner, string path, List<OrderedDictionary> refs)
+        {
+            if (value == null || value is string || value is byte[])
+            {
+                return;
+            }
+
+            if (value is OrderedDictionary ordered)
+            {
+                if (TryGetDictionaryNumber(ordered, "m_FileID", out var fileId)
+                    && TryGetDictionaryNumber(ordered, "m_PathID", out var pathId))
+                {
+                    var refInfo = new OrderedDictionary
+                    {
+                        { "path", path },
+                        { "fileId", fileId },
+                        { "pathId", pathId },
+                    };
+                    AddResolvedPPtrTarget(refInfo, owner, fileId, pathId);
+                    refs.Add(refInfo);
+                }
+
+                foreach (DictionaryEntry entry in ordered)
+                {
+                    CollectPPtrReferences(entry.Value, owner, $"{path}.{entry.Key}", refs);
+                }
+                return;
+            }
+
+            if (value is IDictionary dictionary)
+            {
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    CollectPPtrReferences(entry.Value, owner, $"{path}.{entry.Key}", refs);
+                }
+                return;
+            }
+
+            if (value is IEnumerable enumerable)
+            {
+                var index = 0;
+                foreach (var item in enumerable)
+                {
+                    CollectPPtrReferences(item, owner, $"{path}[{index++}]", refs);
+                }
+            }
+        }
+
+        private static void AddResolvedPPtrTarget(OrderedDictionary refInfo, Object owner, long fileId, long pathId)
+        {
+            if (owner?.assetsFile == null || pathId == 0 || fileId < int.MinValue || fileId > int.MaxValue)
+            {
+                return;
+            }
+
+            var pptr = new PPtr<Object>((int)fileId, pathId, owner.assetsFile);
+            if (!pptr.TryGet(out var target))
+            {
+                return;
+            }
+
+            refInfo["targetType"] = target.type.ToString();
+            refInfo["targetPathId"] = target.m_PathID;
+            refInfo["targetName"] = target.Name ?? "";
+            refInfo["targetSourceFile"] = target.assetsFile?.fileName ?? "";
+            refInfo["targetSourceOriginalPath"] = target.assetsFile?.originalPath ?? "";
+        }
+
+        private static bool TryGetDictionaryNumber(OrderedDictionary dictionary, string key, out long value)
+        {
+            value = 0;
+            if (!dictionary.Contains(key))
+            {
+                return false;
+            }
+
+            var raw = dictionary[key];
+            switch (raw)
+            {
+                case long longValue:
+                    value = longValue;
+                    return true;
+                case int intValue:
+                    value = intValue;
+                    return true;
+                case uint uintValue:
+                    value = uintValue;
+                    return true;
+                case ulong ulongValue when ulongValue <= long.MaxValue:
+                    value = (long)ulongValue;
+                    return true;
+                case string strValue when long.TryParse(strValue, out var parsed):
+                    value = parsed;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static string ExportJsonRawSidecarIfRequested(string exportFullPath, byte[] rawData)
+        {
+            if (rawData == null || rawData.Length == 0 || !ShouldExportJsonRawSidecars())
+            {
+                return null;
+            }
+
+            var sidecarPath = Path.ChangeExtension(exportFullPath, ".raw.bin");
+            File.WriteAllBytes(sidecarPath, rawData);
+            return Path.GetFileName(sidecarPath);
+        }
+
+        private static bool ShouldExportJsonRawSidecars()
+        {
+            return Properties.Settings.Default.exportJsonRawSidecars || IsEnabledEnvironmentFlag("ANIMESTUDIO_EXPORT_JSON_RAW");
+        }
+
+        private static bool IsEnabledEnvironmentFlag(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
         }
 
         private static int Search(byte[] bytes, int startIndex)
@@ -377,7 +755,7 @@ namespace AnimeStudio.CLI
             {
                 using (image)
                 {
-                    using (var file = File.OpenWrite(exportFullPath))
+                    using (var file = File.Create(exportFullPath))
                     {
                         image.WriteToStream(file, type);
                     }
@@ -397,19 +775,32 @@ namespace AnimeStudio.CLI
 
         private static bool TryExportFile(string dir, AssetItem item, string extension, out string fullPath)
         {
+            Directory.CreateDirectory(dir);
             var fileName = FixFileName(item.Text);
-            fullPath = Path.Combine(dir, $"{fileName}{extension}");
-            if (!File.Exists(fullPath))
+            var pathIdFileName = $"{fileName}_p{item.m_PathID:X16}";
+            fullPath = Path.Combine(dir, $"{pathIdFileName}{extension}");
+            if (!Properties.Settings.Default.allowDuplicates)
             {
-                Directory.CreateDirectory(dir);
+                if (Directory.Exists(fullPath))
+                {
+                    Directory.Delete(fullPath, true);
+                }
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+                return true;
+            }
+            if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
+            {
                 return true;
             }
             if (Properties.Settings.Default.allowDuplicates)
             {
                 for (int i = 0; ; i++)
                 {
-                    fullPath = Path.Combine(dir, $"{fileName} ({i}){extension}");
-                    if (!File.Exists(fullPath))
+                    fullPath = Path.Combine(dir, $"{pathIdFileName} ({i}){extension}");
+                    if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
                     {
                         return true;
                     }
@@ -422,17 +813,33 @@ namespace AnimeStudio.CLI
         {
             var fileName = FixFileName(item.Text);
             fullPath = Path.Combine(dir, fileName);
-            if (!Directory.Exists(fullPath))
+            if (!Properties.Settings.Default.allowDuplicates)
             {
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+                if (Directory.Exists(fullPath))
+                {
+                    // Recreate the fixed export folder so stale files from prior runs do not linger.
+                    Directory.Delete(fullPath, true);
+                }
+                Directory.CreateDirectory(fullPath);
                 return true;
             }
             if (Properties.Settings.Default.allowDuplicates)
             {
+                if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
+                {
+                    Directory.CreateDirectory(fullPath);
+                    return true;
+                }
                 for (int i = 0; ; i++)
                 {
                     fullPath = Path.Combine(dir, $"{fileName} ({i})");
-                    if (!Directory.Exists(fullPath))
+                    if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
                     {
+                        Directory.CreateDirectory(fullPath);
                         return true;
                     }
                 }
@@ -603,20 +1010,95 @@ namespace AnimeStudio.CLI
 
         public static bool ExportJSONFile(AssetItem item, string exportPath)
         {
+            if (item.Asset is MonoBehaviour)
+            {
+                return ExportMonoBehaviour(item, exportPath);
+            }
+
             if (!TryExportFile(exportPath, item, ".json", out var exportFullPath))
                 return false;
 
             var settings = new JsonSerializerSettings();
             settings.Converters.Add(new StringEnumConverter());
-            var str = JsonConvert.SerializeObject(item.Asset, Formatting.Indented, settings);
+            object payload = item.Asset;
+            TypeTree exportTypeTree = item.Asset.serializedType?.m_Type;
+            string typeTreeSource = exportTypeTree != null ? "serializedType" : "none";
+            if (item.Asset.GetType() == typeof(Object))
+            {
+                var typedPayload = item.Asset.ToType();
+                if (typedPayload != null)
+                {
+                    var rawData = item.Asset.GetRawData();
+                    var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                    typedPayload.Insert(0, "$animestudio", BuildObjectExportMetadata(
+                        item,
+                        rawData,
+                        exportTypeTree,
+                        typeTreeSource,
+                        rawSidecar,
+                        typedPayload
+                    ));
+                    payload = typedPayload;
+                }
+                else
+                {
+                    var rawData = item.Asset.GetRawData();
+                    var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                    var dump = item.Asset.Dump();
+                    payload = !string.IsNullOrWhiteSpace(dump)
+                        ? new Dictionary<string, object>
+                        {
+                            ["$animestudio"] = BuildObjectExportMetadata(item, rawData, exportTypeTree, typeTreeSource, rawSidecar, null),
+                            ["type"] = item.TypeString,
+                            ["name"] = item.Text,
+                            ["pathId"] = item.m_PathID,
+                            ["dump"] = dump,
+                        }
+                        : new Dictionary<string, object>
+                        {
+                            ["$animestudio"] = BuildObjectExportMetadata(item, rawData, exportTypeTree, typeTreeSource, rawSidecar, null),
+                            ["type"] = item.TypeString,
+                            ["name"] = item.Text,
+                            ["pathId"] = item.m_PathID,
+                        };
+                }
+            }
+
+            var str = JsonConvert.SerializeObject(payload, Formatting.Indented, settings);
             File.WriteAllText(exportFullPath, str);
             return true;
         }
 
         public static string FixFileName(string str)
         {
-            if (str.Length >= 260) return Path.GetRandomFileName();
-            return Path.GetInvalidFileNameChars().Aggregate(str, (current, c) => current.Replace(c, '_'));
+            var value = string.IsNullOrWhiteSpace(str) ? "unnamed" : str;
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var builder = new StringBuilder(value.Length);
+
+            foreach (var ch in value)
+            {
+                builder.Append(Array.IndexOf(invalidChars, ch) >= 0 || char.IsControl(ch) ? '_' : ch);
+            }
+
+            var sanitized = builder.ToString().Trim().TrimEnd('.', ' ');
+            if (string.IsNullOrWhiteSpace(sanitized))
+            {
+                sanitized = "unnamed";
+            }
+
+            if (ReservedFileNames.Contains(sanitized))
+            {
+                sanitized = "_" + sanitized;
+            }
+
+            if (sanitized.Length > MaxSafeFileNameLength)
+            {
+                var hash = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(sanitized))).ToLowerInvariant()[..10];
+                var prefixLength = Math.Max(16, MaxSafeFileNameLength - hash.Length - 1);
+                sanitized = $"{sanitized[..prefixLength].TrimEnd('.', ' ')}_{hash}";
+            }
+
+            return sanitized;
         }
     }
 }

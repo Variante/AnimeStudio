@@ -8,6 +8,7 @@
     <Copyright>Copyright © Escartem 2024-2025; Copyright © yarik0chka 2025; Copyright © Hashblen 2024-2025; Copyright © Razmoth 2022-2024; Copyright © Perfare 2018-2022</Copyright>
     <DebugType>embedded</DebugType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**;bin-flat\**;obj-flat\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

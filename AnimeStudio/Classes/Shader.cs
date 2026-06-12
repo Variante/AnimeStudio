@@ -916,6 +916,25 @@ namespace AnimeStudio
         }
     }
 
+    public class SubShaderBlob
+    {
+        public int m_ShaderLOD;
+        public byte[] m_CompressedBlob;
+        public uint[][] m_Offsets;
+        public uint[][] m_CompressedLengths;
+        public uint[][] m_DecompressedLengths;
+
+        public SubShaderBlob(ObjectReader reader)
+        {
+            m_ShaderLOD = reader.ReadInt32();
+            m_CompressedBlob = reader.ReadUInt8Array();
+            reader.AlignStream();
+            m_Offsets = reader.ReadUInt32ArrayArray();
+            m_CompressedLengths = reader.ReadUInt32ArrayArray();
+            m_DecompressedLengths = reader.ReadUInt32ArrayArray();
+        }
+    }
+
     public enum PassType
     {
         Normal = 0,
@@ -1224,12 +1243,15 @@ namespace AnimeStudio
         public bool m_UseExternalBlobs;
         public int[] m_SubShaderBinaryDataLODs;
         public List<PPtr<SubShaderBinaryData>> m_SubShaderBinaryData;
+        public bool m_EnableShaderLODStreaming;
+        public List<SubShaderBlob> subShaderBlobs;
         public ShaderCompilerPlatform[] platforms;
         public uint[][] offsets;
         public uint[][] compressedLengths;
         public uint[][] decompressedLengths;
         public byte[] compressedBlob;
         public uint[] stageCounts;
+        public int m_CompressionType;
         public ShaderPlatformInfos[] platformInfos;
 
         public override string Name => m_ParsedForm?.m_Name ?? m_Name;
@@ -1247,7 +1269,19 @@ namespace AnimeStudio
                     Logger.Error($"Cannot parse shader, no more bytes left for asset {reader.assetsFile.fileName} of {reader.assetsFile.originalPath} at path {reader.m_PathID}.");
                     return;
                 }
-                if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
+                if (reader.Game.Type.IsArknightsEndfield())
+                {
+                    m_EnableShaderLODStreaming = reader.ReadBoolean();
+                    reader.AlignStream();
+
+                    int numSubShaderBlobs = reader.ReadInt32();
+                    subShaderBlobs = new List<SubShaderBlob>();
+                    for (int i = 0; i < numSubShaderBlobs; i++)
+                    {
+                        subShaderBlobs.Add(new SubShaderBlob(reader));
+                    }
+                }
+                else if (reader.Game.Type.IsArknightsEndfieldCB3())
                 {
                     m_UseExternalBlobs = reader.ReadBoolean();
                     reader.AlignStream();
@@ -1319,7 +1353,7 @@ namespace AnimeStudio
 
                 if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
                 {
-                    var m_CompressionType = reader.ReadInt32();
+                    m_CompressionType = reader.ReadInt32();
                 }
 
                 var m_DependenciesCount = reader.ReadInt32();

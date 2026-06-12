@@ -846,6 +846,26 @@ namespace AnimeStudio
 
         public AnimatorController(ObjectReader reader) : base(reader)
         {
+            if (reader.Game.Type.IsArknightsEndfield())
+            {
+                try
+                {
+                    var dumpDir = @"D:\fluffy-dump\scratch\animctrl_dumps";
+                    System.IO.Directory.CreateDirectory(dumpDir);
+                    var safeName = $"{reader.assetsFile.fileName}_{reader.m_PathID}".Replace('/', '_').Replace('\\', '_').Replace(':', '_');
+                    var dumpPath = System.IO.Path.Combine(dumpDir, $"{safeName}.bin");
+                    if (!System.IO.File.Exists(dumpPath))
+                    {
+                        long savedPos = reader.Position;
+                        reader.Position = reader.byteStart;
+                        byte[] raw = new byte[reader.byteSize];
+                        reader.BaseStream.Read(raw, 0, (int)reader.byteSize);
+                        System.IO.File.WriteAllBytes(dumpPath, raw);
+                        reader.Position = savedPos;
+                    }
+                }
+                catch { }
+            }
             var m_ControllerSize = reader.ReadUInt32();
             var m_Controller = new ControllerConstant(reader);
 
@@ -853,7 +873,16 @@ namespace AnimeStudio
             m_TOS = new Dictionary<uint, string>();
             for (int i = 0; i < tosSize; i++)
             {
-                m_TOS.Add(reader.ReadUInt32(), reader.ReadAlignedString());
+                var key = reader.ReadUInt32();
+                var value = reader.ReadAlignedString();
+                if (m_TOS.ContainsKey(key))
+                {
+                    Logger.Warning(
+                        $"AnimatorController {reader.assetsFile.fileName} PathID {reader.m_PathID} " +
+                        $"contains duplicate TOS key {key}, keeping the latest value."
+                    );
+                }
+                m_TOS[key] = value;
             }
 
             if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())

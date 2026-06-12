@@ -59,7 +59,7 @@ namespace AnimeStudio.GUI
                         "-Y " + m_Texture2D.m_Height.ToString() + " +X " +
                         m_Texture2D.m_Width.ToString() + "\n";
 
-                    using (var file = new BinaryWriter(File.OpenWrite(exportFullPath)))
+                    using (var file = new BinaryWriter(File.Create(exportFullPath)))
                     {
                         file.Write(System.Text.Encoding.ASCII.GetBytes(header));
 
@@ -105,7 +105,7 @@ namespace AnimeStudio.GUI
 
                     using (image)
                     {
-                        using (var file = File.OpenWrite(exportFullPath))
+                        using (var file = File.Create(exportFullPath))
                         {
                             image.WriteToStream(file, type);
                         }
@@ -364,7 +364,7 @@ namespace AnimeStudio.GUI
             {
                 using (image)
                 {
-                    using (var file = File.OpenWrite(exportFullPath))
+                    using (var file = File.Create(exportFullPath))
                     {
                         image.WriteToStream(file, type);
                     }
@@ -384,11 +384,19 @@ namespace AnimeStudio.GUI
 
         private static bool TryExportFile(string dir, AssetItem item, string extension, out string fullPath)
         {
+            Directory.CreateDirectory(dir);
             var fileName = FixFileName(item.Text);
             fullPath = Path.Combine(dir, $"{fileName}{extension}");
-            if (!File.Exists(fullPath))
+            if (!Properties.Settings.Default.allowDuplicates)
             {
-                Directory.CreateDirectory(dir);
+                if (Directory.Exists(fullPath))
+                {
+                    Directory.Delete(fullPath, true);
+                }
+                return true;
+            }
+            if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
+            {
                 return true;
             }
             if (Properties.Settings.Default.allowDuplicates)
@@ -396,7 +404,7 @@ namespace AnimeStudio.GUI
                 for (int i = 1; i < int.MaxValue; i++)
                 {
                     fullPath = Path.Combine(dir, $"{fileName} ({i}){extension}");
-                    if (!File.Exists(fullPath))
+                    if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
                     {
                         return true;
                     }
@@ -408,17 +416,33 @@ namespace AnimeStudio.GUI
         {
             var fileName = FixFileName(item.Text);
             fullPath = Path.Combine(dir, fileName);
-            if (!Directory.Exists(fullPath))
+            if (!Properties.Settings.Default.allowDuplicates)
             {
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+                if (Directory.Exists(fullPath))
+                {
+                    // Recreate the fixed export folder so stale files from prior runs do not linger.
+                    Directory.Delete(fullPath, true);
+                }
+                Directory.CreateDirectory(fullPath);
                 return true;
             }
             if (Properties.Settings.Default.allowDuplicates)
             {
+                if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
+                {
+                    Directory.CreateDirectory(fullPath);
+                    return true;
+                }
                 for (int i = 1; i < int.MaxValue; i++)
                 {
                     fullPath = Path.Combine(dir, $"{fileName} ({i})");
-                    if (!Directory.Exists(fullPath))
+                    if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
                     {
+                        Directory.CreateDirectory(fullPath);
                         return true;
                     }
                 }

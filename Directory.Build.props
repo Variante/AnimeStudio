@@ -1,4 +1,9 @@
 <Project>
+  <PropertyGroup>
+    <AnimeStudioRoot>$(MSBuildThisFileDirectory)</AnimeStudioRoot>
+    <AnimeStudioLibrariesDir>$(AnimeStudioRoot)AnimeStudio.Libraries\</AnimeStudioLibrariesDir>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AnimeStudio' Or '$(MSBuildProjectName)' == 'AnimeStudio.CLI' Or '$(MSBuildProjectName)' == 'AnimeStudio.GUI'">
     <Version>1.1.0</Version>
     <AssemblyVersion>1.1.0</AssemblyVersion>

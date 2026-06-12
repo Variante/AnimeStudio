@@ -55,14 +55,14 @@ namespace AnimeStudio
                 {
                     case ClassIDType.Avatar:
                         var avatar = asset as Avatar;
-                        if (clip.AddAvatarTOS(avatar, tos))
+                        if (avatar != null && clip.AddAvatarTOS(avatar, tos))
                         {
                             return tos;
                         }
                         break;
                     case ClassIDType.Animator:
                         var animator = asset as Animator;
-                        if (clip.IsAnimatorContainsClip(animator))
+                        if (animator != null && clip.IsAnimatorContainsClip(animator))
                         {
                             if (clip.AddAnimatorTOS(animator, tos))
                             {
@@ -72,7 +72,7 @@ namespace AnimeStudio
                         break;
                     case ClassIDType.Animation:
                         var animation = asset as Animation;
-                        if (clip.IsAnimationContainsClip(animation))
+                        if (animation != null && clip.IsAnimationContainsClip(animation))
                         {
                             if (clip.AddAnimationTOS(animation, tos))
                             {
@@ -86,6 +86,11 @@ namespace AnimeStudio
         }
         private static bool AddAvatarTOS(this AnimationClip clip, Avatar avatar, Dictionary<uint, string> tos)
         {
+            if (avatar?.m_TOS == null)
+            {
+                return false;
+            }
+
             return clip.AddTOS(avatar.m_TOS.ToDictionary(x => x.Key, x => x.Value), tos);
         }
         private static bool AddAnimatorTOS(this AnimationClip clip, Animator animator, Dictionary<uint, string> tos)
@@ -112,6 +117,11 @@ namespace AnimeStudio
         }
         private static bool AddTOS(this AnimationClip clip, Dictionary<uint, string> src, Dictionary<uint, string> dest)
         {
+            if (src == null || clip?.m_ClipBindingConstant?.genericBindings == null)
+            {
+                return false;
+            }
+
             int tosCount = clip.m_ClipBindingConstant.genericBindings.Count;
             for (int i = 0; i < tosCount; i++)
             {

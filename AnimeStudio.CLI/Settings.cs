@@ -57,6 +57,7 @@ namespace AnimeStudio.CLI.Properties {
         public bool minimalAssetMap => AppSettings.Get("minimalAssetMap", true);
         public bool allowDuplicates => AppSettings.Get("allowDuplicates", false);
         public bool scrapeMonos => AppSettings.Get("scrapeMonos", false);
+        public bool exportJsonRawSidecars => AppSettings.Get("exportJsonRawSidecars", false);
         public string types => AppSettings.Get("types", string.Empty);
         public string texs => AppSettings.Get("texs", string.Empty);
         public string uvs => AppSettings.Get("uvs", string.Empty);

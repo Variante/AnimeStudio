@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+    <DebugType>embedded</DebugType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>AnimeStudio.Utility</AssemblyName>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**;bin-flat\**;obj-flat\**</DefaultItemExcludes>
+    <BaseOutputPath>..\AnimeStudio.Utility\bin-flat</BaseOutputPath>
+    <BaseIntermediateOutputPath>..\AnimeStudio.Utility\obj-flat\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kyaru.Texture2DDecoder.Windows" Version="0.1.0" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AnimeStudio">
+      <HintPath>..\AnimeStudio\bin\Release\net9.0\AnimeStudio.dll</HintPath>
+    </Reference>
+    <Reference Include="AnimeStudio.PInvoke">
+      <HintPath>..\AnimeStudio.PInvoke\bin\Release\net9.0\AnimeStudio.PInvoke.dll</HintPath>
+    </Reference>
+    <Reference Include="AnimeStudio.FBXWrapper">
+      <HintPath>..\AnimeStudio.FBXWrapper\bin\Release\net9.0\AnimeStudio.FBXWrapper.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

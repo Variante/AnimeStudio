@@ -109,11 +109,20 @@ namespace AnimeStudio
                 avatar = m_Avatar;
 
             m_Animator.m_GameObject.TryGet(out var m_GameObject);
-            InitWithGameObject(m_GameObject, m_Animator.m_HasTransformHierarchy);
+            // Endfield weapon prefabs can mark their Animator hierarchy as
+            // optimized without carrying an Avatar. In that case the prefab
+            // GameObject tree still contains the usable transform hierarchy.
+            InitWithGameObject(m_GameObject, m_Animator.m_HasTransformHierarchy || avatar == null);
         }
 
         private void InitWithGameObject(GameObject m_GameObject, bool hasTransformHierarchy = true)
         {
+            if (m_GameObject == null || m_GameObject.m_Transform == null)
+            {
+                RootFrame = CreateFrame(m_GameObject?.m_Name ?? "Root", Vector3.Zero, new Quaternion(0, 0, 0, 0), Vector3.One);
+                return;
+            }
+
             var m_Transform = m_GameObject.m_Transform;
             if (!hasTransformHierarchy)
             {
@@ -228,7 +237,7 @@ namespace AnimeStudio
             var frame = new ImportedFrame(trans.m_Children.Count);
             transformDictionary.Add(trans, frame);
             trans.m_GameObject.TryGet(out var m_GameObject);
-            frame.Name = m_GameObject.m_Name;
+            frame.Name = m_GameObject?.m_Name ?? trans.Name ?? "Transform";
             SetFrame(frame, trans.m_LocalPosition, trans.m_LocalRotation, trans.m_LocalScale);
             return frame;
         }
