@@ -338,14 +338,14 @@ namespace AnimeStudio
             m_BlendingMode = reader.ReadUInt8Array();
             reader.AlignStream();
 
-            var numChildBodyMasks = reader.ReadInt32();
+            var numChildBodyMasks = reader.ReadInt32Count(fieldName: "numChildBodyMasks");
             m_ChildBodyMask = new HumanPoseMask[numChildBodyMasks];
             for (int i = 0; i < numChildBodyMasks; i++)
             {
                 m_ChildBodyMask[i] = new HumanPoseMask(reader);
             }
 
-            var numChildSkeletonMasks = reader.ReadInt32();
+            var numChildSkeletonMasks = reader.ReadInt32Count(fieldName: "numChildSkeletonMasks");
             m_ChildSkeletonMask = new SkeletonMask[numChildSkeletonMasks];
             for (int i = 0; i < numChildSkeletonMasks; i++)
             {
@@ -618,7 +618,7 @@ namespace AnimeStudio
             {
                 var m_CullingMode = reader.ReadUInt32();
                 reader.AlignStream();
-                var numStateParameterConstant = reader.ReadInt32();
+                var numStateParameterConstant = reader.ReadInt32Count(fieldName: "numStateParameterConstant");
                 var m_StateParameterConstantArray = new StateParameterConstant[numStateParameterConstant];
                 for (int i = 0; i < numStateParameterConstant; i++)
                 {
@@ -825,7 +825,7 @@ namespace AnimeStudio
         {
             m_Mask = reader.ReadUInt32Array();
 
-            var curveNamesCount = reader.ReadInt32();
+            var curveNamesCount = reader.ReadInt32Count(4, "curveNamesCount");
             m_CurveNames = new List<string>(curveNamesCount);
             for (int i = 0; i < curveNamesCount; i++)
             {
@@ -833,7 +833,7 @@ namespace AnimeStudio
             }
             reader.AlignStream();
 
-            var genericBindingsCount = reader.ReadInt32();
+            var genericBindingsCount = reader.ReadInt32Count(12, "genericBindingsCount");
             m_GenericBindings = new GenericBinding[genericBindingsCount];
             reader.AlignStream();
         }
@@ -846,30 +846,10 @@ namespace AnimeStudio
 
         public AnimatorController(ObjectReader reader) : base(reader)
         {
-            if (reader.Game.Type.IsArknightsEndfield())
-            {
-                try
-                {
-                    var dumpDir = @"D:\fluffy-dump\scratch\animctrl_dumps";
-                    System.IO.Directory.CreateDirectory(dumpDir);
-                    var safeName = $"{reader.assetsFile.fileName}_{reader.m_PathID}".Replace('/', '_').Replace('\\', '_').Replace(':', '_');
-                    var dumpPath = System.IO.Path.Combine(dumpDir, $"{safeName}.bin");
-                    if (!System.IO.File.Exists(dumpPath))
-                    {
-                        long savedPos = reader.Position;
-                        reader.Position = reader.byteStart;
-                        byte[] raw = new byte[reader.byteSize];
-                        reader.BaseStream.Read(raw, 0, (int)reader.byteSize);
-                        System.IO.File.WriteAllBytes(dumpPath, raw);
-                        reader.Position = savedPos;
-                    }
-                }
-                catch { }
-            }
             var m_ControllerSize = reader.ReadUInt32();
             var m_Controller = new ControllerConstant(reader);
 
-            int tosSize = reader.ReadInt32();
+            int tosSize = reader.ReadInt32Count(8, "tosSize");
             m_TOS = new Dictionary<uint, string>();
             for (int i = 0; i < tosSize; i++)
             {
@@ -887,7 +867,7 @@ namespace AnimeStudio
 
             if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
             {
-                int animationCurveMaskSize = reader.ReadInt32();
+                int animationCurveMaskSize = reader.ReadInt32Count(8, "animationCurveMaskSize");
                 var m_AnimationCurveMask = new PPtr<HGAnimationCurveMask>[animationCurveMaskSize];
                 for (int i = 0; i < animationCurveMaskSize; i++)
                 {
@@ -895,7 +875,7 @@ namespace AnimeStudio
                 }
             }
 
-            int numClips = reader.ReadInt32();
+            int numClips = reader.ReadInt32Count(8, "numClips");
             m_AnimationClips = new List<PPtr<AnimationClip>>();
             for (int i = 0; i < numClips; i++)
             {

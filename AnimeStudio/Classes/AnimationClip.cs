@@ -247,6 +247,10 @@ namespace AnimeStudio
         public PackedFloatVector(ObjectReader reader)
         {
             m_NumItems = reader.ReadUInt32();
+            if (m_NumItems > int.MaxValue)
+            {
+                throw new InvalidDataException($"PackedFloatVector item count {m_NumItems} is too large.");
+            }
             m_Range = reader.ReadSingle();
             m_Start = reader.ReadSingle();
 
@@ -255,6 +259,12 @@ namespace AnimeStudio
             reader.AlignStream();
 
             m_BitSize = reader.ReadByte();
+            if (m_BitSize > 0 && m_NumItems > (ulong)m_Data.Length * 8 / m_BitSize)
+            {
+                throw new InvalidDataException(
+                    $"PackedFloatVector item count {m_NumItems} exceeds {m_Data.Length} bytes at {m_BitSize} bits per item."
+                );
+            }
             reader.AlignStream();
         }
 
@@ -317,12 +327,22 @@ namespace AnimeStudio
         public PackedIntVector(ObjectReader reader)
         {
             m_NumItems = reader.ReadUInt32();
+            if (m_NumItems > int.MaxValue)
+            {
+                throw new InvalidDataException($"PackedIntVector item count {m_NumItems} is too large.");
+            }
 
             int numData = reader.ReadInt32();
             m_Data = reader.ReadBytes(numData);
             reader.AlignStream();
 
             m_BitSize = reader.ReadByte();
+            if (m_BitSize > 0 && m_NumItems > (ulong)m_Data.Length * 8 / m_BitSize)
+            {
+                throw new InvalidDataException(
+                    $"PackedIntVector item count {m_NumItems} exceeds {m_Data.Length} bytes at {m_BitSize} bits per item."
+                );
+            }
             reader.AlignStream();
         }
         public YAMLNode ExportYAML(int[] version)
@@ -336,7 +356,7 @@ namespace AnimeStudio
 
         public int[] UnpackInts()
         {
-            var data = new int[m_NumItems];
+            var data = new int[checked((int)m_NumItems)];
             int indexPos = 0;
             int bitPos = 0;
             for (int i = 0; i < m_NumItems; i++)
@@ -369,6 +389,10 @@ namespace AnimeStudio
         public PackedQuatVector(ObjectReader reader)
         {
             m_NumItems = reader.ReadUInt32();
+            if (m_NumItems > int.MaxValue)
+            {
+                throw new InvalidDataException($"PackedQuatVector item count {m_NumItems} is too large.");
+            }
 
             int numData = reader.ReadInt32();
             m_Data = reader.ReadBytes(numData);
@@ -386,7 +410,7 @@ namespace AnimeStudio
 
         public Quaternion[] UnpackQuats()
         {
-            var data = new Quaternion[m_NumItems];
+            var data = new Quaternion[checked((int)m_NumItems)];
             int indexPos = 0;
             int bitPos = 0;
 
@@ -892,7 +916,7 @@ namespace AnimeStudio
 
             if (reader.Game.Type.IsSRGroup())
             {
-                byteCount *= 4;
+                byteCount = checked(byteCount * 4);
             }
 
             m_ClipData = reader.ReadBytes(byteCount);
@@ -940,12 +964,12 @@ namespace AnimeStudio
             var aclTransformCount = reader.ReadUInt32();
             var aclScalarCount = reader.ReadUInt32();
 
-            var compressedTransformTracksCount = reader.ReadInt32() * 0x10;
+            var compressedTransformTracksCount = checked(reader.ReadInt32Count(fieldName: "compressedTransformTracksCount") * 0x10);
             var compressedTransformTracks = reader.ReadBytes(compressedTransformTracksCount);
-            var compressedScalarTracksCount = reader.ReadInt32() * 0x10;
+            var compressedScalarTracksCount = checked(reader.ReadInt32Count(fieldName: "compressedScalarTracksCount") * 0x10);
             var compressedScalarTracks = reader.ReadBytes(compressedScalarTracksCount);
 
-            int numaclTransformTrackIDToBindingCurveID = reader.ReadInt32();
+            int numaclTransformTrackIDToBindingCurveID = reader.ReadInt32Count(12, "numaclTransformTrackIDToBindingCurveID");
             var aclTransformTrackIDToBindingCurveID = new List<AclTransformTrackIDToBindingCurveID>();
             for (int i = 0; i < numaclTransformTrackIDToBindingCurveID; i++)
             {
@@ -976,7 +1000,12 @@ namespace AnimeStudio
 
         public override void Read(ObjectReader reader)
         {
-            var aclTracksCount = (int)reader.ReadUInt64();
+            var rawAclTracksCount = reader.ReadUInt64();
+            if (rawAclTracksCount > int.MaxValue)
+            {
+                throw new InvalidDataException($"ACL tracks byte count {rawAclTracksCount} is too large.");
+            }
+            var aclTracksCount = (int)rawAclTracksCount;
             var aclTracksOffset = reader.Position + reader.ReadInt64();
             var aclTracksCurveCount = reader.ReadUInt32();
             if (aclTracksOffset > reader.Length)
@@ -998,7 +1027,7 @@ namespace AnimeStudio
 
             reader.Position = pos;
 
-            var aclDatabaseCount = reader.ReadInt32();
+            var aclDatabaseCount = reader.ReadInt32Count(fieldName: "aclDatabaseCount");
             var aclDatabaseOffset = reader.Position + reader.ReadInt64();
             var aclDatabaseCurveCount = (uint)reader.ReadUInt64();
             if (aclDatabaseOffset > reader.Length)
@@ -1857,14 +1886,14 @@ namespace AnimeStudio
 
         public AnimationClipBindingConstant(ObjectReader reader)
         {
-            int numBindings = reader.ReadInt32();
+            int numBindings = reader.ReadInt32Count(12, "numBindings");
             genericBindings = new List<GenericBinding>();
             for (int i = 0; i < numBindings; i++)
             {
                 genericBindings.Add(new GenericBinding(reader));
             }
 
-            int numMappings = reader.ReadInt32();
+            int numMappings = reader.ReadInt32Count(8, "numMappings");
             pptrCurveMapping = new List<PPtr<Object>>();
             for (int i = 0; i < numMappings; i++)
             {
@@ -2154,7 +2183,7 @@ namespace AnimeStudio
             if (reader.Game.Type.IsSRGroup())
             {
                 var m_AclClipData = reader.ReadUInt8Array();
-                var aclBindingsCount = reader.ReadInt32();
+                var aclBindingsCount = reader.ReadInt32Count(12, "aclBindingsCount");
                 var m_AclBindings = new List<GenericBinding>();
                 for (int i = 0; i < aclBindingsCount; i++)
                 {

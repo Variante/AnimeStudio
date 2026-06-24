@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -26,7 +25,51 @@ namespace AnimeStudio
         }
 
         public long Length => BaseStream.Length;
-        public long Remaining => Length - Position;
+        public virtual long Remaining => Length - Position;
+
+        public void EnsureReadable(long count, string fieldName = "read")
+        {
+            if (count < 0)
+            {
+                throw new InvalidDataException($"{fieldName} has negative byte count {count} at offset 0x{Position:X}.");
+            }
+
+            var remaining = Remaining;
+            if (count > remaining)
+            {
+                throw new EndOfStreamException(
+                    $"{fieldName} requests {count} bytes at offset 0x{Position:X}, but only {remaining} bytes remain."
+                );
+            }
+        }
+
+        public int EnsureCount(int count, long minBytesPerItem = 1, string fieldName = "count")
+        {
+            if (count < 0)
+            {
+                throw new InvalidDataException($"{fieldName} is negative ({count}) at offset 0x{Position:X}.");
+            }
+
+            if (minBytesPerItem > 0)
+            {
+                var remaining = Remaining;
+                var maxItems = remaining / minBytesPerItem;
+                if (count > maxItems)
+                {
+                    throw new EndOfStreamException(
+                        $"{fieldName} is {count} at offset 0x{Position:X}, " +
+                        $"but at least {count * minBytesPerItem} bytes are required and only {remaining} bytes remain."
+                    );
+                }
+            }
+
+            return count;
+        }
+
+        public int ReadInt32Count(long minBytesPerItem = 1, string fieldName = "count")
+        {
+            return EnsureCount(ReadInt32(), minBytesPerItem, fieldName);
+        }
 
         public override short ReadInt16()
         {
@@ -111,28 +154,27 @@ namespace AnimeStudio
         }
         public override byte[] ReadBytes(int count)
         {
+            EnsureReadable(count, nameof(ReadBytes));
             if (count == 0)
             {
                 return Array.Empty<byte>();
             }
 
-            var buffer = ArrayPool<byte>.Shared.Rent(0x1000);
-            List<byte> result = new List<byte>(count);
-            do
+            var result = new byte[count];
+            var offset = 0;
+            while (offset < count)
             {
-                var readNum = Math.Min(count, buffer.Length);
-                int n = Read(buffer, 0, readNum);
+                int n = Read(result, offset, count - offset);
                 if (n == 0)
                 {
-                    break;
+                    throw new EndOfStreamException(
+                        $"ReadBytes reached the end of the stream after {offset} of {count} bytes."
+                    );
                 }
 
-                result.AddRange(buffer[..n]);
-                count -= n;
-            } while (count > 0);
-
-            ArrayPool<byte>.Shared.Return(buffer);
-            return result.ToArray();
+                offset += n;
+            }
+            return result;
         }
 
         public void AlignStream()
@@ -154,8 +196,13 @@ namespace AnimeStudio
         {
             var result = "";
             var length = ReadInt32();
-            if (length > 0 && length <= Remaining)
+            if (length < 0)
             {
+                throw new InvalidDataException($"String length is negative ({length}) at offset 0x{Position - 4:X}.");
+            }
+            if (length > 0)
+            {
+                EnsureReadable(length, nameof(ReadAlignedString));
                 var stringData = ReadBytes(length);
                 result = Encoding.UTF8.GetString(stringData);
             }
@@ -232,6 +279,12 @@ namespace AnimeStudio
 
         internal T[] ReadArray<T>(Func<T> del, int length)
         {
+            EnsureCount(length, 1, "array length");
+            if (length == 0)
+            {
+                return Array.Empty<T>();
+            }
+
             if (length < 0x1000)
             {
                 var array = new T[length];
@@ -258,6 +311,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 1, nameof(ReadBooleanArray));
             return ReadArray(ReadBoolean, length);
         }
 
@@ -276,6 +330,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 2, nameof(ReadInt16Array));
             return ReadArray(ReadInt16, length);
         }
 
@@ -285,6 +340,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 2, nameof(ReadUInt16Array));
             return ReadArray(ReadUInt16, length);
         }
 
@@ -294,6 +350,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 4, nameof(ReadInt32Array));
             return ReadArray(ReadInt32, length);
         }
 
@@ -303,6 +360,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 4, nameof(ReadUInt32Array));
             return ReadArray(ReadUInt32, length);
         }
 
@@ -312,6 +370,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 8, nameof(ReadUInt64Array));
             return ReadArray(ReadUInt64, length);
         }
 
@@ -321,6 +380,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 4, nameof(ReadUInt32ArrayArray));
             return ReadArray(() => ReadUInt32Array(), length);
         }
 
@@ -330,6 +390,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 4, nameof(ReadSingleArray));
             return ReadArray(ReadSingle, length);
         }
 
@@ -339,6 +400,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 4, nameof(ReadStringArray));
             return ReadArray(ReadAlignedString, length);
         }
 
@@ -348,6 +410,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 8, nameof(ReadVector2Array));
             return ReadArray(ReadVector2, length);
         }
 
@@ -357,6 +420,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 16, nameof(ReadVector4Array));
             return ReadArray(ReadVector4, length);
         }
 
@@ -366,6 +430,7 @@ namespace AnimeStudio
             {
                 length = ReadInt32();
             }
+            EnsureCount(length, 64, nameof(ReadMatrixArray));
             return ReadArray(ReadMatrix, length);
         }
     }

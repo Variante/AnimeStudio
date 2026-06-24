@@ -1,5 +1,7 @@
 ﻿using System.IO;
 
+using System;
+
 namespace AnimeStudio
 {
     public class ResourceReader
@@ -11,7 +13,21 @@ namespace AnimeStudio
         private long size;
         private BinaryReader reader;
 
-        public int Size { get => (int)size; }
+        public int Size
+        {
+            get
+            {
+                if (size < 0)
+                {
+                    throw new InvalidDataException($"Resource size is negative ({size}).");
+                }
+                if (size > int.MaxValue)
+                {
+                    throw new InvalidDataException($"Resource size {size} is too large for byte-array export.");
+                }
+                return (int)size;
+            }
+        }
 
         public ResourceReader(string path, SerializedFile assetsFile, long offset, long size)
         {
@@ -64,9 +80,34 @@ namespace AnimeStudio
             }
         }
 
+        private void ValidateRange(BinaryReader binaryReader, bool requireIntSize)
+        {
+            if (offset < 0)
+            {
+                throw new InvalidDataException($"Resource offset is negative ({offset}).");
+            }
+            if (size < 0)
+            {
+                throw new InvalidDataException($"Resource size is negative ({size}).");
+            }
+            if (requireIntSize && size > int.MaxValue)
+            {
+                throw new InvalidDataException($"Resource size {size} is too large for byte-array export.");
+            }
+
+            var length = binaryReader.BaseStream.Length;
+            if (offset > length || size > length - offset)
+            {
+                throw new EndOfStreamException(
+                    $"Resource range offset={offset}, size={size} exceeds stream length {length}."
+                );
+            }
+        }
+
         public byte[] GetData()
         {
             var binaryReader = GetReader();
+            ValidateRange(binaryReader, requireIntSize: true);
             binaryReader.BaseStream.Position = offset;
             return binaryReader.ReadBytes((int)size);
         }
@@ -74,6 +115,11 @@ namespace AnimeStudio
         public void GetData(byte[] buff)
         {
             var binaryReader = GetReader();
+            ValidateRange(binaryReader, requireIntSize: true);
+            if (buff.Length < size)
+            {
+                throw new ArgumentException($"Buffer length {buff.Length} is smaller than resource size {size}.", nameof(buff));
+            }
             binaryReader.BaseStream.Position = offset;
             binaryReader.Read(buff, 0, (int)size);
         }
@@ -81,6 +127,7 @@ namespace AnimeStudio
         public void WriteData(string path)
         {
             var binaryReader = GetReader();
+            ValidateRange(binaryReader, requireIntSize: false);
             binaryReader.BaseStream.Position = offset;
             using (var writer = File.Create(path))
             {

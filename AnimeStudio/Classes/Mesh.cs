@@ -138,10 +138,14 @@ namespace AnimeStudio
             }
 
             m_VertexCount = reader.ReadUInt32();
+            if (m_VertexCount > int.MaxValue)
+            {
+                throw new InvalidDataException($"Mesh vertex count {m_VertexCount} is too large.");
+            }
 
             if (version[0] >= 4) //4.0 and up
             {
-                var m_ChannelsSize = reader.ReadInt32();
+                var m_ChannelsSize = reader.ReadInt32Count(4, "m_ChannelsSize");
                 m_Channels = new List<ChannelInfo>();
                 for (int i = 0; i < m_ChannelsSize; i++)
                 {
@@ -151,7 +155,7 @@ namespace AnimeStudio
 
             if (version[0] < 5) //5.0 down
             {
-                var numStreams = version[0] < 4 ? 4 : reader.ReadInt32();
+                var numStreams = version[0] < 4 ? 4 : reader.ReadInt32Count(8, "numStreams");
                 m_Streams = new List<StreamInfo>();
                 for (int i = 0; i < numStreams; i++)
                 {
@@ -201,9 +205,14 @@ namespace AnimeStudio
                     dividerOp = 0,
                     frequency = 0
                 });
-                offset += m_VertexCount * stride;
+                var nextOffset = (ulong)offset + (ulong)m_VertexCount * stride;
                 //static size_t AlignStreamSize (size_t size) { return (size + (kVertexStreamAlign-1)) & ~(kVertexStreamAlign-1); }
-                offset = (offset + (16u - 1u)) & ~(16u - 1u);
+                nextOffset = (nextOffset + 15UL) & ~15UL;
+                if (nextOffset > uint.MaxValue)
+                {
+                    throw new InvalidDataException($"Mesh vertex stream size {nextOffset} is too large.");
+                }
+                offset = (uint)nextOffset;
             }
         }
 
@@ -541,6 +550,36 @@ namespace AnimeStudio
 
         public List<uint> m_Indices = new List<uint>();
 
+        private static int CheckedMultiply(int value, int multiplier, string fieldName)
+        {
+            if (value < 0)
+            {
+                throw new InvalidDataException($"{fieldName} is negative ({value}).");
+            }
+
+            try
+            {
+                return checked(value * multiplier);
+            }
+            catch (OverflowException ex)
+            {
+                throw new InvalidDataException($"{fieldName} value {value} overflows when multiplied by {multiplier}.", ex);
+            }
+        }
+
+        private static int CheckedElementCount(uint value, int divisor, int multiplier, string fieldName)
+        {
+            if (divisor <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(divisor));
+            }
+            if (value > int.MaxValue)
+            {
+                throw new InvalidDataException($"{fieldName} value {value} is too large.");
+            }
+            return CheckedMultiply((int)(value / divisor), multiplier, fieldName);
+        }
+
         public Mesh(ObjectReader reader) : base(reader)
         {
             if (version[0] < 3 || (version[0] == 3 && version[1] < 5)) //3.5 down
@@ -550,10 +589,14 @@ namespace AnimeStudio
 
             if (version[0] == 2 && version[1] <= 5) //2.5 and down
             {
-                int m_IndexBuffer_size = reader.ReadInt32();
+                int m_IndexBuffer_size = reader.ReadInt32Count(fieldName: "m_IndexBuffer_size");
 
                 if (m_Use16BitIndices)
                 {
+                    if (m_IndexBuffer_size % 2 != 0)
+                    {
+                        throw new InvalidDataException($"16-bit index buffer byte size {m_IndexBuffer_size} is not aligned.");
+                    }
                     m_IndexBuffer = new uint[m_IndexBuffer_size / 2];
                     for (int i = 0; i < m_IndexBuffer_size / 2; i++)
                     {
@@ -563,11 +606,15 @@ namespace AnimeStudio
                 }
                 else
                 {
+                    if (m_IndexBuffer_size % 4 != 0)
+                    {
+                        throw new InvalidDataException($"32-bit index buffer byte size {m_IndexBuffer_size} is not aligned.");
+                    }
                     m_IndexBuffer = reader.ReadUInt32Array(m_IndexBuffer_size / 4);
                 }
             }
 
-            int m_SubMeshesSize = reader.ReadInt32();
+            int m_SubMeshesSize = reader.ReadInt32Count(12, "m_SubMeshesSize");
             m_SubMeshes = new List<SubMesh>();
             for (int i = 0; i < m_SubMeshesSize; i++)
             {
@@ -590,7 +637,7 @@ namespace AnimeStudio
             {
                 if (version[0] >= 2019) //2019 and up
                 {
-                    var m_BonesAABBSize = reader.ReadInt32();
+                    var m_BonesAABBSize = reader.ReadInt32Count(24, "m_BonesAABBSize");
                     var m_BonesAABB = new List<MinMaxAABB>();
                     for (int i = 0; i < m_BonesAABBSize; i++)
                     {
@@ -664,9 +711,13 @@ namespace AnimeStudio
                     m_Use16BitIndices = m_IndexFormat == 0;
                 }
 
-                int m_IndexBuffer_size = reader.ReadInt32();
+                int m_IndexBuffer_size = reader.ReadInt32Count(fieldName: "m_IndexBuffer_size");
                 if (m_Use16BitIndices)
                 {
+                    if (m_IndexBuffer_size % 2 != 0)
+                    {
+                        throw new InvalidDataException($"16-bit index buffer byte size {m_IndexBuffer_size} is not aligned.");
+                    }
                     m_IndexBuffer = new uint[m_IndexBuffer_size / 2];
                     for (int i = 0; i < m_IndexBuffer_size / 2; i++)
                     {
@@ -676,16 +727,20 @@ namespace AnimeStudio
                 }
                 else
                 {
+                    if (m_IndexBuffer_size % 4 != 0)
+                    {
+                        throw new InvalidDataException($"32-bit index buffer byte size {m_IndexBuffer_size} is not aligned.");
+                    }
                     m_IndexBuffer = reader.ReadUInt32Array(m_IndexBuffer_size / 4);
                 }
             }
 
             if (version[0] < 3 || (version[0] == 3 && version[1] < 5)) //3.4.2 and earlier
             {
-                m_VertexCount = reader.ReadInt32();
-                m_Vertices = reader.ReadSingleArray(m_VertexCount * 3); //Vector3
+                m_VertexCount = reader.ReadInt32Count(12, "m_VertexCount");
+                m_Vertices = reader.ReadSingleArray(CheckedMultiply(m_VertexCount, 3, nameof(m_VertexCount))); //Vector3
 
-                var skinNum = reader.ReadInt32();
+                var skinNum = reader.ReadInt32Count(32, "skinNum");
                 m_Skin = new List<BoneWeights4>();
                 for (int s = 0; s < skinNum; s++)
                 {
@@ -694,15 +749,15 @@ namespace AnimeStudio
 
                 m_BindPose = reader.ReadMatrixArray();
 
-                m_UV0 = reader.ReadSingleArray(reader.ReadInt32() * 2); //Vector2
+                m_UV0 = reader.ReadSingleArray(CheckedMultiply(reader.ReadInt32Count(8, "m_UV0 count"), 2, "m_UV0 count")); //Vector2
 
-                m_UV1 = reader.ReadSingleArray(reader.ReadInt32() * 2); //Vector2
+                m_UV1 = reader.ReadSingleArray(CheckedMultiply(reader.ReadInt32Count(8, "m_UV1 count"), 2, "m_UV1 count")); //Vector2
 
                 if (version[0] == 2 && version[1] <= 5) //2.5 and down
                 {
-                    int m_TangentSpace_size = reader.ReadInt32();
-                    m_Normals = new float[m_TangentSpace_size * 3];
-                    m_Tangents = new float[m_TangentSpace_size * 4];
+                    int m_TangentSpace_size = reader.ReadInt32Count(28, "m_TangentSpace_size");
+                    m_Normals = new float[CheckedMultiply(m_TangentSpace_size, 3, nameof(m_TangentSpace_size))];
+                    m_Tangents = new float[CheckedMultiply(m_TangentSpace_size, 4, nameof(m_TangentSpace_size))];
                     for (int v = 0; v < m_TangentSpace_size; v++)
                     {
                         m_Normals[v * 3] = reader.ReadSingle();
@@ -716,16 +771,16 @@ namespace AnimeStudio
                 }
                 else //2.6.0 and later
                 {
-                    m_Tangents = reader.ReadSingleArray(reader.ReadInt32() * 4); //Vector4
+                    m_Tangents = reader.ReadSingleArray(CheckedMultiply(reader.ReadInt32Count(16, "m_Tangents count"), 4, "m_Tangents count")); //Vector4
 
-                    m_Normals = reader.ReadSingleArray(reader.ReadInt32() * 3); //Vector3
+                    m_Normals = reader.ReadSingleArray(CheckedMultiply(reader.ReadInt32Count(12, "m_Normals count"), 3, "m_Normals count")); //Vector3
                 }
             }
             else
             {
                 if (version[0] < 2018 || (version[0] == 2018 && version[1] < 2)) //2018.2 down
                 {
-                    var skinNum = reader.ReadInt32();
+                    var skinNum = reader.ReadInt32Count(32, "skinNum");
                     m_Skin = new List<BoneWeights4>();
                     for (int s = 0; s < skinNum; s++)
                     {
@@ -750,15 +805,17 @@ namespace AnimeStudio
 
             if (version[0] < 3 || (version[0] == 3 && version[1] <= 4)) //3.4.2 and earlier
             {
-                int m_Colors_size = reader.ReadInt32();
-                m_Colors = new float[m_Colors_size * 4];
-                for (int v = 0; v < m_Colors_size * 4; v++)
+                int m_Colors_size = reader.ReadInt32Count(4, "m_Colors_size");
+                var colorComponentCount = CheckedMultiply(m_Colors_size, 4, nameof(m_Colors_size));
+                m_Colors = new float[colorComponentCount];
+                for (int v = 0; v < colorComponentCount; v++)
                 {
                     m_Colors[v] = (float)reader.ReadByte() / 0xFF;
                 }
 
-                int m_CollisionTriangles_size = reader.ReadInt32();
-                reader.Position += m_CollisionTriangles_size * 4; //UInt32 indices
+                int m_CollisionTriangles_size = reader.ReadInt32Count(4, "m_CollisionTriangles_size");
+                reader.EnsureReadable(CheckedMultiply(m_CollisionTriangles_size, 4, nameof(m_CollisionTriangles_size)), nameof(m_CollisionTriangles_size));
+                reader.Position += CheckedMultiply(m_CollisionTriangles_size, 4, nameof(m_CollisionTriangles_size)); //UInt32 indices
                 int m_CollisionVertexCount = reader.ReadInt32();
             }
 
@@ -895,6 +952,11 @@ namespace AnimeStudio
                 var m_Channel = m_VertexData.m_Channels[chn];
                 if (m_Channel.dimension > 0)
                 {
+                    if (m_Channel.stream >= m_VertexData.m_Streams.Count)
+                    {
+                        throw new InvalidDataException($"Mesh channel {chn} references missing stream {m_Channel.stream}.");
+                    }
+
                     var m_Stream = m_VertexData.m_Streams[m_Channel.stream];
                     var channelMask = new BitArray(new[] { (int)m_Stream.channelMask });
                     if (channelMask.Get(chn))
@@ -906,7 +968,28 @@ namespace AnimeStudio
 
                         var vertexFormat = MeshHelper.ToVertexFormat(m_Channel.format, version);
                         var componentByteSize = (int)MeshHelper.GetFormatSize(vertexFormat);
-                        var componentBytes = new byte[m_VertexCount * m_Channel.dimension * componentByteSize];
+                        var componentsPerVertex = m_Channel.dimension;
+                        var componentCount = CheckedMultiply(m_VertexCount, componentsPerVertex, $"mesh channel {chn} components");
+                        var componentByteCount = CheckedMultiply(componentCount, componentByteSize, $"mesh channel {chn} bytes");
+
+                        if (m_VertexData.m_DataSize == null)
+                        {
+                            throw new InvalidDataException("Mesh vertex data buffer is missing.");
+                        }
+                        if (m_VertexCount > 0)
+                        {
+                            var lastVertexOffset = (ulong)m_Stream.offset + m_Channel.offset + (ulong)m_Stream.stride * (uint)(m_VertexCount - 1);
+                            var requiredEnd = lastVertexOffset + (ulong)componentByteSize * componentsPerVertex;
+                            if (requiredEnd > (ulong)m_VertexData.m_DataSize.Length)
+                            {
+                                throw new EndOfStreamException(
+                                    $"Mesh channel {chn} requires vertex data through byte {requiredEnd}, " +
+                                    $"but buffer has {m_VertexData.m_DataSize.Length} bytes."
+                                );
+                            }
+                        }
+
+                        var componentBytes = new byte[componentByteCount];
                         for (int v = 0; v < m_VertexCount; v++)
                         {
                             var vertexOffset = (int)m_Stream.offset + m_Channel.offset + (int)m_Stream.stride * v;
@@ -1525,7 +1608,7 @@ namespace AnimeStudio
 
         public static float[] BytesToFloatArray(byte[] inputBytes, VertexFormat format)
         {
-            var size = GetFormatSize(format);
+            var size = checked((int)GetFormatSize(format));
             var len = inputBytes.Length / size;
             var result = new float[len];
             for (int i = 0; i < len; i++)
@@ -1557,7 +1640,7 @@ namespace AnimeStudio
 
         public static int[] BytesToIntArray(byte[] inputBytes, VertexFormat format)
         {
-            var size = GetFormatSize(format);
+            var size = checked((int)GetFormatSize(format));
             var len = inputBytes.Length / size;
             var result = new int[len];
             for (int i = 0; i < len; i++)
@@ -1584,11 +1667,10 @@ namespace AnimeStudio
         // From: https://github.com/Hororiya/YarikStudio/blob/main/AssetStudio/Classes/Mesh.cs#L1535
         public static float[] DecompressEndfieldNormal(byte[] inputBytes, VertexFormat format) // 8bits per component
         {
-            var size = GetFormatSize(format);
+            var size = checked((int)GetFormatSize(format));
             var len = inputBytes.Length / size;
-            var result = new float[len * 3];
-            var readFloat = new float[len];
-            readFloat = BytesToFloatArray(inputBytes, format);
+            var result = new float[checked(len * 3)];
+            var readFloat = BytesToFloatArray(inputBytes, format);
 
             for (int i = 0; i < len; i++)
             {

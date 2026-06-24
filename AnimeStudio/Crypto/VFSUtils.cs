@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Text;
@@ -163,6 +164,12 @@ namespace AnimeStudio
             }
 
             Logger.Verbose($"Blocks Count: {blocksCount}");
+            if (blocksCount > (ulong)reader.Remaining / 10)
+            {
+                throw new InvalidDataException(
+                    $"VFS block count {blocksCount} exceeds remaining block-info bytes {reader.Remaining}."
+                );
+            }
 
             List<BundleFile.StorageBlock> blocks = new();
 
@@ -263,6 +270,12 @@ namespace AnimeStudio
             }
 
             Logger.Verbose($"Nodes Count: {nodesCount}");
+            if (nodesCount > (ulong)reader.Remaining / 21)
+            {
+                throw new InvalidDataException(
+                    $"VFS node count {nodesCount} exceeds remaining block-info bytes {reader.Remaining}."
+                );
+            }
 
             List<BundleFile.Node> nodes = new();
 

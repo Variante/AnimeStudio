@@ -117,6 +117,16 @@ namespace AnimeStudio
         private List<StorageBlock> m_BlocksInfo;
 
         public List<StreamFile> fileList;
+        private const long MaxInMemoryBlockStreamSize = 64L * 1024 * 1024;
+
+        private static int CheckedSize(uint value, string fieldName)
+        {
+            if (value > int.MaxValue)
+            {
+                throw new InvalidDataException($"{fieldName} size {value} is too large for an in-memory buffer.");
+            }
+            return (int)value;
+        }
         
         private bool HasUncompressedDataHash = true;
         private bool HasBlockInfoNeedPaddingAtStart = true;
@@ -261,19 +271,41 @@ namespace AnimeStudio
         private Stream CreateBlocksStream(string path)
         {
             Stream blocksStream;
-            var uncompressedSizeSum = m_BlocksInfo.Sum(x => x.uncompressedSize);
+            var uncompressedSizeSum = m_BlocksInfo.Sum(x => (long)x.uncompressedSize);
             Logger.Verbose($"Total size of decompressed blocks: {uncompressedSizeSum}");
-            if (uncompressedSizeSum >= int.MaxValue)
+            if (uncompressedSizeSum > MaxInMemoryBlockStreamSize)
             {
                 /*var memoryMappedFile = MemoryMappedFile.CreateNew(null, uncompressedSizeSum);
                 assetsDataStream = memoryMappedFile.CreateViewStream();*/
-                blocksStream = new FileStream(path + ".temp", FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
+                blocksStream = CreateTemporaryBlockStream();
             }
             else
             {
                 blocksStream = new MemoryStream((int)uncompressedSizeSum);
             }
             return blocksStream;
+        }
+
+        private static FileStream CreateTemporaryBlockStream()
+        {
+            var tempPath = Path.Combine(Path.GetTempPath(), $"AnimeStudio_{Guid.NewGuid():N}.tmp");
+            return new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                1024 * 1024,
+                FileOptions.DeleteOnClose | FileOptions.SequentialScan
+            );
+        }
+
+        private static Stream CreateNodeStream(long size)
+        {
+            if (size > MaxInMemoryBlockStreamSize)
+            {
+                return CreateTemporaryBlockStream();
+            }
+            return new MemoryStream((int)size);
         }
 
         private void ReadBlocksAndDirectory(FileReader reader, Stream blocksStream)
@@ -283,7 +315,7 @@ namespace AnimeStudio
             var isCompressed = m_Header.signature == "UnityWeb";
             foreach (var blockInfo in m_BlocksInfo)
             {
-                var uncompressedBytes = reader.ReadBytes((int)blockInfo.compressedSize);
+                var uncompressedBytes = reader.ReadBytes(CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize)));
                 if (isCompressed)
                 {
                     using var memoryStream = new MemoryStream(uncompressedBytes);
@@ -294,7 +326,7 @@ namespace AnimeStudio
             }
             blocksStream.Position = 0;
             var blocksReader = new EndianBinaryReader(blocksStream);
-            var nodesCount = blocksReader.ReadInt32();
+            var nodesCount = blocksReader.ReadInt32Count(fieldName: "nodesCount");
             m_DirectoryInfo = new List<Node>();
             Logger.Verbose($"Directory count: {nodesCount}");
             for (int i = 0; i < nodesCount; i++)
@@ -320,18 +352,13 @@ namespace AnimeStudio
                 fileList.Add(file);
                 file.path = node.path;
                 file.fileName = Path.GetFileName(node.path);
-                if (node.size >= int.MaxValue)
+                if (node.offset < 0 || node.size < 0 || node.offset > blocksStream.Length || node.size > blocksStream.Length - node.offset)
                 {
-                    /*var memoryMappedFile = MemoryMappedFile.CreateNew(null, entryinfo_size);
-                    file.stream = memoryMappedFile.CreateViewStream();*/
-                    var extractPath = path + "_unpacked" + Path.DirectorySeparatorChar;
-                    Directory.CreateDirectory(extractPath);
-                    file.stream = new FileStream(extractPath + file.fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    throw new EndOfStreamException(
+                        $"Bundle node {node.path} range offset={node.offset}, size={node.size} exceeds block stream length {blocksStream.Length}."
+                    );
                 }
-                else
-                {
-                    file.stream = new MemoryStream((int)node.size);
-                }
+                file.stream = CreateNodeStream(node.size);
                 blocksStream.Position = node.offset;
                 blocksStream.CopyTo(file.stream, node.size);
                 file.stream.Position = 0;
@@ -429,18 +456,26 @@ namespace AnimeStudio
             }
             if ((m_Header.flags & ArchiveFlags.BlocksInfoAtTheEnd) != 0) //kArchiveBlocksInfoAtTheEnd
             {
+                if (m_Header.compressedBlocksInfoSize > reader.BaseStream.Length)
+                {
+                    throw new EndOfStreamException(
+                        $"Bundle block-info size {m_Header.compressedBlocksInfoSize} exceeds stream length {reader.BaseStream.Length}."
+                    );
+                }
                 var position = reader.Position;
                 reader.Position = reader.BaseStream.Length - m_Header.compressedBlocksInfoSize;
-                blocksInfoBytes = reader.ReadBytes((int)m_Header.compressedBlocksInfoSize);
+                blocksInfoBytes = reader.ReadBytes(CheckedSize(m_Header.compressedBlocksInfoSize, nameof(m_Header.compressedBlocksInfoSize)));
                 reader.Position = position;
             }
             else //0x40 BlocksAndDirectoryInfoCombined
             {
-                blocksInfoBytes = reader.ReadBytes((int)m_Header.compressedBlocksInfoSize);
+                blocksInfoBytes = reader.ReadBytes(CheckedSize(m_Header.compressedBlocksInfoSize, nameof(m_Header.compressedBlocksInfoSize)));
             }
             MemoryStream blocksInfoUncompresseddStream;
-            var blocksInfoBytesSpan = blocksInfoBytes.AsSpan(0, (int)m_Header.compressedBlocksInfoSize);
+            var compressedBlocksInfoSize = CheckedSize(m_Header.compressedBlocksInfoSize, nameof(m_Header.compressedBlocksInfoSize));
+            var blocksInfoBytesSpan = blocksInfoBytes.AsSpan(0, compressedBlocksInfoSize);
             var uncompressedSize = m_Header.uncompressedBlocksInfoSize;
+            var uncompressedSizeInt = CheckedSize(uncompressedSize, nameof(m_Header.uncompressedBlocksInfoSize));
             var compressionType = (CompressionType)(m_Header.flags & ArchiveFlags.CompressionTypeMask);
             Logger.Verbose($"BlockInfo compression type: {compressionType}");
             switch (compressionType) //kArchiveCompressionTypeMask
@@ -452,7 +487,7 @@ namespace AnimeStudio
                     }
                 case CompressionType.Lzma: //LZMA
                     {
-                        blocksInfoUncompresseddStream = new MemoryStream((int)(uncompressedSize));
+                        blocksInfoUncompresseddStream = new MemoryStream(uncompressedSizeInt);
                         using (var blocksInfoCompressedStream = new MemoryStream(blocksInfoBytes))
                         {
                             SevenZipHelper.StreamDecompress(blocksInfoCompressedStream, blocksInfoUncompresseddStream, m_Header.compressedBlocksInfoSize, m_Header.uncompressedBlocksInfoSize);
@@ -463,10 +498,10 @@ namespace AnimeStudio
                 case CompressionType.Lz4: //LZ4
                 case CompressionType.Lz4HC: //LZ4HC
                     {
-                        var uncompressedBytes = ArrayPool<byte>.Shared.Rent((int)uncompressedSize);
+                        var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSizeInt);
                         try
                         {
-                            var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, (int)uncompressedSize);
+                            var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, uncompressedSizeInt);
                             if (Game.Type.IsPerpetualNovelty())
                             {
                                 var key = blocksInfoBytesSpan[1];
@@ -504,7 +539,7 @@ namespace AnimeStudio
                 {
                     var uncompressedDataHash = blocksInfoReader.ReadBytes(16);
                 }
-                var blocksInfoCount = blocksInfoReader.ReadInt32();
+                var blocksInfoCount = blocksInfoReader.ReadInt32Count(10, "blocksInfoCount");
                 m_BlocksInfo = new List<StorageBlock>();
                 Logger.Verbose($"Blocks count: {blocksInfoCount}");
                 for (int i = 0; i < blocksInfoCount; i++)
@@ -519,7 +554,7 @@ namespace AnimeStudio
                     Logger.Verbose($"Block {i} Info: {m_BlocksInfo[i]}");
                 }
 
-                var nodesCount = blocksInfoReader.ReadInt32();
+                var nodesCount = blocksInfoReader.ReadInt32Count(20, "nodesCount");
                 m_DirectoryInfo = new List<Node>();
                 Logger.Verbose($"Directory count: {nodesCount}");
                 for (int i = 0; i < nodesCount; i++)
@@ -566,7 +601,7 @@ namespace AnimeStudio
                             var compressedStream = reader.BaseStream;
                             if (Game.Type.IsNetEase() && i == 0)
                             {
-                                var compressedBytesSpan = reader.ReadBytes((int)blockInfo.compressedSize).AsSpan();
+                                var compressedBytesSpan = reader.ReadBytes(CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize))).AsSpan();
                                 NetEaseUtils.DecryptWithoutHeader(compressedBytesSpan);
                                 var ms = new MemoryStream(compressedBytesSpan.ToArray());
                                 compressedStream = ms;
@@ -578,8 +613,8 @@ namespace AnimeStudio
                     case CompressionType.OodleMr0k:
                         {
                             // Star Rail v2.7 fix, thanks to Yarik
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -615,8 +650,8 @@ namespace AnimeStudio
                     case CompressionType.Lz4HC: //LZ4HC
                     case CompressionType.Lz4Mr0k when Game.Type.IsMhyGroup(): //Lz4Mr0k
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -696,8 +731,8 @@ namespace AnimeStudio
                         }
                     case CompressionType.Lz4Inv when Game.Type.IsArknightsEndfieldCB2():
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -729,8 +764,8 @@ namespace AnimeStudio
                         }
                     case CompressionType.Lz4Inv when Game.Type.IsArknightsEndfieldCB1():
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -762,8 +797,8 @@ namespace AnimeStudio
                         }
                     case CompressionType.Lz4Lit4 or CompressionType.Lz4Lit5 when Game.Type.IsExAstris():
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -790,8 +825,8 @@ namespace AnimeStudio
                         }
                     case CompressionType.Zstd when !Game.Type.IsMhyGroup(): //Zstd
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -820,8 +855,8 @@ namespace AnimeStudio
                         }
                     case CompressionType.Lz4Lit4 or CompressionType.Lz4Lit5 when Game.Type.IsArknights():
                         {
-                            var compressedSize = (int)blockInfo.compressedSize;
-                            var uncompressedSize = (int)blockInfo.uncompressedSize;
+                            var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                            var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                             var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                             var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);

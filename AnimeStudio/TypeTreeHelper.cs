@@ -94,7 +94,7 @@ namespace AnimeStudio
                         append = false;
                         sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level)), varTypeStr, varNameStr);
                         sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level + 1)), "Array", "Array");
-                        var size = reader.ReadInt32();
+                        var size = reader.ReadInt32Count(fieldName: $"{varNameStr} map size");
                         sb.AppendFormat("{0}{1} {2} = {3}\r\n", (new string('\t', level + 1)), "int", "size", size);
                         var map = GetNodes(m_Nodes, i);
                         i += map.Count - 1;
@@ -115,7 +115,7 @@ namespace AnimeStudio
                 case "TypelessData":
                     {
                         append = false;
-                        var size = reader.ReadInt32();
+                        var size = reader.ReadInt32Count(fieldName: $"{varNameStr} TypelessData size");
                         reader.ReadBytes(size);
                         i += 2;
                         sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level)), varTypeStr, varNameStr);
@@ -131,7 +131,7 @@ namespace AnimeStudio
                             append = false;
                             sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level)), varTypeStr, varNameStr);
                             sb.AppendFormat("{0}{1} {2}\r\n", (new string('\t', level + 1)), "Array", "Array");
-                            var size = reader.ReadInt32();
+                            var size = reader.ReadInt32Count(fieldName: $"{varNameStr} array size");
                             sb.AppendFormat("{0}{1} {2} = {3}\r\n", (new string('\t', level + 1)), "int", "size", size);
                             var vector = GetNodes(m_Nodes, i);
                             i += vector.Count - 1;
@@ -256,7 +256,7 @@ namespace AnimeStudio
                         var first = GetNodes(map, 4);
                         var next = 4 + first.Count;
                         var second = GetNodes(map, next);
-                        var size = reader.ReadInt32();
+                        var size = reader.ReadInt32Count(fieldName: $"{m_Node.m_Name} map size");
                         var dic = new List<KeyValuePair<object, object>>();
                         for (int j = 0; j < size; j++)
                         {
@@ -269,7 +269,7 @@ namespace AnimeStudio
                     }
                 case "TypelessData":
                     {
-                        var size = reader.ReadInt32();
+                        var size = reader.ReadInt32Count(fieldName: $"{m_Node.m_Name} TypelessData size");
                         value = reader.ReadBytes(size);
                         i += 2;
                         break;
@@ -282,13 +282,8 @@ namespace AnimeStudio
                                 align = true;
                             var vector = GetNodes(m_Nodes, i);
                             i += vector.Count - 1;
-                            var size = reader.ReadInt32();
+                            var size = reader.ReadInt32Count(fieldName: $"{m_Node.m_Name} array size");
                             var list = new List<object>();
-                            if (size > reader.Remaining)
-                            {
-                                value = list;
-                                break;
-                            }
                             for (int j = 0; j < size; j++)
                             {
                                 int tmp = 3;

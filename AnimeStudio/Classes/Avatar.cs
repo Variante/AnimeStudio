@@ -192,15 +192,15 @@ namespace AnimeStudio
 
             if (version[0] < 2018 || (version[0] == 2018 && version[1] < 2)) //2018.2 down
             {
-                int numHandles = reader.ReadInt32();
+                int numHandles = reader.ReadInt32Count(fieldName: "numHandles");
                 m_Handles = new List<Handle>();
                 for (int i = 0; i < numHandles; i++)
                 {
                     m_Handles.Add(new Handle(reader));
                 }
 
-                int numColliders = reader.ReadInt32();
-                m_ColliderArray = new List<Collider>(numColliders);
+                int numColliders = reader.ReadInt32Count(fieldName: "numColliders");
+                m_ColliderArray = new List<Collider>();
                 for (int i = 0; i < numColliders; i++)
                 {
                     m_ColliderArray.Add(new Collider(reader));
@@ -358,14 +358,14 @@ namespace AnimeStudio
         public bool m_SkeletonHasParents;
         public HumanDescription(ObjectReader reader)
         {
-            int numHumans = reader.ReadInt32();
-            m_Human = new List<HumanBone>(numHumans);
+            int numHumans = reader.ReadInt32Count(fieldName: "numHumans");
+            m_Human = new List<HumanBone>();
             for (int i = 0; i < numHumans; i++)
             {
                 m_Human.Add(new HumanBone(reader));
             }
-            int numSkeleton = reader.ReadInt32();
-            m_Skeleton = new List<SkeletonBone>(numSkeleton);
+            int numSkeleton = reader.ReadInt32Count(fieldName: "numSkeleton");
+            m_Skeleton = new List<SkeletonBone>();
             for (int i = 0; i < numSkeleton; i++)
             {
                 m_Skeleton.Add(new SkeletonBone(reader));

@@ -21,8 +21,8 @@ namespace AnimeStudio
                 switch (asset.type)
                 {
                     case ClassIDType.Animator:
-                        Animator animator = (Animator)asset;
-                        if (clip.IsAnimatorContainsClip(animator))
+                        var animator = asset as Animator;
+                        if (animator != null && clip.IsAnimatorContainsClip(animator))
                         {
                             if (animator.m_GameObject.TryGet(out var go))
                             {
@@ -32,8 +32,8 @@ namespace AnimeStudio
                         break;
 
                     case ClassIDType.Animation:
-                        Animation animation = (Animation)asset;
-                        if (clip.IsAnimationContainsClip(animation))
+                        var animation = asset as Animation;
+                        if (animation != null && clip.IsAnimationContainsClip(animation))
                         {
                             if (animation.m_GameObject.TryGet(out var go))
                             {

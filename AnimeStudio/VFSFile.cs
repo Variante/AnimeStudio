@@ -16,6 +16,16 @@ namespace AnimeStudio
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
         public long Offset;
+        private const long MaxInMemoryBlockStreamSize = 64L * 1024 * 1024;
+
+        private static int CheckedSize(uint value, string fieldName)
+        {
+            if (value > int.MaxValue)
+            {
+                throw new InvalidDataException($"{fieldName} size {value} is too large for an in-memory buffer.");
+            }
+            return (int)value;
+        }
 
         public VFSFile(FileReader reader, string path, GameType game)
         {
@@ -74,7 +84,7 @@ namespace AnimeStudio
 
         private void ReadBlocksInfoAndDirectory(FileReader reader, GameType game)
         {
-            byte[] blocksInfoBytes = reader.ReadBytes((int)m_Header.compressedBlocksInfoSize);
+            byte[] blocksInfoBytes = reader.ReadBytes(CheckedSize(m_Header.compressedBlocksInfoSize, nameof(m_Header.compressedBlocksInfoSize)));
 
             MemoryStream blocksInfoUncompressedStream = new MemoryStream();
             if (((int)m_Header.flags & 0x3F) != 0)
@@ -84,11 +94,12 @@ namespace AnimeStudio
 
                 var uncompressedSize = m_Header.uncompressedBlocksInfoSize;
                 var blocksInfoBytesSpan = blocksInfoBytes.AsSpan(0, blocksInfoBytes.Length);
-                var uncompressedBytes = ArrayPool<byte>.Shared.Rent((int)uncompressedSize);
+                var uncompressedSizeInt = CheckedSize(uncompressedSize, nameof(m_Header.uncompressedBlocksInfoSize));
+                var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSizeInt);
 
                 try
                 {
-                    var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, (int)uncompressedSize);
+                    var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, uncompressedSizeInt);
                     // normal LZ4
                     var numWrite = LZ4.Instance.Decompress(blocksInfoBytesSpan, uncompressedBytesSpan);
 
@@ -121,13 +132,35 @@ namespace AnimeStudio
         private Stream CreateBlocksStream(string path)
         {
             Stream blocksStream;
-            var uncompressedSizeSum = (int)m_BlocksInfo.Sum(x => x.uncompressedSize);
+            var uncompressedSizeSum = m_BlocksInfo.Sum(x => (long)x.uncompressedSize);
             Logger.Verbose($"Total size of decompressed blocks: 0x{uncompressedSizeSum:X8}");
-            if (uncompressedSizeSum >= int.MaxValue)
-                blocksStream = new FileStream(path + ".temp", FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
+            if (uncompressedSizeSum > MaxInMemoryBlockStreamSize)
+                blocksStream = CreateTemporaryBlockStream();
             else
-                blocksStream = new MemoryStream(uncompressedSizeSum);
+                blocksStream = new MemoryStream((int)uncompressedSizeSum);
             return blocksStream;
+        }
+
+        private static FileStream CreateTemporaryBlockStream()
+        {
+            var tempPath = Path.Combine(Path.GetTempPath(), $"AnimeStudio_{Guid.NewGuid():N}.tmp");
+            return new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                1024 * 1024,
+                FileOptions.DeleteOnClose | FileOptions.SequentialScan
+            );
+        }
+
+        private static Stream CreateNodeStream(long size)
+        {
+            if (size > MaxInMemoryBlockStreamSize)
+            {
+                return CreateTemporaryBlockStream();
+            }
+            return new MemoryStream((int)size);
         }
 
         private void ReadBlocks(FileReader reader, Stream blocksStream, GameType game)
@@ -140,13 +173,13 @@ namespace AnimeStudio
                 switch (compressionType)
                 {
                     case 0:
-                        var size = (int)blockInfo.uncompressedSize;
+                        var size = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
                         var buffer = reader.ReadBytes(size);
                         blocksStream.Write(buffer);
                         break;
                     case 5:
-                        var compressedSize = (int)blockInfo.compressedSize;
-                        var uncompressedSize = (int)blockInfo.uncompressedSize;
+                        var compressedSize = CheckedSize(blockInfo.compressedSize, nameof(blockInfo.compressedSize));
+                        var uncompressedSize = CheckedSize(blockInfo.uncompressedSize, nameof(blockInfo.uncompressedSize));
 
                         var compressedBytes = ArrayPool<byte>.Shared.Rent(compressedSize);
                         var uncompressedBytes = ArrayPool<byte>.Shared.Rent(uncompressedSize);
@@ -197,14 +230,13 @@ namespace AnimeStudio
                 fileList.Add(file);
                 file.path = node.path;
                 file.fileName = Path.GetFileName(node.path);
-                if (node.size >= int.MaxValue)
+                if (node.offset < 0 || node.size < 0 || node.offset > blocksStream.Length || node.size > blocksStream.Length - node.offset)
                 {
-                    var extractPath = path + "_unpacked" + Path.DirectorySeparatorChar;
-                    Directory.CreateDirectory(extractPath);
-                    file.stream = new FileStream(extractPath + file.fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    throw new EndOfStreamException(
+                        $"VFS node {node.path} range offset={node.offset}, size={node.size} exceeds block stream length {blocksStream.Length}."
+                    );
                 }
-                else
-                    file.stream = new MemoryStream((int)node.size);
+                file.stream = CreateNodeStream(node.size);
                 blocksStream.Position = node.offset;
                 blocksStream.CopyTo(file.stream, node.size);
                 file.stream.Position = 0;

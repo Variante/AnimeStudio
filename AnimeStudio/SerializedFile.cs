@@ -105,7 +105,7 @@ namespace AnimeStudio
             }
 
             // Read Types
-            int typeCount = reader.ReadInt32();
+            int typeCount = reader.ReadInt32Count(4, "typeCount");
             m_Types = new List<SerializedType>();
             Logger.Verbose($"Found {typeCount} serialized types");
             for (int i = 0; i < typeCount; i++)
@@ -119,7 +119,7 @@ namespace AnimeStudio
             }
 
             // Read Objects
-            int objectCount = reader.ReadInt32();
+            int objectCount = reader.ReadInt32Count(16, "objectCount");
             m_Objects = new List<ObjectInfo>();
             Objects = new List<Object>();
             ObjectsDic = new Dictionary<long, Object>();
@@ -180,7 +180,7 @@ namespace AnimeStudio
 
             if (header.m_Version >= SerializedFileFormatVersion.HasScriptTypeIndex)
             {
-                int scriptCount = reader.ReadInt32();
+                int scriptCount = reader.ReadInt32Count(12, "scriptCount");
                 Logger.Verbose($"Found {scriptCount} scripts");
                 m_ScriptTypes = new List<LocalSerializedObjectIdentifier>();
                 for (int i = 0; i < scriptCount; i++)
@@ -201,7 +201,7 @@ namespace AnimeStudio
                 }
             }
 
-            int externalsCount = reader.ReadInt32();
+            int externalsCount = reader.ReadInt32Count(fieldName: "externalsCount");
             m_Externals = new List<FileIdentifier>();
             Logger.Verbose($"Found {externalsCount} externals");
             for (int i = 0; i < externalsCount; i++)
@@ -224,7 +224,7 @@ namespace AnimeStudio
 
             if (header.m_Version >= SerializedFileFormatVersion.SupportsRefObject)
             {
-                int refTypesCount = reader.ReadInt32();
+                int refTypesCount = reader.ReadInt32Count(4, "refTypesCount");
                 m_RefTypes = new List<SerializedType>();
                 Logger.Verbose($"Found {refTypesCount} reference types");
                 for (int i = 0; i < refTypesCount; i++)
@@ -345,7 +345,7 @@ namespace AnimeStudio
                 typeTreeNode.m_MetaFlag = reader.ReadInt32();
             }
 
-            int childrenCount = reader.ReadInt32();
+            int childrenCount = reader.ReadInt32Count(fieldName: "childrenCount");
             for (int i = 0; i < childrenCount; i++)
             {
                 ReadTypeTree(m_Type, level + 1);
@@ -357,8 +357,8 @@ namespace AnimeStudio
         private void TypeTreeBlobRead(TypeTree m_Type)
         {
             Logger.Verbose($"Attempting to parse blob type tree...");
-            int numberOfNodes = reader.ReadInt32();
-            int stringBufferSize = reader.ReadInt32();
+            int numberOfNodes = reader.ReadInt32Count(24, "numberOfNodes");
+            int stringBufferSize = reader.ReadInt32Count(fieldName: "stringBufferSize");
             Logger.Verbose($"Found {numberOfNodes} nodes and {stringBufferSize} strings");
             for (int i = 0; i < numberOfNodes; i++)
             {

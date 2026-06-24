@@ -41,6 +41,8 @@ namespace AnimeStudio
             Logger.Verbose($"Initialized reader for {type} object with {m_PathID} in file {assetsFile.fileName} !!");
         }
 
+        public override long Remaining => byteSize - (Position - byteStart);
+
         public override int Read(byte[] buffer, int index, int count)
         {
             var pos = Position - byteStart;
@@ -94,16 +96,22 @@ namespace AnimeStudio
 
         public Vector3[] ReadVector3Array(int length = 0)
         {
+            var minVectorBytes = version[0] > 5 || (version[0] == 5 && version[1] >= 4) ? 12 : 16;
             if (length == 0)
             {
-                length = ReadInt32();
+                length = ReadInt32Count(minVectorBytes, nameof(ReadVector3Array));
+            }
+            else
+            {
+                EnsureCount(length, minVectorBytes, nameof(ReadVector3Array));
             }
             return ReadArray(ReadVector3, length);
         }
 
         public XForm[] ReadXFormArray()
         {
-            return ReadArray(ReadXForm, ReadInt32());
+            var minXFormBytes = version[0] > 5 || (version[0] == 5 && version[1] >= 4) ? 40 : 48;
+            return ReadArray(ReadXForm, ReadInt32Count(minXFormBytes, nameof(ReadXFormArray)));
         }
     }
 }

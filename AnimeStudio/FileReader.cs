@@ -55,24 +55,20 @@ namespace AnimeStudio
                 default:
                     {
                         Logger.Verbose("signature does not match any of the supported string signatures, attempting to check bytes signatures");
-                        if (VFSUtils.IsValidHeader(this, GameType.ArknightsEndfieldCB3) || VFSUtils.IsValidHeader(this, GameType.ArknightsEndfield))
+                        if (Length >= 8 && (VFSUtils.IsValidHeader(this, GameType.ArknightsEndfieldCB3) || VFSUtils.IsValidHeader(this, GameType.ArknightsEndfield)))
                         {
                             Logger.Verbose("File is VFS !!");
                             Position = 0;
                             return FileType.VFSFile;
                         }
-                        Position = 0;
-                        byte[] magic = ReadBytes(2);
-                        Position = 0;
+                        byte[] magic = ReadMagic(0, 2);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (gzipMagic.SequenceEqual(magic))
                         {
                             return FileType.GZipFile;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(gzipMagic)}");
-                        Position = 0x20;
-                        magic = ReadBytes(6);
-                        Position = 0;
+                        magic = ReadMagic(0x20, 6);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (brotliMagic.SequenceEqual(magic))
                         {
@@ -83,8 +79,7 @@ namespace AnimeStudio
                         {
                             return FileType.AssetsFile;
                         }
-                        magic = ReadBytes(4);
-                        Position = 0;
+                        magic = ReadMagic(0, 4);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (zipMagic.SequenceEqual(magic) || zipSpannedMagic.SequenceEqual(magic))
                         {
@@ -106,8 +101,7 @@ namespace AnimeStudio
                             return FileType.Blb3File;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(blb3Magic)}");
-                        magic = ReadBytes(7);
-                        Position = 0;
+                        magic = ReadMagic(0, 7);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (hygMagic.SequenceEqual(magic))
                         {
@@ -119,8 +113,7 @@ namespace AnimeStudio
                             return FileType.BundleFile;
                         }
                         Logger.Verbose($"Parsed signature does not match with expected signature {Convert.ToHexString(narakaMagic)}");
-                        magic = ReadBytes(9);
-                        Position = 0;
+                        magic = ReadMagic(0, 9);
                         Logger.Verbose($"Parsed signature is {Convert.ToHexString(magic)}");
                         if (gunfireMagic.SequenceEqual(magic))
                         {
@@ -132,6 +125,20 @@ namespace AnimeStudio
                         return FileType.ResourceFile;
                     }
             }
+        }
+
+        private byte[] ReadMagic(long position, int count)
+        {
+            if (Length < position + count)
+            {
+                Position = 0;
+                return Array.Empty<byte>();
+            }
+
+            Position = position;
+            var magic = ReadBytes(count);
+            Position = 0;
+            return magic;
         }
 
         private bool IsSerializedFile()
