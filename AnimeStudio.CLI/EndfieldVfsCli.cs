@@ -171,6 +171,11 @@ namespace AnimeStudio.CLI
                 var data = loader.ExtractFileToBytes(blockType, chunk, file);
                 outputPath = EndfieldDumpProcessors.ProcessLuaFile(data, file.FileName, output);
             }
+            else if (blockType == EndfieldVfsBlockType.Video || blockType == EndfieldVfsBlockType.AuditVideo)
+            {
+                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                outputPath = EndfieldDumpProcessors.ProcessVideoFile(data, file.FileName, output);
+            }
             else
             {
                 outputPath = Path.Combine(output, file.FileName);

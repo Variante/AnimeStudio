@@ -19,6 +19,25 @@ namespace AnimeStudio.Endfield
             return outputPath;
         }
 
+        public static string ProcessVideoFile(byte[] data, string fileName, string output)
+        {
+            var outputName = fileName.EndsWith(".usm", StringComparison.Ordinal)
+                ? $"{fileName[..^".usm".Length]}.mp4"
+                : fileName;
+            var outputPath = Path.Combine(output, outputName);
+            CreateParentDirectory(outputPath);
+
+            if (fileName.EndsWith(".usm", StringComparison.Ordinal))
+            {
+                EndfieldUsmConverter.ConvertBytesToMp4(data, outputPath);
+            }
+            else
+            {
+                File.WriteAllBytes(outputPath, data);
+            }
+
+            return outputPath;
+        }
         public static string ProcessLuaFile(byte[] data, string fileName, string output)
         {
             var content = Encoding.UTF8.GetString(data);
