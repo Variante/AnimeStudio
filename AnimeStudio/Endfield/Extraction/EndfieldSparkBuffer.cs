@@ -386,7 +386,7 @@ namespace AnimeStudio.Endfield
             return value;
         }
 
-        private static JToken FloatValue(float value) => float.IsFinite(value) ? new JValue(value) : JValue.CreateNull();
+        private static JToken FloatValue(float value) => float.IsFinite(value) ? new JValue((double)value) : JValue.CreateNull();
 
         private static JToken FloatValue(double value) => double.IsFinite(value) ? new JValue(value) : JValue.CreateNull();
 

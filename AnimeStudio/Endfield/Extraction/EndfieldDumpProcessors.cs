@@ -13,7 +13,7 @@ namespace AnimeStudio.Endfield
             var outputPath = Path.Combine(output, "Table", $"{parseResult.Name}.json");
             CreateParentDirectory(outputPath);
 
-            var json = parseResult.Data.ToString(Formatting.Indented)
+            var json = NormalizeJsonNumberExponents(parseResult.Data.ToString(Formatting.Indented))
                 .Replace("\r\n", "\n", StringComparison.Ordinal);
             File.WriteAllText(outputPath, json, new UTF8Encoding(false));
             return outputPath;
@@ -116,6 +116,109 @@ namespace AnimeStudio.Endfield
             return output.ToArray();
         }
 
+        private static string NormalizeJsonNumberExponents(string json)
+        {
+            var output = new StringBuilder(json.Length);
+            var inString = false;
+            var escaped = false;
+
+            for (var i = 0; i < json.Length;)
+            {
+                var ch = json[i];
+                if (inString)
+                {
+                    output.Append(ch);
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (ch == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (ch == '"')
+                    {
+                        inString = false;
+                    }
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inString = true;
+                    output.Append(ch);
+                    i++;
+                    continue;
+                }
+
+                if (ch == '-' || IsDigit(ch))
+                {
+                    var tokenStart = i;
+                    if (json[i] == '-')
+                    {
+                        i++;
+                    }
+
+                    while (i < json.Length && IsDigit(json[i]))
+                    {
+                        i++;
+                    }
+
+                    if (i < json.Length && json[i] == '.')
+                    {
+                        i++;
+                        while (i < json.Length && IsDigit(json[i]))
+                        {
+                            i++;
+                        }
+                    }
+
+                    if (i < json.Length && (json[i] == 'e' || json[i] == 'E'))
+                    {
+                        var exponentStart = i;
+                        i++;
+                        var sign = '\0';
+                        if (i < json.Length && (json[i] == '+' || json[i] == '-'))
+                        {
+                            sign = json[i];
+                            i++;
+                        }
+
+                        var exponentDigitsStart = i;
+                        while (i < json.Length && IsDigit(json[i]))
+                        {
+                            i++;
+                        }
+
+                        output.Append(json, tokenStart, exponentStart - tokenStart);
+                        output.Append('e');
+                        if (sign == '-')
+                        {
+                            output.Append('-');
+                        }
+
+                        var firstSignificantDigit = exponentDigitsStart;
+                        while (firstSignificantDigit < i - 1 && json[firstSignificantDigit] == '0')
+                        {
+                            firstSignificantDigit++;
+                        }
+                        output.Append(json, firstSignificantDigit, i - firstSignificantDigit);
+                        continue;
+                    }
+
+                    output.Append(json, tokenStart, i - tokenStart);
+                    continue;
+                }
+
+                output.Append(ch);
+                i++;
+            }
+
+            return output.ToString();
+        }
+
+        private static bool IsDigit(char value) => value is >= '0' and <= '9';
         private static void CreateParentDirectory(string outputPath)
         {
             var parent = Path.GetDirectoryName(outputPath);
