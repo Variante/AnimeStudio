@@ -71,6 +71,10 @@ namespace AnimeStudio.Endfield
                 unchecked
                 {
                     state[12]++;
+                    if (state[12] == 0)
+                    {
+                        state[13]++;
+                    }
                 }
             }
         }

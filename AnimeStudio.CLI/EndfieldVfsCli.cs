@@ -24,13 +24,19 @@ namespace AnimeStudio.CLI
         public static bool TryRun(string[] args, out int exitCode)
         {
             exitCode = 0;
-            if (args.Length == 0 || !Commands.Contains(args[0]))
+            if (!LooksLikeVfsInvocation(args))
             {
                 return false;
             }
 
             try
             {
+                if (args.Skip(1).Any(IsHelp))
+                {
+                    PrintCommandHelp(args[0]);
+                    return true;
+                }
+
                 switch (args[0].ToLowerInvariant())
                 {
                     case "list":
@@ -61,6 +67,26 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool LooksLikeVfsInvocation(string[] args)
+        {
+            if (args.Length == 0 || !Commands.Contains(args[0]))
+            {
+                return false;
+            }
+
+            if (string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase) || args.Length == 1)
+            {
+                return true;
+            }
+
+            return args.Skip(1).Any(arg =>
+                IsHelp(arg) ||
+                arg == "-s" ||
+                arg == "--streaming-assets" ||
+                arg.StartsWith("--streaming-assets=", StringComparison.Ordinal)
+            );
         }
 
         private static void RunList()
