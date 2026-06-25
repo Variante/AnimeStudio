@@ -168,6 +168,8 @@ namespace AnimeStudio.Endfield
             }
             process.StartInfo.ArgumentList.Add("-c");
             process.StartInfo.ArgumentList.Add("copy");
+            process.StartInfo.ArgumentList.Add("-video_track_timescale");
+            process.StartInfo.ArgumentList.Add("90000");
             process.StartInfo.ArgumentList.Add(outputPath);
             process.Start();
             process.WaitForExit();
