@@ -22,10 +22,97 @@ namespace AnimeStudio.Endfield
 
         public static void ConvertBytesToMp4(byte[] data, string outputPath)
         {
+            if (TryConvertWithUsmHelper(data, outputPath))
+            {
+                return;
+            }
+
             var streams = DemuxBytes(data);
             MuxToMp4(streams, outputPath);
         }
 
+        private static bool TryConvertWithUsmHelper(byte[] data, string outputPath)
+        {
+            var helper = ResolveUsmConvert();
+            if (helper == null)
+            {
+                return false;
+            }
+
+            var tempDir = Path.Combine(Path.GetTempPath(), $"AnimeStudioUsmHelper_{Guid.NewGuid():N}");
+            var inputPath = Path.Combine(tempDir, "input.usm");
+            var helperOutputDir = Path.Combine(tempDir, "out");
+            var helperOutputPath = Path.Combine(helperOutputDir, "input.mp4");
+            try
+            {
+                Directory.CreateDirectory(helperOutputDir);
+                File.WriteAllBytes(inputPath, data);
+
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = helper,
+                        UseShellExecute = false,
+                        RedirectStandardError = true,
+                        RedirectStandardOutput = true,
+                    },
+                };
+                process.StartInfo.ArgumentList.Add("-o");
+                process.StartInfo.ArgumentList.Add(helperOutputDir);
+                process.StartInfo.ArgumentList.Add(inputPath);
+                process.Start();
+                process.WaitForExit();
+
+                if (process.ExitCode != 0 || !File.Exists(helperOutputPath))
+                {
+                    return false;
+                }
+
+                var parent = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(parent))
+                {
+                    Directory.CreateDirectory(parent);
+                }
+                File.Copy(helperOutputPath, outputPath, overwrite: true);
+                return true;
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(tempDir, recursive: true);
+                }
+                catch
+                {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
+
+        private static string ResolveUsmConvert()
+        {
+            var configured = Environment.GetEnvironmentVariable("ANIMESTUDIO_USM_CONVERT");
+            if (!string.IsNullOrEmpty(configured) && File.Exists(configured))
+            {
+                return configured;
+            }
+
+            var local = Path.Combine(AppContext.BaseDirectory, "usm-convert.exe");
+            if (File.Exists(local))
+            {
+                return local;
+            }
+
+            var repoLocal = Path.Combine(
+                Environment.CurrentDirectory,
+                "tools",
+                "fluffy-dumper-src",
+                "target",
+                "release",
+                "usm-convert.exe");
+            return File.Exists(repoLocal) ? repoLocal : null;
+        }
         private static DemuxedStreams DemuxBytes(byte[] data)
         {
             var offset = FindPattern(data, Crid, 0);
