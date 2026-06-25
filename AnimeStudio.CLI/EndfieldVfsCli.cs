@@ -161,15 +161,29 @@ namespace AnimeStudio.CLI
                 return;
             }
 
-            var outputPath = Path.Combine(output, file.FileName);
-            var parent = Path.GetDirectoryName(outputPath);
-            if (!string.IsNullOrEmpty(parent))
+            string outputPath;
+            if (blockType == EndfieldVfsBlockType.Table)
             {
-                Directory.CreateDirectory(parent);
+                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                outputPath = EndfieldDumpProcessors.ProcessTableFile(data, output);
             }
+            else if (blockType == EndfieldVfsBlockType.Lua)
+            {
+                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                outputPath = EndfieldDumpProcessors.ProcessLuaFile(data, file.FileName, output);
+            }
+            else
+            {
+                outputPath = Path.Combine(output, file.FileName);
+                var parent = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(parent))
+                {
+                    Directory.CreateDirectory(parent);
+                }
 
-            using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024);
-            loader.ExtractFile(blockType, chunk, file, stream);
+                using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024);
+                loader.ExtractFile(blockType, chunk, file, stream);
+            }
             if (!File.Exists(outputPath))
             {
                 throw new IOException($"Failed to create output file: {outputPath}");
