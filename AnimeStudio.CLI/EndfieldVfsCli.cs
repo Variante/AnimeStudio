@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimeStudio.Endfield;
@@ -258,39 +259,39 @@ namespace AnimeStudio.CLI
                     {
                         files.Add(new JObject
                         {
-                            ["name"] = file.FileName,
-                            ["nameHash"] = file.FileNameHash,
+                            ["blockType"] = file.BlockType.GetName(),
                             ["chunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
                             ["dataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
-                            ["offset"] = file.Offset,
-                            ["length"] = file.Length,
-                            ["blockType"] = file.BlockType.GetName(),
                             ["encrypted"] = file.UseEncrypt,
                             ["ivSeed"] = file.IvSeed,
+                            ["length"] = file.Length,
+                            ["name"] = file.FileName,
+                            ["nameHash"] = file.FileNameHash,
+                            ["offset"] = file.Offset,
                             ["tag"] = file.FileTag.ToString(),
                         });
                         flatFiles.Add(new JObject
                         {
                             ["blockName"] = blockType.GetName(),
-                            ["hashDirectory"] = blockDirName,
-                            ["chunkFile"] = chunkFileName,
-                            ["chunkMd5Name"] = EndfieldVfsFormatting.UInt128Hex(chunk.Md5Name),
-                            ["chunkContentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
-                            ["chunkLength"] = chunk.Length,
-                            ["chunkSource"] = chunkSource,
-                            ["chunkExists"] = chunkExists,
-                            ["chunkRelativePath"] = chunkRelativePath,
                             ["chunkAbsolutePath"] = chunkAbsolutePath == null ? JValue.CreateNull() : chunkAbsolutePath,
-                            ["fileName"] = file.FileName,
-                            ["fileNameHash"] = file.FileNameHash,
+                            ["chunkContentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
+                            ["chunkExists"] = chunkExists,
+                            ["chunkFile"] = chunkFileName,
+                            ["chunkLength"] = chunk.Length,
+                            ["chunkMd5Name"] = EndfieldVfsFormatting.UInt128Hex(chunk.Md5Name),
+                            ["chunkRelativePath"] = chunkRelativePath,
+                            ["chunkSource"] = chunkSource,
+                            ["encrypted"] = file.UseEncrypt,
+                            ["fileBlockType"] = file.BlockType.GetName(),
                             ["fileChunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
                             ["fileDataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
-                            ["offset"] = file.Offset,
-                            ["length"] = file.Length,
-                            ["fileBlockType"] = file.BlockType.GetName(),
-                            ["encrypted"] = file.UseEncrypt,
-                            ["ivSeed"] = file.IvSeed,
+                            ["fileName"] = file.FileName,
+                            ["fileNameHash"] = file.FileNameHash,
                             ["fileTag"] = file.FileTag.ToString(),
+                            ["hashDirectory"] = blockDirName,
+                            ["ivSeed"] = file.IvSeed,
+                            ["length"] = file.Length,
+                            ["offset"] = file.Offset,
                         });
                     }
 
@@ -301,19 +302,19 @@ namespace AnimeStudio.CLI
 
                     chunkValues.Add(new JObject
                     {
-                        ["fileName"] = chunkFileName,
-                        ["md5Name"] = EndfieldVfsFormatting.UInt128Hex(chunk.Md5Name),
-                        ["contentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
-                        ["length"] = chunk.Length,
-                        ["blockType"] = chunk.BlockType.GetName(),
-                        ["tag"] = chunk.MainTag.ToString(),
-                        ["exists"] = chunkExists,
-                        ["source"] = chunkSource,
-                        ["relativePath"] = chunkRelativePath,
                         ["absolutePath"] = chunkAbsolutePath == null ? JValue.CreateNull() : chunkAbsolutePath,
-                        ["fileCount"] = chunkFileCount,
+                        ["blockType"] = chunk.BlockType.GetName(),
                         ["byteCount"] = chunkByteCount,
+                        ["contentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
+                        ["exists"] = chunkExists,
+                        ["fileCount"] = chunkFileCount,
+                        ["fileName"] = chunkFileName,
                         ["files"] = files,
+                        ["length"] = chunk.Length,
+                        ["md5Name"] = EndfieldVfsFormatting.UInt128Hex(chunk.Md5Name),
+                        ["relativePath"] = chunkRelativePath,
+                        ["source"] = chunkSource,
+                        ["tag"] = chunk.MainTag.ToString(),
                     });
                 }
 
@@ -323,42 +324,42 @@ namespace AnimeStudio.CLI
 
                 blocks.Add(new JObject
                 {
-                    ["name"] = blockType.GetName(),
-                    ["hashDirectory"] = blockDirName,
-                    ["version"] = blockInfo.Version,
-                    ["codeVersion"] = blockInfo.CodeVersion,
-                    ["groupConfigName"] = blockInfo.GroupConfigName,
-                    ["groupConfigHashName"] = blockInfo.GroupConfigHashName,
-                    ["declaredFileCount"] = blockInfo.GroupFileInfoNum,
-                    ["declaredChunkBytes"] = blockInfo.GroupChunksLength,
                     ["blockType"] = blockInfo.BlockType.GetName(),
-                    ["chunkCount"] = blockInfo.Chunks.Count,
-                    ["fileCount"] = blockFileCount,
                     ["byteCount"] = blockByteCount,
-                    ["missingChunkCount"] = blockMissingChunks,
+                    ["chunkCount"] = blockInfo.Chunks.Count,
                     ["chunks"] = chunkValues,
+                    ["codeVersion"] = blockInfo.CodeVersion,
+                    ["declaredChunkBytes"] = blockInfo.GroupChunksLength,
+                    ["declaredFileCount"] = blockInfo.GroupFileInfoNum,
+                    ["fileCount"] = blockFileCount,
+                    ["groupConfigHashName"] = blockInfo.GroupConfigHashName,
+                    ["groupConfigName"] = blockInfo.GroupConfigName,
+                    ["hashDirectory"] = blockDirName,
+                    ["missingChunkCount"] = blockMissingChunks,
+                    ["name"] = blockType.GetName(),
+                    ["version"] = blockInfo.Version,
                 });
             }
 
             var outputPayload = new JObject
             {
-                ["schemaVersion"] = 1,
-                ["generatedAtEpoch"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                ["streamingAssets"] = NormalizePath(options.StreamingAssets),
-                ["fallbackAssets"] = string.IsNullOrEmpty(options.FallbackAssets) ? JValue.CreateNull() : NormalizePath(options.FallbackAssets),
                 ["blockFilter"] = options.BlockFilterName,
+                ["blocks"] = blocks,
+                ["fallbackAssets"] = string.IsNullOrEmpty(options.FallbackAssets) ? JValue.CreateNull() : NormalizePath(options.FallbackAssets),
+                ["files"] = flatFiles,
+                ["generatedAtEpoch"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                ["missingBlocks"] = missingBlocks,
+                ["schemaVersion"] = 1,
+                ["streamingAssets"] = NormalizePath(options.StreamingAssets),
                 ["summary"] = new JObject
                 {
                     ["blockCount"] = blocks.Count,
-                    ["missingBlockCount"] = missingBlocks.Count,
-                    ["chunkCount"] = totalChunks,
-                    ["missingChunkCount"] = missingChunks,
-                    ["fileCount"] = totalFiles,
                     ["byteCount"] = totalBytes,
+                    ["chunkCount"] = totalChunks,
+                    ["fileCount"] = totalFiles,
+                    ["missingBlockCount"] = missingBlocks.Count,
+                    ["missingChunkCount"] = missingChunks,
                 },
-                ["missingBlocks"] = missingBlocks,
-                ["files"] = flatFiles,
-                ["blocks"] = blocks,
             };
 
             var outputParent = Path.GetDirectoryName(options.Output);
@@ -366,7 +367,9 @@ namespace AnimeStudio.CLI
             {
                 Directory.CreateDirectory(outputParent);
             }
-            File.WriteAllText(options.Output, JsonConvert.SerializeObject(outputPayload, Formatting.Indented));
+            var indexJson = JsonConvert.SerializeObject(outputPayload, Formatting.Indented)
+                .Replace("\r\n", "\n", StringComparison.Ordinal);
+            File.WriteAllText(options.Output, indexJson, new UTF8Encoding(false));
             Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.Output}");
         }
 
