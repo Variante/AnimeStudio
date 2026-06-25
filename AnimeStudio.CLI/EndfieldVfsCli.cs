@@ -50,8 +50,7 @@ namespace AnimeStudio.CLI
                         RunVfsIndex(ParseVfsOptions(args, "./vfs_index.json"));
                         return true;
                     case "audio":
-                        Console.Error.WriteLine("Error: audio is not available in AnimeStudio yet; use the existing fluffy-dumper binary for this command.");
-                        exitCode = 1;
+                        EndfieldAudioCli.Run(args);
                         return true;
                 }
             }
