@@ -498,18 +498,79 @@ namespace AnimeStudio.CLI
 
         private static void PrintCommandHelp(string command)
         {
+            const string executable = "AnimeStudio.CLI.exe";
+            const string blockTypeValues = "[default: all] [possible values: all, initial-audio, initial-bundle, initial-extend-data, bundle-manifest, i-fix-patch, audit-streaming, audit-dynamic-streaming, audit-iv, audit-audio, audit-video, bundle, audio, video, iv, streaming, dynamic-streaming, lua, table, json-data, extend-data, hotfix-audio, audio-chinese, audio-english, audio-japanese, audio-korean]";
+
             switch (command.ToLowerInvariant())
             {
                 case "dump":
-                    Console.WriteLine("Usage: AnimeStudio.CLI dump -s <StreamingAssets> [-o <output>] [-b <block-type>] [--fallback-assets <StreamingAssets>]");
+                    PrintHelpLines(
+                        $"Usage: {executable} dump [OPTIONS] --streaming-assets <STREAMING_ASSETS>",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <STREAMING_ASSETS>",
+                        "          ",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          ",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./output]",
+                        "  -b, --block-type <BLOCK_TYPE>",
+                        $"          {blockTypeValues}",
+                        "  -h, --help",
+                        "          Print help");
                     break;
                 case "vfs-index":
                 case "vfsindex":
-                    Console.WriteLine("Usage: AnimeStudio.CLI vfs-index -s <StreamingAssets> [-o <output.json>] [-b <block-type>] [--fallback-assets <StreamingAssets>]");
+                    PrintHelpLines(
+                        $"Usage: {executable} vfs-index [OPTIONS] --streaming-assets <STREAMING_ASSETS>",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <STREAMING_ASSETS>",
+                        "          ",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          ",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./vfs_index.json]",
+                        "  -b, --block-type <BLOCK_TYPE>",
+                        $"          {blockTypeValues}",
+                        "  -h, --help",
+                        "          Print help");
                     break;
                 case "audio":
-                    Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [-l <language>] [-f <wem|wav>] [-b <block>] [--fallback-assets <StreamingAssets>]");
+                    PrintHelpLines(
+                        $"Usage: {executable} audio [OPTIONS] --streaming-assets <STREAMING_ASSETS>",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <STREAMING_ASSETS>",
+                        "          ",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          ",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./output]",
+                        "  -l, --language <LANGUAGE>",
+                        "          [default: all] [possible values: all, chinese, english, japanese, korean]",
+                        "  -f, --format <FORMAT>",
+                        "          [default: wav] [possible values: wem, wav]",
+                        "  -b, --block <BLOCK>",
+                        "          [default: all] [possible values: all, voice, audio, initial-audio, audit-audio]",
+                        "  -h, --help",
+                        "          Print help");
                     break;
+                case "list":
+                    PrintHelpLines(
+                        $"Usage: {executable} list",
+                        "",
+                        "Options:",
+                        "  -h, --help  Print help");
+                    break;
+            }
+        }
+
+        private static void PrintHelpLines(params string[] lines)
+        {
+            foreach (var line in lines)
+            {
+                Console.WriteLine(line);
             }
         }
 
