@@ -216,51 +216,124 @@ namespace AnimeStudio.CLI
                 string typeTreeSource = exportTypeTree != null ? "serializedType" : "none";
                 Exception builtInTypeTreeException = null;
                 Exception decodeException = null;
-                try
+                MonoBehaviourTypeTreeConversion scriptTypeTreeConversion = null;
+                Exception scriptTypeTreeDecodeException = null;
+                Exception partialTypeTreeException = null;
+                long partialTypeTreeBytesRead = 0;
+                OrderedDictionary partialTypeTreeStoppedAt = null;
+                OrderedDictionary recoveredManagedReferences = null;
+
+                if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && Studio.assemblyLoader.Loaded)
                 {
-                    type = m_MonoBehaviour.ToType();
-                }
-                catch (Exception ex)
-                {
-                    builtInTypeTreeException = ex;
-                    decodeException = ex;
+                    TryDecodeMonoBehaviourWithScriptTypeTree(
+                        item,
+                        m_MonoBehaviour,
+                        null,
+                        out type,
+                        out scriptTypeTreeConversion,
+                        out scriptTypeTreeDecodeException
+                    );
+                    if (type != null)
+                    {
+                        exportTypeTree = scriptTypeTreeConversion.TypeTree;
+                        typeTreeSource = "scriptDerived";
+                        decodeException = null;
+                    }
+                    else if (scriptTypeTreeDecodeException != null)
+                    {
+                        decodeException = scriptTypeTreeDecodeException;
+                    }
                 }
 
-                if (type == null && Studio.assemblyLoader.Loaded)
+                if (type == null)
                 {
                     try
                     {
-                        var scriptTypeTree = Studio.MonoBehaviourToTypeTree(m_MonoBehaviour);
-                        if (scriptTypeTree?.m_Nodes?.Count > MonoBehaviourBaseTypeTreeNodeCount)
+                        type = m_MonoBehaviour.ToType();
+                        if (type != null)
                         {
-                            if (builtInTypeTreeException != null)
-                            {
-                                Logger.Warning(
-                                    $"Retrying MonoBehaviour {item.Text} with a script-derived type tree after " +
-                                    $"{builtInTypeTreeException.GetType().Name}: {builtInTypeTreeException.Message}"
-                                );
-                            }
-                            type = m_MonoBehaviour.ToType(scriptTypeTree);
-                            if (type != null)
-                            {
-                                exportTypeTree = scriptTypeTree;
-                                typeTreeSource = "scriptDerived";
-                                decodeException = null;
-                            }
+                            exportTypeTree = m_MonoBehaviour.serializedType?.m_Type;
+                            typeTreeSource = exportTypeTree != null ? "serializedType" : "none";
+                            decodeException = null;
                         }
                     }
                     catch (Exception ex)
                     {
+                        builtInTypeTreeException = ex;
                         decodeException = ex;
-                        Logger.Warning(
-                            $"Script-derived MonoBehaviour decode failed for {item.Text}: " +
-                            $"{ex.GetType().Name}: {ex.Message}"
-                        );
+                    }
+                }
+
+                if (type == null && Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.SerializedFirst && Studio.assemblyLoader.Loaded)
+                {
+                    TryDecodeMonoBehaviourWithScriptTypeTree(
+                        item,
+                        m_MonoBehaviour,
+                        builtInTypeTreeException,
+                        out type,
+                        out scriptTypeTreeConversion,
+                        out scriptTypeTreeDecodeException
+                    );
+                    if (type != null)
+                    {
+                        exportTypeTree = scriptTypeTreeConversion.TypeTree;
+                        typeTreeSource = "scriptDerived";
+                        decodeException = null;
+                    }
+                    else if (scriptTypeTreeDecodeException != null)
+                    {
+                        decodeException = scriptTypeTreeDecodeException;
+                    }
+                }
+
+                if (type == null && builtInTypeTreeException != null && exportTypeTree != null)
+                {
+                    TryDecodeMonoBehaviourPartial(
+                        item,
+                        m_MonoBehaviour,
+                        exportTypeTree,
+                        builtInTypeTreeException,
+                        "serialized TypeTree",
+                        out type,
+                        out partialTypeTreeException,
+                        out partialTypeTreeBytesRead
+                    );
+                }
+
+                if (type == null
+                    && scriptTypeTreeDecodeException != null
+                    && scriptTypeTreeConversion?.TypeTree?.m_Nodes?.Count > MonoBehaviourBaseTypeTreeNodeCount)
+                {
+                    if (TryDecodeMonoBehaviourPartial(
+                        item,
+                        m_MonoBehaviour,
+                        scriptTypeTreeConversion.TypeTree,
+                        scriptTypeTreeDecodeException,
+                        "script-derived TypeTree",
+                        out type,
+                        out partialTypeTreeException,
+                        out partialTypeTreeBytesRead))
+                    {
+                        exportTypeTree = scriptTypeTreeConversion.TypeTree;
+                        typeTreeSource = "scriptDerivedPartial";
                     }
                 }
 
                 var rawData = m_MonoBehaviour.GetRawData();
                 var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                if (type != null
+                    && partialTypeTreeException != null
+                    && TryExtractPartialDecodeStoppedAt(type, out partialTypeTreeStoppedAt)
+                    && TryGetPartialDecodeStart(partialTypeTreeStoppedAt, "references", "ManagedReferencesRegistry", out var referencesStartOffset)
+                    && IsFinalTopLevelTypeTreeField(exportTypeTree, "references", "ManagedReferencesRegistry"))
+                {
+                    var expectedRids = CollectManagedReferenceRids(type);
+                    if (expectedRids.Count > 0
+                        && TryRecoverManagedReferences(rawData, referencesStartOffset, expectedRids, out var recoveredReferences))
+                    {
+                        recoveredManagedReferences = recoveredReferences;
+                    }
+                }
 
                 if (type == null)
                 {
@@ -280,6 +353,8 @@ namespace AnimeStudio.CLI
                                 typeTreeSource,
                                 rawSidecar,
                                 decodeException,
+                                scriptTypeTreeConversion,
+                                scriptTypeTreeDecodeException,
                                 null
                             ) },
                             { "type", item.TypeString },
@@ -304,14 +379,1965 @@ namespace AnimeStudio.CLI
                     typeTreeSource,
                     rawSidecar,
                     builtInTypeTreeException,
+                    scriptTypeTreeConversion,
+                    scriptTypeTreeDecodeException,
                     type
                 );
+                if (partialTypeTreeException != null)
+                {
+                    meta["partialTypeTreeDecode"] = true;
+                    meta["partialTypeTreeBytesRead"] = partialTypeTreeBytesRead;
+                    meta["partialTypeTreeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
+                    if (partialTypeTreeStoppedAt != null)
+                    {
+                        meta["partialTypeTreeStoppedAt"] = partialTypeTreeStoppedAt;
+                    }
+                    if (recoveredManagedReferences != null)
+                    {
+                        meta["recoveredManagedReferences"] = recoveredManagedReferences;
+                    }
+                }
                 type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
                 File.WriteAllText(exportFullPath, str);
             }
 
              return true;
+        }
+
+        private sealed class ManagedReferenceHeader
+        {
+            public long Rid { get; set; }
+            public string ClassName { get; set; }
+            public string Namespace { get; set; }
+            public string AssemblyName { get; set; }
+            public int HeaderStart { get; set; }
+            public int DataStart { get; set; }
+        }
+
+        private const int MinManagedReferenceHeaderBytes = 24;
+        private const int MaxHeuristicStringHintsPerReference = 16;
+        private const int MaxHeuristicStringHintsPerObject = 256;
+        private const int MaxHeuristicRidLinksPerReference = 64;
+        private const int MaxHeuristicRidLinksPerObject = 512;
+        private static readonly Encoding StrictUtf8Encoding = new UTF8Encoding(false, true);
+
+        private static bool TryExtractPartialDecodeStoppedAt(
+            OrderedDictionary type,
+            out OrderedDictionary stoppedAt
+        )
+        {
+            stoppedAt = null;
+            if (type == null || !type.Contains("$partialDecodeStoppedAt"))
+            {
+                return false;
+            }
+
+            stoppedAt = type["$partialDecodeStoppedAt"] as OrderedDictionary;
+            type.Remove("$partialDecodeStoppedAt");
+            return stoppedAt != null;
+        }
+
+        private static bool TryGetPartialDecodeStart(
+            OrderedDictionary stoppedAt,
+            string fieldName,
+            string fieldType,
+            out long startOffset
+        )
+        {
+            startOffset = 0;
+            if (stoppedAt == null)
+            {
+                return false;
+            }
+            if (!string.Equals(stoppedAt["field"] as string, fieldName, StringComparison.Ordinal)
+                || !string.Equals(stoppedAt["type"] as string, fieldType, StringComparison.Ordinal)
+                || !stoppedAt.Contains("startOffset"))
+            {
+                return false;
+            }
+            startOffset = Convert.ToInt64(stoppedAt["startOffset"]);
+            return startOffset >= 0;
+        }
+
+        private static bool IsFinalTopLevelTypeTreeField(TypeTree typeTree, string fieldName, string fieldType)
+        {
+            var nodes = typeTree?.m_Nodes;
+            if (nodes == null)
+            {
+                return false;
+            }
+
+            for (var i = 1; i < nodes.Count; i++)
+            {
+                var node = nodes[i];
+                if (!string.Equals(node.m_Name, fieldName, StringComparison.Ordinal)
+                    || !string.Equals(node.m_Type, fieldType, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                for (var j = i + 1; j < nodes.Count; j++)
+                {
+                    if (nodes[j].m_Level <= node.m_Level)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            return false;
+        }
+
+        private static HashSet<long> CollectManagedReferenceRids(object value)
+        {
+            var rids = new HashSet<long>();
+            CollectManagedReferenceRids(value, rids);
+            return rids;
+        }
+
+        private static void CollectManagedReferenceRids(object value, HashSet<long> rids)
+        {
+            if (value == null)
+            {
+                return;
+            }
+
+            if (value is OrderedDictionary dictionary)
+            {
+                if (dictionary.Count == 1
+                    && dictionary.Contains("rid")
+                    && TryConvertToInt64(dictionary["rid"], out var managedReferenceRid)
+                    && managedReferenceRid != 0)
+                {
+                    rids.Add(managedReferenceRid);
+                    return;
+                }
+
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    CollectManagedReferenceRids(entry.Value, rids);
+                }
+                return;
+            }
+
+            if (value is IEnumerable enumerable && value is not string)
+            {
+                foreach (var item in enumerable)
+                {
+                    CollectManagedReferenceRids(item, rids);
+                }
+            }
+        }
+
+        private static bool TryConvertToInt64(object value, out long result)
+        {
+            result = 0;
+            try
+            {
+                switch (value)
+                {
+                    case byte v:
+                        result = v;
+                        return true;
+                    case sbyte v:
+                        result = v;
+                        return true;
+                    case short v:
+                        result = v;
+                        return true;
+                    case ushort v:
+                        result = v;
+                        return true;
+                    case int v:
+                        result = v;
+                        return true;
+                    case uint v:
+                        result = v;
+                        return true;
+                    case long v:
+                        result = v;
+                        return true;
+                    case ulong v when v <= long.MaxValue:
+                        result = (long)v;
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryRecoverManagedReferences(
+            byte[] rawData,
+            long startOffset,
+            IReadOnlySet<long> expectedRids,
+            out OrderedDictionary references
+        )
+        {
+            references = null;
+            if (rawData == null || startOffset < 0 || startOffset > rawData.Length - 8 || expectedRids == null || expectedRids.Count == 0)
+            {
+                return false;
+            }
+
+            var pos = (int)startOffset;
+            var version = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+            pos += 4;
+            var count = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+            pos += 4;
+            if (version < 1 || version > 3 || count < 0 || count > 10000)
+            {
+                return false;
+            }
+            if (count < expectedRids.Count)
+            {
+                return false;
+            }
+
+            if (!TryParseManagedReferenceHeaders(rawData, pos, count, expectedRids, out var headers))
+            {
+                return false;
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            var recoveredRids = new HashSet<long>();
+            var recoveredByRid = headers.ToDictionary(header => header.Rid);
+            var remainingStringHintBudget = MaxHeuristicStringHintsPerObject;
+            var remainingRidLinkBudget = MaxHeuristicRidLinksPerObject;
+            for (var i = 0; i < headers.Count; i++)
+            {
+                var header = headers[i];
+                var nextPos = i == headers.Count - 1 ? rawData.Length : headers[i + 1].HeaderStart;
+                if (!recoveredRids.Add(header.Rid) || nextPos < header.DataStart)
+                {
+                    return false;
+                }
+
+                var dataLength = nextPos - header.DataStart;
+                entries.Add(new OrderedDictionary
+                {
+                    { "rid", header.Rid },
+                    { "type", BuildManagedReferenceType(header) },
+                    { "dataOffset", header.DataStart },
+                    { "dataLength", dataLength },
+                    { "data", BuildManagedReferenceData(
+                        header,
+                        rawData,
+                        header.DataStart,
+                        dataLength,
+                        recoveredByRid,
+                        ref remainingStringHintBudget,
+                        ref remainingRidLinkBudget) },
+                });
+            }
+
+            foreach (var expectedRid in expectedRids)
+            {
+                if (!recoveredRids.Contains(expectedRid))
+                {
+                    return false;
+                }
+            }
+
+            references = new OrderedDictionary
+            {
+                { "$recovered", true },
+                { "$heuristic", true },
+                { "stringHintLimitPerReference", MaxHeuristicStringHintsPerReference },
+                { "stringHintLimitPerObject", MaxHeuristicStringHintsPerObject },
+                { "ridLinkLimitPerReference", MaxHeuristicRidLinksPerReference },
+                { "ridLinkLimitPerObject", MaxHeuristicRidLinksPerObject },
+                { "version", version },
+                { "count", count },
+                { "RefIds", entries },
+            };
+            return true;
+        }
+
+        private static bool TryParseManagedReferenceHeaders(
+            byte[] rawData,
+            int firstHeaderOffset,
+            int count,
+            IReadOnlySet<long> expectedRids,
+            out List<ManagedReferenceHeader> headers
+        )
+        {
+            headers = new List<ManagedReferenceHeader>(count);
+            var usedRids = new HashSet<long>();
+            var pos = firstHeaderOffset;
+
+            for (var i = 0; i < count; i++)
+            {
+                if (!TryReadManagedReferenceHeader(rawData, pos, out var header)
+                    || !usedRids.Add(header.Rid))
+                {
+                    return false;
+                }
+                headers.Add(header);
+
+                if (i == count - 1)
+                {
+                    break;
+                }
+
+                if (!TryFindNextManagedReferenceHeader(
+                    rawData,
+                    header.DataStart,
+                    count - i - 1,
+                    expectedRids,
+                    usedRids,
+                    out pos))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static OrderedDictionary BuildManagedReferenceType(ManagedReferenceHeader header)
+        {
+            return new OrderedDictionary
+            {
+                { "class", header.ClassName },
+                { "ns", header.Namespace },
+                { "asm", header.AssemblyName },
+            };
+        }
+
+        private static OrderedDictionary BuildManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            ref int remainingStringHintBudget,
+            ref int remainingRidLinkBudget
+        )
+        {
+            if (TryDecodeDialogMainFlowData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                ref remainingRidLinkBudget,
+                out var decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogTeleportEntityActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogStringActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                ref remainingStringHintBudget,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogEmptyTailActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogSmallFixedActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogMoveToActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogLookAtActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogTurnToActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeDialogCameraEffectActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            var data = new OrderedDictionary
+            {
+                { "$unparsed", true },
+                { "$heuristic", true },
+                { "offset", offset },
+                { "length", length },
+            };
+            if (TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                data["inferredActionTimingPrefix"] = actionTimingPrefix;
+            }
+
+            var stringHints = CollectAlignedStringHints(rawData, offset, length, ref remainingStringHintBudget);
+            if (stringHints.Count > 0)
+            {
+                data["heuristicStringHints"] = stringHints;
+            }
+
+            var ridLinks = CollectHeuristicRidLinks(rawData, offset, length, recoveredByRid, ref remainingRidLinkBudget);
+            if (ridLinks.Count > 0)
+            {
+                data["heuristicRidLinks"] = ridLinks;
+            }
+
+            return data;
+        }
+
+        private static bool TryDecodeDialogMainFlowData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            ref int remainingRidLinkBudget,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.ClassName, "DialogMainFlowData", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length < 12
+                || offset + length > rawData.Length
+                || recoveredByRid == null
+                || recoveredByRid.Count == 0)
+            {
+                return false;
+            }
+
+            var pos = offset;
+            var leadRid = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(pos, 8));
+            pos += 8;
+            var linkedRidCount = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+            pos += 4;
+
+            if (linkedRidCount < 0
+                || linkedRidCount > MaxHeuristicRidLinksPerReference
+                || linkedRidCount + 1 > remainingRidLinkBudget
+                || 12 + linkedRidCount * 8 != length
+                || !recoveredByRid.TryGetValue(leadRid, out var leadHeader))
+            {
+                return false;
+            }
+
+            var linkedRids = new List<OrderedDictionary>(linkedRidCount);
+            for (var i = 0; i < linkedRidCount; i++)
+            {
+                var linkOffset = pos;
+                var linkedRid = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(pos, 8));
+                pos += 8;
+                if (!recoveredByRid.TryGetValue(linkedRid, out var linkedHeader))
+                {
+                    return false;
+                }
+                linkedRids.Add(BuildManagedReferenceRidLink(linkedRid, linkedHeader, linkOffset));
+            }
+
+            remainingRidLinkBudget -= linkedRidCount + 1;
+            data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", "DialogMainFlowDataRidArray" },
+                { "offset", offset },
+                { "length", length },
+                { "leadRid", BuildManagedReferenceRidLink(leadRid, leadHeader, offset) },
+                { "linkedRids", linkedRids },
+            };
+            return true;
+        }
+
+        private static bool TryDecodeDialogStringActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            ref int remainingStringHintBudget,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length <= 4
+                || offset + length > rawData.Length
+                || remainingStringHintBudget <= 0)
+            {
+                return false;
+            }
+
+            TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix);
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogMFTrunkActionData", StringComparison.Ordinal)
+                && length >= 296
+                && length <= 300
+                && HasInt32Value(rawData, offset + 8, 307)
+                && TryReadNamedStringField(rawData, offset + 32, offset + length, out var lineId)
+                && StringFieldStartsWith(lineId, "dlg_"))
+            {
+                remainingStringHintBudget--;
+                data = BuildPartialDialogStringActionData(
+                    "DialogMFTrunkActionDataLineId",
+                    offset,
+                    length,
+                    "lineId",
+                    lineId
+                );
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogAnimActData", StringComparison.Ordinal)
+                && length >= 268
+                && length <= 292
+                && HasInt32Value(rawData, offset + 8, 54)
+                && TryReadNamedStringField(rawData, offset + 68, offset + length, out var animationPath)
+                && StringFieldStartsWith(animationPath, "Montage/"))
+            {
+                remainingStringHintBudget--;
+                data = BuildPartialDialogStringActionData(
+                    "DialogAnimActDataAnimationPath",
+                    offset,
+                    length,
+                    "animationPath",
+                    animationPath
+                );
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogEmotionActData", StringComparison.Ordinal)
+                && length >= 240
+                && length <= 272
+                && HasInt32Value(rawData, offset + 8, 122)
+                && TryReadNamedStringField(rawData, offset + 44, offset + length, out var facialMorphPath))
+            {
+                remainingStringHintBudget--;
+                data = BuildPartialDialogStringActionData(
+                    "DialogEmotionActDataFacialMorphPath",
+                    offset,
+                    length,
+                    "facialMorphPath",
+                    facialMorphPath
+                );
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogSummaryActData", StringComparison.Ordinal)
+                && length == 52
+                && HasInt32Value(rawData, offset + 8, 127)
+                && IsZeroFilled(rawData, offset + 12, 16)
+                && TryReadNamedStringField(rawData, offset + 28, offset + length, out var summaryId)
+                && StringFieldStartsWith(summaryId, "summary_"))
+            {
+                remainingStringHintBudget--;
+                data = BuildPartialDialogStringActionData(
+                    "DialogSummaryActDataSummaryId",
+                    offset,
+                    length,
+                    "summaryId",
+                    summaryId
+                );
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogMorphAnimActData", StringComparison.Ordinal)
+                && remainingStringHintBudget >= 2
+                && length == 132
+                && HasInt32Value(rawData, offset + 8, 306)
+                && IsZeroFilled(rawData, offset + 12, 16)
+                && HasInt32Value(rawData, offset + 28, 5)
+                && HasInt32Value(rawData, offset + 32, 1)
+                && HasInt32Value(rawData, offset + 36, 0)
+                && TryReadNamedStringField(rawData, offset + 40, offset + length, out var morphAnimPath)
+                && StringFieldStartsWith(morphAnimPath, "FacialMorph/MorphAnim/")
+                && TryReadNamedStringField(rawData, offset + 88, offset + length, out var morphStateName)
+                && HasInt32Value(rawData, offset + 108, 1065353216)
+                && IsZeroFilled(rawData, offset + 112, 20))
+            {
+                remainingStringHintBudget -= 2;
+                data = new OrderedDictionary
+                {
+                    { "$partialDecoded", true },
+                    { "$inferred", true },
+                    { "layout", "DialogMorphAnimActDataPaths" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "morphAnimPath", morphAnimPath },
+                    { "morphStateName", morphStateName },
+                };
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "DialogEmotionPoseActData", StringComparison.Ordinal)
+                && length == 416
+                && HasInt32Value(rawData, offset + 8, 305))
+            {
+                var poseControlNames = CollectAlignedStringHints(rawData, offset, length, ref remainingStringHintBudget);
+                if (poseControlNames.Count > 0)
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$partialDecoded", true },
+                        { "$inferred", true },
+                        { "layout", "DialogEmotionPoseActDataControlNames" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "poseControlNames", poseControlNames },
+                    };
+                    AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeDialogMoveToActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogMoveToActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 128
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 105)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 1024, out var targetIndexLike)
+                || !IsZeroFilled(rawData, offset + 32, 44)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 76, out var positionX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 80, out var positionY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 84, out var positionZ)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 88, out var rotationX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 92, out var rotationY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 96, out var rotationZ)
+                || !IsZeroFilled(rawData, offset + 100, 16)
+                || !HasInt32Value(rawData, offset + 116, 2)
+                || !HasInt32Value(rawData, offset + 120, 2)
+                || !HasInt32Value(rawData, offset + 124, 4)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogMoveToActDataTransformLike" },
+                { "offset", offset },
+                { "length", length },
+                { "targetIndexLike", BuildInferredIntField(offset + 28, targetIndexLike) },
+                { "positionLike", BuildInferredVector3Field(offset + 76, positionX, positionY, positionZ) },
+                { "rotationLike", BuildInferredVector3Field(offset + 88, rotationX, rotationY, rotationZ) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogLookAtActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogLookAtActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 144
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 52)
+                || !IsZeroFilled(rawData, offset + 12, 8)
+                || !TryReadBoundedInt32(rawData, offset + 20, 0, 1, out var selector0)
+                || !HasInt32Value(rawData, offset + 24, 0)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 3, out var selector1)
+                || !TryReadBoundedInt32(rawData, offset + 32, 0, 1, out var selector2)
+                || !HasInt32Value(rawData, offset + 36, 0)
+                || !TryReadBoundedInt32(rawData, offset + 40, 0, 2, out var selector3)
+                || !TryReadBoundedInt32(rawData, offset + 44, -1, 3, out var selector4)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 48, out var vectorAX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 52, out var vectorAY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 56, out var vectorAZ)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 60, out var vectorBX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 64, out var vectorBY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 68, out var vectorBZ)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 72, out var value0)
+                || !TryReadBoundedInt32(rawData, offset + 76, 0, 1, out var selector5)
+                || !IsZeroFilled(rawData, offset + 80, 8)
+                || !HasInt32Value(rawData, offset + 88, 2)
+                || !HasInt32Value(rawData, offset + 92, 2)
+                || !HasInt32Value(rawData, offset + 96, 4)
+                || !TryReadBoundedInt32(rawData, offset + 100, 0, 1, out var selector6)
+                || !HasInt32Value(rawData, offset + 104, 1065353216)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 108, out var value2)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 112, out var value3)
+                || !TryReadBoundedInt32(rawData, offset + 116, 0, 1, out var selector7)
+                || !HasInt32Value(rawData, offset + 120, 1065353216)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 124, out var value5)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 128, out var value6)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 132, out var value7)
+                || !HasInt32Value(rawData, offset + 136, 0)
+                || !HasInt32Value(rawData, offset + 140, 1)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogLookAtActDataScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "selectorFieldsLike", new OrderedDictionary
+                    {
+                        { "selector0", BuildInferredIntField(offset + 20, selector0) },
+                        { "selector1", BuildInferredIntField(offset + 28, selector1) },
+                        { "selector2", BuildInferredIntField(offset + 32, selector2) },
+                        { "selector3", BuildInferredIntField(offset + 40, selector3) },
+                        { "selector4", BuildInferredIntField(offset + 44, selector4) },
+                        { "selector5", BuildInferredIntField(offset + 76, selector5) },
+                        { "selector6", BuildInferredIntField(offset + 100, selector6) },
+                        { "selector7", BuildInferredIntField(offset + 116, selector7) },
+                    }
+                },
+                { "vectorALike", BuildInferredVector3Field(offset + 48, vectorAX, vectorAY, vectorAZ) },
+                { "vectorBLike", BuildInferredVector3Field(offset + 60, vectorBX, vectorBY, vectorBZ) },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 72, offset + 104, offset + 108, offset + 112, offset + 120, offset + 124, offset + 128, offset + 132 },
+                    new[] { value0, 1.0f, value2, value3, 1.0f, value5, value6, value7 }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogTurnToActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogTurnToActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 96
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 53)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 1024, out var targetIndexLike)
+                || !TryReadBoundedInt32(rawData, offset + 32, -1, 1024, out var modeLike)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 36, out var angleLike)
+                || angleLike < -360f
+                || angleLike > 360f
+                || !IsZeroFilled(rawData, offset + 40, 40)
+                || !HasInt32Value(rawData, offset + 80, 2)
+                || !HasInt32Value(rawData, offset + 84, 2)
+                || !HasInt32Value(rawData, offset + 88, 4)
+                || !HasInt32Value(rawData, offset + 92, 0)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogTurnToActDataAngleBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "targetIndexLike", BuildInferredIntField(offset + 28, targetIndexLike) },
+                { "modeLike", BuildInferredIntField(offset + 32, modeLike) },
+                { "angleLike", BuildInferredFloatField(offset + 36, angleLike) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogCameraEffectActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (TryDecodeDialogCamActionData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+            if (TryDecodeDialogCamDofActionData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+            if (TryDecodeDialogMaskActionData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+            if (TryDecodeDialogCamPpActionData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool TryDecodeDialogCamActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogCamActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 476
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 51)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !HasInt32Value(rawData, offset + 28, -1)
+                || !TryReadBoundedInt32(rawData, offset + 32, -1, 0, out var selector0)
+                || !IsZeroFilled(rawData, offset + 36, 12)
+                || !HasInt32Value(rawData, offset + 48, 2)
+                || !HasInt32Value(rawData, offset + 52, 0)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 56, out var value0)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 60, out var value1)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 64, out var value2)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 68, out var value3)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 72, out var value4)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 76, out var value5)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 80, out var value6)
+                || !HasInt32Value(rawData, offset + 84, 0)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 88, out var value7)
+                || !HasInt32Value(rawData, offset + 92, 0)
+                || !HasInt32Value(rawData, offset + 96, 2)
+                || !HasInt32Value(rawData, offset + 100, 2)
+                || !HasInt32Value(rawData, offset + 104, 4)
+                || !HasInt32Value(rawData, offset + 108, 1)
+                || !IsZeroFilled(rawData, offset + 112, 36)
+                || !HasInt32Value(rawData, offset + 148, 1)
+                || !HasInt32Value(rawData, offset + 152, 0)
+                || !HasInt32Value(rawData, offset + 156, 2)
+                || !HasInt32Value(rawData, offset + 160, 2)
+                || !HasInt32Value(rawData, offset + 164, 4)
+                || !HasInt32Value(rawData, offset + 168, -1)
+                || !HasInt32Value(rawData, offset + 172, -1)
+                || !HasInt32Value(rawData, offset + 176, 0)
+                || !HasInt32Value(rawData, offset + 180, -1)
+                || !HasInt32Value(rawData, offset + 184, 0)
+                || !HasInt32Value(rawData, offset + 188, -1082130432)
+                || !IsZeroFilled(rawData, offset + 192, 8)
+                || !HasInt32Value(rawData, offset + 200, 2)
+                || !HasInt32Value(rawData, offset + 204, 2)
+                || !HasInt32Value(rawData, offset + 208, 4)
+                || !IsZeroFilled(rawData, offset + 212, 36)
+                || !HasInt32Value(rawData, offset + 248, 1056964608)
+                || !HasInt32Value(rawData, offset + 252, 0)
+                || !TryReadBoundedInt32(rawData, offset + 256, -1, 0, out var selector1)
+                || !IsZeroFilled(rawData, offset + 260, 12)
+                || !TryReadBoundedInt32(rawData, offset + 272, 0, 2, out var selector2)
+                || !IsZeroFilled(rawData, offset + 276, 44)
+                || !HasInt32Value(rawData, offset + 320, 2)
+                || !HasInt32Value(rawData, offset + 324, 2)
+                || !HasInt32Value(rawData, offset + 328, 4)
+                || !HasInt32Value(rawData, offset + 332, 1)
+                || !IsZeroFilled(rawData, offset + 336, 36)
+                || !HasInt32Value(rawData, offset + 372, 1)
+                || !HasInt32Value(rawData, offset + 376, 0)
+                || !HasInt32Value(rawData, offset + 380, 2)
+                || !HasInt32Value(rawData, offset + 384, 2)
+                || !HasInt32Value(rawData, offset + 388, 4)
+                || !HasInt32Value(rawData, offset + 392, -1)
+                || !HasInt32Value(rawData, offset + 396, -1)
+                || !HasInt32Value(rawData, offset + 400, 0)
+                || !HasInt32Value(rawData, offset + 404, -1)
+                || !HasInt32Value(rawData, offset + 408, 0)
+                || !HasInt32Value(rawData, offset + 412, -1082130432)
+                || !IsZeroFilled(rawData, offset + 416, 8)
+                || !HasInt32Value(rawData, offset + 424, 2)
+                || !HasInt32Value(rawData, offset + 428, 2)
+                || !HasInt32Value(rawData, offset + 432, 4)
+                || !IsZeroFilled(rawData, offset + 436, 36)
+                || !HasInt32Value(rawData, offset + 472, 1056964608)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogCamActDataScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "selectorFieldsLike", new OrderedDictionary
+                    {
+                        { "selector0", BuildInferredIntField(offset + 32, selector0) },
+                        { "selector1", BuildInferredIntField(offset + 256, selector1) },
+                        { "selector2", BuildInferredIntField(offset + 272, selector2) },
+                    }
+                },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 56, offset + 60, offset + 64, offset + 68, offset + 72, offset + 76, offset + 80, offset + 88 },
+                    new[] { value0, value1, value2, value3, value4, value5, value6, value7 }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogCamDofActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogCamDOFActionData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 96
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 115)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !HasInt32Value(rawData, offset + 28, 1)
+                || !HasInt32Value(rawData, offset + 32, -1082130432)
+                || !HasInt32Value(rawData, offset + 36, 0)
+                || !HasInt32Value(rawData, offset + 40, 0)
+                || !HasInt32Value(rawData, offset + 44, 2)
+                || !HasInt32Value(rawData, offset + 48, 2)
+                || !HasInt32Value(rawData, offset + 52, 4)
+                || !IsZeroFilled(rawData, offset + 56, 12)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 68, out var value0)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 72, out var value1)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 76, out var value2)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 80, out var value3)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 84, out var value4)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 88, out var value5)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 92, out var value6)
+                || !HasInt32Value(rawData, offset + 92, 1056964608)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogCamDOFActionDataScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 68, offset + 72, offset + 76, offset + 80, offset + 84, offset + 88, offset + 92 },
+                    new[] { value0, value1, value2, value3, value4, value5, value6 }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogMaskActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogMaskActionData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 96
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 116)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 16, out var modeLike)
+                || !TryReadBoundedInt32(rawData, offset + 32, 0, 16, out var targetLike)
+                || !HasInt32Value(rawData, offset + 36, 1)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 40, out var blendValueLike)
+                || blendValueLike < 0f
+                || blendValueLike > 1f
+                || !IsZeroFilled(rawData, offset + 44, 8)
+                || !HasInt32Value(rawData, offset + 52, 2)
+                || !HasInt32Value(rawData, offset + 56, 2)
+                || !HasInt32Value(rawData, offset + 60, 4)
+                || !IsZeroFilled(rawData, offset + 64, 8)
+                || !HasInt32Value(rawData, offset + 72, 1)
+                || !HasInt32Value(rawData, offset + 76, 2)
+                || !IsZeroFilled(rawData, offset + 80, 16)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogMaskActionDataParameterBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "modeLike", BuildInferredIntField(offset + 28, modeLike) },
+                { "targetLike", BuildInferredIntField(offset + 32, targetLike) },
+                { "blendValueLike", BuildInferredFloatField(offset + 40, blendValueLike) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogCamPpActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogCamPPActionData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 232
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 118)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !HasInt32Value(rawData, offset + 28, 1)
+                || !TryReadBoundedInt32(rawData, offset + 32, 0, 1, out var modeLike)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 36, out var value0)
+                || !HasInt32Value(rawData, offset + 48, 2)
+                || !HasInt32Value(rawData, offset + 52, 2)
+                || !HasInt32Value(rawData, offset + 56, 4)
+                || !HasInt32Value(rawData, offset + 60, 300)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 64, out var value1)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 76, out var value2)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 88, out var value3)
+                || !HasInt32Value(rawData, offset + 100, 2)
+                || !HasInt32Value(rawData, offset + 104, 2)
+                || !HasInt32Value(rawData, offset + 108, 4)
+                || !HasInt32Value(rawData, offset + 112, 300)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 156, out var value4)
+                || !HasInt32Value(rawData, offset + 168, 2)
+                || !HasInt32Value(rawData, offset + 172, 2)
+                || !HasInt32Value(rawData, offset + 176, 4)
+                || !HasInt32Value(rawData, offset + 180, 300)
+                || !HasInt32Value(rawData, offset + 184, 1036831949)
+                || !HasInt32Value(rawData, offset + 204, 300)
+                || !HasInt32Value(rawData, offset + 216, 1065353216)
+                || !HasInt32Value(rawData, offset + 220, 1065353216)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogCamPPActionDataScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "modeLike", BuildInferredIntField(offset + 32, modeLike) },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 36, offset + 64, offset + 76, offset + 88, offset + 156, offset + 184, offset + 216, offset + 220 },
+                    new[] { value0, value1, value2, value3, value4, 0.1f, 1.0f, 1.0f }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryDecodeDialogSmallFixedActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || offset + length > rawData.Length
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            if (string.Equals(header.ClassName, "DialogMuteAutoBlinkActData", StringComparison.Ordinal)
+                && length == 44
+                && HasInt32Value(rawData, offset + 8, 304)
+                && IsZeroFilled(rawData, offset + 12, 20)
+                && TryReadBoundedInt32(rawData, offset + 32, 0, 1, out var muteFlagLike)
+                && IsZeroFilled(rawData, offset + 36, 8))
+            {
+                data = new OrderedDictionary
+                {
+                    { "$partialDecoded", true },
+                    { "$inferred", true },
+                    { "layout", "DialogMuteAutoBlinkActDataFlagLike" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "muteFlagLike", BuildInferredIntField(offset + 32, muteFlagLike) },
+                };
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "DialogShowOrHideSingleActorActionData", StringComparison.Ordinal)
+                && length == 36
+                && HasInt32Value(rawData, offset + 8, 301)
+                && IsZeroFilled(rawData, offset + 12, 16)
+                && TryReadBoundedInt32(rawData, offset + 28, 0, 1024, out var actorIndexLike)
+                && HasInt32Value(rawData, offset + 32, 0))
+            {
+                data = new OrderedDictionary
+                {
+                    { "$partialDecoded", true },
+                    { "$inferred", true },
+                    { "layout", "DialogShowOrHideSingleActorActionDataActorIndexLike" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "actorIndexLike", BuildInferredIntField(offset + 28, actorIndexLike) },
+                };
+                AddDialogActionTimingPrefix(data, actionTimingPrefix);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeDialogEmptyTailActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 28
+                || offset + length > rawData.Length
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix)
+                || !TryGetDialogEmptyTailActionLayout(header.ClassName, out var expectedActionCode, out var layout)
+                || !HasInt32Value(rawData, offset + 8, expectedActionCode)
+                || !IsZeroFilled(rawData, offset + 12, length - 12))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "offset", offset },
+                { "length", length },
+                { "zeroTail", new OrderedDictionary
+                    {
+                        { "$inferred", true },
+                        { "offset", offset + 12 },
+                        { "length", length - 12 },
+                    }
+                },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool TryGetDialogEmptyTailActionLayout(string className, out int expectedActionCode, out string layout)
+        {
+            expectedActionCode = 0;
+            layout = null;
+            switch (className)
+            {
+                case "DialogSetDisableClickActionData":
+                    expectedActionCode = 124;
+                    layout = "DialogSetDisableClickActionDataEmptyTail";
+                    return true;
+                case "DialogMFTransitionActionData":
+                    expectedActionCode = 308;
+                    layout = "DialogMFTransitionActionDataEmptyTail";
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryDecodeDialogTeleportEntityActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogTeleportEntityActionData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 60
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 107)
+                || !HasInt32Value(rawData, offset + 12, 0)
+                || !HasInt32Value(rawData, offset + 16, 0)
+                || !HasInt32Value(rawData, offset + 20, 0)
+                || !HasInt32Value(rawData, offset + 24, 0)
+                || !HasInt32Value(rawData, offset + 56, 0)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 1024, out var entityIndex)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 32, out var positionX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 36, out var positionY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 40, out var positionZ)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 44, out var rotationX)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 48, out var rotationY)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 52, out var rotationZ)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogTeleportEntityActionDataTransformLike" },
+                { "offset", offset },
+                { "length", length },
+                { "entityIndex", BuildInferredIntField(offset + 28, entityIndex) },
+                { "positionLike", BuildInferredVector3Field(offset + 32, positionX, positionY, positionZ) },
+                { "rotationLike", BuildInferredVector3Field(offset + 44, rotationX, rotationY, rotationZ) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static OrderedDictionary BuildPartialDialogStringActionData(
+            string layout,
+            int offset,
+            int length,
+            string fieldName,
+            OrderedDictionary fieldValue
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "offset", offset },
+                { "length", length },
+                { fieldName, fieldValue },
+            };
+        }
+
+        private static void AddDialogActionTimingPrefix(OrderedDictionary data, OrderedDictionary actionTimingPrefix)
+        {
+            if (data != null && actionTimingPrefix != null)
+            {
+                data["inferredActionTimingPrefix"] = actionTimingPrefix;
+            }
+        }
+
+        private static bool TryBuildDialogActionTimingPrefix(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary prefix
+        )
+        {
+            prefix = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length < 12
+                || offset + length > rawData.Length
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !LooksLikeDialogActionPayloadClass(header.ClassName))
+            {
+                return false;
+            }
+
+            var value0Seconds = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset, 4)));
+            var value1Seconds = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset + 4, 4)));
+            var actionCode = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset + 8, 4));
+            if (!LooksLikeFiniteTimelineSeconds(value0Seconds)
+                || !LooksLikeFiniteTimelineSeconds(value1Seconds)
+                || actionCode <= 0
+                || actionCode > 10000)
+            {
+                return false;
+            }
+
+            prefix = new OrderedDictionary
+            {
+                { "$inferred", true },
+                { "offset", offset },
+                { "value0Seconds", BuildInferredFloatField(offset, value0Seconds) },
+                { "value1Seconds", BuildInferredFloatField(offset + 4, value1Seconds) },
+                { "actionCode", BuildInferredIntField(offset + 8, actionCode) },
+            };
+            return true;
+        }
+
+        private static bool LooksLikeDialogActionPayloadClass(string className)
+        {
+            return !string.IsNullOrEmpty(className)
+                && className.StartsWith("Dialog", StringComparison.Ordinal)
+                && (className.EndsWith("ActData", StringComparison.Ordinal)
+                    || className.EndsWith("ActionData", StringComparison.Ordinal));
+        }
+
+        private static bool LooksLikeFiniteTimelineSeconds(float value)
+        {
+            return !float.IsNaN(value)
+                && !float.IsInfinity(value)
+                && value >= -100000f
+                && value <= 100000f;
+        }
+
+        private static bool TryReadFiniteTimelineFloat(byte[] rawData, int offset, out float value)
+        {
+            value = 0;
+            if (rawData == null || offset < 0 || offset > rawData.Length - 4)
+            {
+                return false;
+            }
+
+            value = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset, 4)));
+            return LooksLikeFiniteTimelineSeconds(value);
+        }
+
+        private static bool TryReadBoundedInt32(byte[] rawData, int offset, int min, int max, out int value)
+        {
+            value = 0;
+            if (rawData == null || offset < 0 || offset > rawData.Length - 4)
+            {
+                return false;
+            }
+
+            value = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset, 4));
+            return value >= min && value <= max;
+        }
+
+        private static bool HasInt32Value(byte[] rawData, int offset, int expected)
+        {
+            return TryReadBoundedInt32(rawData, offset, expected, expected, out _);
+        }
+
+        private static bool IsZeroFilled(byte[] rawData, int offset, int length)
+        {
+            if (rawData == null || offset < 0 || length < 0 || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            for (var i = offset; i < offset + length; i++)
+            {
+                if (rawData[i] != 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static OrderedDictionary BuildInferredFloatField(int offset, float value)
+        {
+            return new OrderedDictionary
+            {
+                { "offset", offset },
+                { "value", value },
+            };
+        }
+
+        private static OrderedDictionary BuildInferredIntField(int offset, int value)
+        {
+            return new OrderedDictionary
+            {
+                { "offset", offset },
+                { "value", value },
+            };
+        }
+
+        private static OrderedDictionary BuildInferredVector3Field(int offset, float x, float y, float z)
+        {
+            return new OrderedDictionary
+            {
+                { "offset", offset },
+                { "x", BuildInferredFloatField(offset, x) },
+                { "y", BuildInferredFloatField(offset + 4, y) },
+                { "z", BuildInferredFloatField(offset + 8, z) },
+            };
+        }
+
+        private static List<OrderedDictionary> BuildInferredFloatList(int[] offsets, float[] values)
+        {
+            var fields = new List<OrderedDictionary>();
+            if (offsets == null || values == null || offsets.Length != values.Length)
+            {
+                return fields;
+            }
+
+            for (var i = 0; i < offsets.Length; i++)
+            {
+                fields.Add(BuildInferredFloatField(offsets[i], values[i]));
+            }
+            return fields;
+        }
+
+        private static bool TryReadNamedStringField(
+            byte[] rawData,
+            int stringOffset,
+            int end,
+            out OrderedDictionary fieldValue
+        )
+        {
+            fieldValue = null;
+            if (rawData == null || stringOffset < 0 || stringOffset > rawData.Length - 4)
+            {
+                return false;
+            }
+
+            var length = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(stringOffset, 4));
+            if (!TryDecodeStringHint(rawData, stringOffset + 4, length, end, out var value))
+            {
+                return false;
+            }
+
+            fieldValue = new OrderedDictionary
+            {
+                { "offset", stringOffset },
+                { "value", value },
+            };
+            return true;
+        }
+
+        private static bool StringFieldStartsWith(OrderedDictionary fieldValue, string prefix)
+        {
+            return fieldValue != null
+                && fieldValue["value"] is string value
+                && value.StartsWith(prefix, StringComparison.Ordinal);
+        }
+
+        private static List<OrderedDictionary> CollectAlignedStringHints(byte[] rawData, int offset, int length, ref int remainingStringHintBudget)
+        {
+            var hints = new List<OrderedDictionary>();
+            if (rawData == null || offset < 0 || length <= 4 || offset + length > rawData.Length || remainingStringHintBudget <= 0)
+            {
+                return hints;
+            }
+
+            var end = offset + length;
+            var pos = (offset + 3) & ~3;
+            while (pos <= end - 4 && hints.Count < MaxHeuristicStringHintsPerReference && remainingStringHintBudget > 0)
+            {
+                var stringLength = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+                if (TryDecodeStringHint(rawData, pos + 4, stringLength, end, out var value))
+                {
+                    hints.Add(new OrderedDictionary
+                    {
+                        { "offset", pos },
+                        { "value", value },
+                    });
+                    remainingStringHintBudget--;
+                    pos = (pos + 4 + stringLength + 3) & ~3;
+                    continue;
+                }
+                pos += 4;
+            }
+
+            return hints;
+        }
+
+        private static List<OrderedDictionary> CollectHeuristicRidLinks(
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            ref int remainingRidLinkBudget
+        )
+        {
+            var links = new List<OrderedDictionary>();
+            if (rawData == null
+                || offset < 0
+                || length < 8
+                || offset + length > rawData.Length
+                || recoveredByRid == null
+                || recoveredByRid.Count == 0
+                || remainingRidLinkBudget <= 0)
+            {
+                return links;
+            }
+
+            var end = offset + length;
+            var pos = (offset + 3) & ~3;
+            while (pos <= end - 8
+                && links.Count < MaxHeuristicRidLinksPerReference
+                && remainingRidLinkBudget > 0)
+            {
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(pos, 8));
+                if (recoveredByRid.TryGetValue(rid, out var target))
+                {
+                    links.Add(BuildManagedReferenceRidLink(rid, target, pos));
+                    remainingRidLinkBudget--;
+                    pos += 8;
+                    continue;
+                }
+
+                pos += 4;
+            }
+
+            return links;
+        }
+
+        private static OrderedDictionary BuildManagedReferenceRidLink(long rid, ManagedReferenceHeader target, int offset)
+        {
+            return new OrderedDictionary
+            {
+                { "offset", offset },
+                { "rid", rid },
+                { "type", BuildManagedReferenceType(target) },
+            };
+        }
+
+        private static bool TryDecodeStringHint(byte[] rawData, int offset, int length, int end, out string value)
+        {
+            value = null;
+            if (length < 3 || length > 256 || offset < 0 || offset + length > end || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                value = StrictUtf8Encoding.GetString(rawData, offset, length);
+            }
+            catch (DecoderFallbackException)
+            {
+                value = null;
+                return false;
+            }
+
+            var hasLetterOrDigit = false;
+            foreach (var ch in value)
+            {
+                if (char.IsControl(ch))
+                {
+                    value = null;
+                    return false;
+                }
+                if (char.IsLetterOrDigit(ch))
+                {
+                    hasLetterOrDigit = true;
+                }
+            }
+
+            if (!hasLetterOrDigit)
+            {
+                value = null;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryFindNextManagedReferenceHeader(
+            byte[] rawData,
+            int start,
+            int remainingHeaderCount,
+            IReadOnlySet<long> expectedRids,
+            IReadOnlySet<long> usedRids,
+            out int headerOffset
+        )
+        {
+            foreach (var preferExpectedRid in new[] { true, false })
+            {
+                var candidate = (start + 3) & ~3;
+                var lastCandidate = rawData.Length - (remainingHeaderCount * MinManagedReferenceHeaderBytes);
+                for (; candidate <= lastCandidate; candidate += 4)
+                {
+                    if (!TryReadManagedReferenceHeader(rawData, candidate, out var header)
+                        || usedRids.Contains(header.Rid)
+                        || (preferExpectedRid && !expectedRids.Contains(header.Rid)))
+                    {
+                        continue;
+                    }
+                    if (CanParseRemainingManagedReferenceHeaders(rawData, candidate, remainingHeaderCount, usedRids))
+                    {
+                        headerOffset = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            headerOffset = -1;
+            return false;
+        }
+
+        private static bool CanParseRemainingManagedReferenceHeaders(
+            byte[] rawData,
+            int start,
+            int remainingHeaderCount,
+            IReadOnlySet<long> priorRids
+        )
+        {
+            var used = new HashSet<long>(priorRids);
+            var pos = start;
+
+            for (var i = 0; i < remainingHeaderCount; i++)
+            {
+                if (!TryReadManagedReferenceHeader(rawData, pos, out var header)
+                    || !used.Add(header.Rid))
+                {
+                    return false;
+                }
+
+                if (i == remainingHeaderCount - 1)
+                {
+                    return true;
+                }
+
+                var candidate = (header.DataStart + 3) & ~3;
+                var lastCandidate = rawData.Length - ((remainingHeaderCount - i - 1) * MinManagedReferenceHeaderBytes);
+                var found = false;
+                for (; candidate <= lastCandidate; candidate += 4)
+                {
+                    if (TryReadManagedReferenceHeader(rawData, candidate, out var nextHeader)
+                        && !used.Contains(nextHeader.Rid))
+                    {
+                        pos = candidate;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryReadManagedReferenceHeader(byte[] rawData, int offset, out ManagedReferenceHeader header)
+        {
+            header = null;
+            if (offset < 0 || offset > rawData.Length - 12)
+            {
+                return false;
+            }
+
+            var pos = offset;
+            var rid = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(pos, 8));
+            pos += 8;
+            if (rid <= 0)
+            {
+                return false;
+            }
+            if (!TryReadAlignedAsciiString(rawData, ref pos, out var className)
+                || !TryReadAlignedAsciiString(rawData, ref pos, out var namespaceName)
+                || !TryReadAlignedAsciiString(rawData, ref pos, out var assemblyName))
+            {
+                return false;
+            }
+            if (!LooksLikeManagedReferenceClassName(className)
+                || !LooksLikeManagedReferenceNamespace(namespaceName)
+                || !LooksLikeManagedReferenceAssemblyName(assemblyName))
+            {
+                return false;
+            }
+
+            header = new ManagedReferenceHeader
+            {
+                Rid = rid,
+                ClassName = className,
+                Namespace = namespaceName,
+                AssemblyName = assemblyName,
+                HeaderStart = offset,
+                DataStart = pos,
+            };
+            return true;
+        }
+
+        private static bool LooksLikeManagedReferenceClassName(string value)
+        {
+            if (string.IsNullOrEmpty(value) || !(char.IsLetter(value[0]) || value[0] == '_'))
+            {
+                return false;
+            }
+
+            foreach (var ch in value)
+            {
+                if (!(char.IsLetterOrDigit(ch)
+                    || ch == '_'
+                    || ch == '`'
+                    || ch == '<'
+                    || ch == '>'
+                    || ch == '+'
+                    || ch == '['
+                    || ch == ']'
+                    || ch == ','))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool LooksLikeManagedReferenceNamespace(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return true;
+            }
+
+            return value.Split('.').All(part => LooksLikeManagedReferenceClassName(part));
+        }
+
+        private static bool LooksLikeManagedReferenceAssemblyName(string value)
+        {
+            if (string.IsNullOrEmpty(value) || !(char.IsLetter(value[0]) || value[0] == '_'))
+            {
+                return false;
+            }
+
+            foreach (var ch in value)
+            {
+                if (!(char.IsLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '-'))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool TryReadAlignedAsciiString(byte[] rawData, ref int pos, out string value)
+        {
+            value = "";
+            if (pos > rawData.Length - 4)
+            {
+                return false;
+            }
+
+            var length = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+            pos += 4;
+            if (length < 0 || length > 512 || pos + length > rawData.Length)
+            {
+                return false;
+            }
+
+            for (var i = pos; i < pos + length; i++)
+            {
+                if (rawData[i] < 0x20 || rawData[i] > 0x7E)
+                {
+                    return false;
+                }
+            }
+
+            value = Encoding.UTF8.GetString(rawData, pos, length);
+            pos = (pos + length + 3) & ~3;
+            return pos <= rawData.Length;
+        }
+
+        private static void TryDecodeMonoBehaviourWithScriptTypeTree(
+            AssetItem item,
+            MonoBehaviour m_MonoBehaviour,
+            Exception builtInTypeTreeException,
+            out OrderedDictionary type,
+            out MonoBehaviourTypeTreeConversion scriptTypeTreeConversion,
+            out Exception scriptTypeTreeDecodeException
+        )
+        {
+            type = null;
+            scriptTypeTreeDecodeException = null;
+            scriptTypeTreeConversion = Studio.MonoBehaviourToTypeTreeWithDiagnostics(m_MonoBehaviour);
+            if (scriptTypeTreeConversion?.TypeTree?.m_Nodes?.Count <= MonoBehaviourBaseTypeTreeNodeCount)
+            {
+                return;
+            }
+
+            try
+            {
+                if (builtInTypeTreeException != null)
+                {
+                    Logger.Warning(
+                        $"Retrying MonoBehaviour {item.Text} with a script-derived type tree after " +
+                        $"{builtInTypeTreeException.GetType().Name}: {builtInTypeTreeException.Message}"
+                    );
+                }
+                type = m_MonoBehaviour.ToType(scriptTypeTreeConversion.TypeTree);
+            }
+            catch (Exception ex)
+            {
+                scriptTypeTreeDecodeException = ex;
+                Logger.Warning(
+                    $"Script-derived MonoBehaviour decode failed for {item.Text}: " +
+                    $"{ex.GetType().Name}: {ex.Message}"
+                );
+            }
+        }
+
+        private static bool TryDecodeMonoBehaviourPartial(
+            AssetItem item,
+            MonoBehaviour m_MonoBehaviour,
+            TypeTree typeTree,
+            Exception decodeException,
+            string sourceLabel,
+            out OrderedDictionary type,
+            out Exception partialTypeTreeException,
+            out long partialTypeTreeBytesRead
+        )
+        {
+            type = null;
+            partialTypeTreeException = null;
+            partialTypeTreeBytesRead = 0;
+            if (typeTree == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                var partialType = m_MonoBehaviour.ToTypePartial(
+                    typeTree,
+                    out partialTypeTreeException,
+                    out partialTypeTreeBytesRead
+                );
+                if (partialType == null || partialType.Count <= 1)
+                {
+                    return false;
+                }
+
+                type = partialType;
+                var reason = partialTypeTreeException ?? decodeException;
+                if (reason != null)
+                {
+                    Logger.Warning(
+                        $"Partially decoded MonoBehaviour {item.Text} with {sourceLabel} after " +
+                        $"{reason.GetType().Name}: {reason.Message}"
+                    );
+                }
+                else
+                {
+                    Logger.Warning($"Partially decoded MonoBehaviour {item.Text} with {sourceLabel}");
+                }
+
+                partialTypeTreeException ??= decodeException;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                partialTypeTreeException = ex;
+                partialTypeTreeBytesRead = m_MonoBehaviour.reader.Position - m_MonoBehaviour.reader.byteStart;
+                return false;
+            }
         }
 
         private static OrderedDictionary BuildMonoBehaviourExportMetadata(
@@ -322,6 +2348,8 @@ namespace AnimeStudio.CLI
             string typeTreeSource,
             string rawSidecar,
             Exception builtInTypeTreeException,
+            MonoBehaviourTypeTreeConversion scriptTypeTreeConversion,
+            Exception scriptTypeTreeDecodeException,
             OrderedDictionary payload
         )
         {
@@ -329,7 +2357,10 @@ namespace AnimeStudio.CLI
             meta["scriptFileId"] = m_MonoBehaviour.m_Script.m_FileID;
             meta["scriptPathId"] = m_MonoBehaviour.m_Script.m_PathID;
 
-            if (m_MonoBehaviour.m_Script.TryGet(out var m_Script))
+            var includeScriptDiagnostics = scriptTypeTreeConversion != null
+                || Studio.MonoBehaviourTypeTreePriorityMode != MonoBehaviourTypeTreePriority.SerializedFirst
+                || (typeTreeSource?.StartsWith("scriptDerived", StringComparison.OrdinalIgnoreCase) ?? false);
+            if (includeScriptDiagnostics && m_MonoBehaviour.m_Script.TryGet(out var m_Script))
             {
                 var scriptNamespace = m_Script.m_Namespace ?? "";
                 var scriptClass = m_Script.m_ClassName ?? "";
@@ -339,6 +2370,36 @@ namespace AnimeStudio.CLI
                     ? scriptClass
                     : $"{scriptNamespace}.{scriptClass}";
                 meta["scriptAssemblyName"] = m_Script.m_AssemblyName ?? "";
+            }
+
+            if (includeScriptDiagnostics)
+            {
+                meta["monoBehaviourTypeTreePriority"] = Studio.MonoBehaviourTypeTreePriorityMode.ToString();
+                meta["scriptDerivedTypeTreeAttempted"] = scriptTypeTreeConversion != null;
+                if (scriptTypeTreeConversion != null)
+                {
+                    meta["scriptDerivedTypeTreeStatus"] = scriptTypeTreeConversion.Status ?? "";
+                    meta["scriptDerivedScriptIdentitySource"] = scriptTypeTreeConversion.ScriptIdentitySource ?? "";
+                    meta["scriptDerivedMonoScriptResolved"] = scriptTypeTreeConversion.MonoScriptResolved;
+                    meta["scriptDerivedTypeDefinitionResolved"] = scriptTypeTreeConversion.TypeDefinitionResolved;
+                    meta["scriptDerivedTypeTreeNodeCount"] = scriptTypeTreeConversion.NodeCount;
+                    meta["scriptDerivedTypeTreeUsable"] = scriptTypeTreeConversion.NodeCount > MonoBehaviourBaseTypeTreeNodeCount;
+                    if (!string.IsNullOrEmpty(scriptTypeTreeConversion.ScriptClassName) && !meta.Contains("scriptClassName"))
+                    {
+                        meta["scriptClassName"] = scriptTypeTreeConversion.ScriptClassName;
+                        meta["scriptNamespace"] = scriptTypeTreeConversion.ScriptNamespace;
+                        meta["scriptFullName"] = scriptTypeTreeConversion.ScriptFullName;
+                        meta["scriptAssemblyName"] = scriptTypeTreeConversion.ScriptAssemblyName;
+                    }
+                    if (scriptTypeTreeConversion.Exception != null)
+                    {
+                        meta["scriptDerivedTypeTreeError"] = $"{scriptTypeTreeConversion.Exception.GetType().Name}: {scriptTypeTreeConversion.Exception.Message}";
+                    }
+                }
+                if (scriptTypeTreeDecodeException != null)
+                {
+                    meta["scriptDerivedDecodeError"] = $"{scriptTypeTreeDecodeException.GetType().Name}: {scriptTypeTreeDecodeException.Message}";
+                }
             }
 
             if (builtInTypeTreeException != null)

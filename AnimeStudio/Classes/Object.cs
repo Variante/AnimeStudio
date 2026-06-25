@@ -100,6 +100,17 @@ namespace AnimeStudio
             return null;
         }
 
+        public OrderedDictionary ToTypePartial(TypeTree m_Type, out Exception readException, out long bytesRead)
+        {
+            if (m_Type != null)
+            {
+                return TypeTreeHelper.ReadTypePartial(m_Type, reader, out readException, out bytesRead);
+            }
+            readException = null;
+            bytesRead = 0;
+            return null;
+        }
+
         public byte[] GetRawData()
         {
             Logger.Verbose($"Dumping raw bytes of the object with {m_PathID} in file {assetsFile.fileName}...");

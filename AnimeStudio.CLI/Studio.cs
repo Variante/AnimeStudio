@@ -28,6 +28,7 @@ namespace AnimeStudio.CLI
         public static bool SkipContainer = false;
         public static AssetsManager assetsManager = new AssetsManager() { ResolveDependencies = false };
         public static AssemblyLoader assemblyLoader = new AssemblyLoader();
+        public static MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriorityMode = MonoBehaviourTypeTreePriority.SerializedFirst;
         public static List<AssetItem> exportableAssets = new List<AssetItem>();
 
         public static Dictionary<ulong, string> Paths {  get; set; } = new Dictionary<ulong, string>();
@@ -523,6 +524,11 @@ namespace AnimeStudio.CLI
         public static TypeTree MonoBehaviourToTypeTree(MonoBehaviour m_MonoBehaviour)
         {
             return m_MonoBehaviour.ConvertToTypeTree(assemblyLoader);
+        }
+
+        public static MonoBehaviourTypeTreeConversion MonoBehaviourToTypeTreeWithDiagnostics(MonoBehaviour m_MonoBehaviour)
+        {
+            return m_MonoBehaviour.ConvertToTypeTreeWithDiagnostics(assemblyLoader);
         }
     }
 }

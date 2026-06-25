@@ -6,8 +6,10 @@ using System.Threading;
 using System.Globalization;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Text.RegularExpressions;
 using System.Xml;
+using System.Xml.Linq;
 using System.Text;
 using MessagePack;
 using System.Threading.Tasks;
@@ -527,9 +529,20 @@ namespace AnimeStudio
             }));
         }
 
-        public static string[] ParseAssetMap(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
+        public static List<AssetEntry> ParseAssetMapEntries(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
         {
-            var matches = new HashSet<string>();
+            var matches = new List<AssetEntry>();
+
+            void AddIfMatch(AssetEntry entry)
+            {
+                var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(entry.Name));
+                var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(entry.Container));
+                var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x == entry.Type);
+                if (isNameMatch && isContainerMatch && isTypeMatch)
+                {
+                    matches.Add(entry);
+                }
+            }
 
             switch (mapType)
             {
@@ -539,53 +552,50 @@ namespace AnimeStudio
                         var assetMap = MessagePackSerializer.Deserialize<AssetMap>(stream, MessagePackSerializerOptions.Standard.WithCompression(MessagePackCompression.Lz4BlockArray));
                         foreach(var entry in assetMap.AssetEntries)
                         {
-                            var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(entry.Name));
-                            var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(entry.Container));
-                            var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x == entry.Type);
-                            if (isNameMatch && isContainerMatch && isTypeMatch)
-                            {
-                                matches.Add(entry.Source);
-                            }
+                            AddIfMatch(entry);
                         }
                     }
 
                     break;
                 case ExportListType.XML:
                     {
-                        using var stream = File.OpenRead(mapName);
-                        using var reader = XmlReader.Create(stream);
-                        reader.ReadToFollowing("Assets");
-                        reader.ReadToFollowing("Asset");
-                        do
+                        var document = XDocument.Load(mapName);
+                        foreach (var assetElement in document.Root?.Elements("Asset") ?? Enumerable.Empty<XElement>())
                         {
-                            reader.ReadToFollowing("Name");
-                            var name = reader.ReadInnerXml();
+                            var name = assetElement.Element("Name")?.Value ?? string.Empty;
 
                             var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(name));
 
-                            reader.ReadToFollowing("Container");
-                            var container = reader.ReadInnerXml();
+                            var container = assetElement.Element("Container")?.Value ?? string.Empty;
 
                             var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(container));
 
-                            reader.ReadToFollowing("Type");
-                            var type = reader.ReadInnerXml();
+                            var type = assetElement.Element("Type")?.Value ?? string.Empty;
 
                             var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x.ToString().Equals(type, StringComparison.OrdinalIgnoreCase));
 
-                            reader.ReadToFollowing("PathID");
-                            var pathID = reader.ReadInnerXml();
+                            var pathID = assetElement.Element("PathID")?.Value ?? string.Empty;
+                            var source = assetElement.Element("Source")?.Value ?? string.Empty;
+                            var offset = assetElement.Element("Offset")?.Value ?? string.Empty;
 
-                            reader.ReadToFollowing("Source");
-                            var source = reader.ReadInnerXml();
-
-                            if (isNameMatch && isContainerMatch && isTypeMatch)
+                            if (isNameMatch && isContainerMatch && isTypeMatch && Enum.TryParse<ClassIDType>(type, true, out var parsedType))
                             {
-                                matches.Add(source);
+                                long.TryParse(pathID, out var parsedPathID);
+                                if (!long.TryParse(offset, out var parsedOffset))
+                                {
+                                    parsedOffset = -1L;
+                                }
+                                matches.Add(new AssetEntry
+                                {
+                                    Name = name,
+                                    Container = container,
+                                    Source = source,
+                                    PathID = parsedPathID,
+                                    Type = parsedType,
+                                    Offset = parsedOffset,
+                                });
                             }
-
-                            reader.ReadEndElement();
-                        } while (reader.ReadToNextSibling("Asset"));
+                        }
                     }
 
                     break;
@@ -598,23 +608,28 @@ namespace AnimeStudio
                         var serializer = new JsonSerializer() { Formatting = Newtonsoft.Json.Formatting.Indented };
                         serializer.Converters.Add(new StringEnumConverter());
 
-                        var entries = serializer.Deserialize<List<AssetEntry>>(reader);
-                        foreach (var entry in entries)
+                        var token = JToken.ReadFrom(reader);
+                        var entries = token.Type == JTokenType.Object && token["AssetEntries"] != null
+                            ? token["AssetEntries"]!.ToObject<List<AssetEntry>>(serializer)
+                            : token.ToObject<List<AssetEntry>>(serializer);
+                        foreach (var entry in entries ?? new List<AssetEntry>())
                         {
-                            var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(entry.Name));
-                            var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(entry.Container));
-                            var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x == entry.Type);
-                            if (isNameMatch && isContainerMatch && isTypeMatch)
-                            {
-                                matches.Add(entry.Source);
-                            }
+                            AddIfMatch(entry);
                         }
                     }
 
                     break;
             }
 
-            return matches.ToArray();
+            return matches;
+        }
+
+        public static string[] ParseAssetMap(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
+        {
+            return ParseAssetMapEntries(mapName, mapType, typeFilter, nameFilter, containerFilter)
+                .Select(entry => entry.Source)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
 
         private static void UpdateContainers(List<AssetEntry> assets, Game game)
@@ -681,6 +696,7 @@ namespace AnimeStudio
                             writer.WriteEndElement();
                             writer.WriteElementString("PathID", asset.PathID.ToString());
                             writer.WriteElementString("Source", asset.Source);
+                            writer.WriteElementString("Offset", asset.Offset.ToString());
                             writer.WriteEndElement();
                         }
                         writer.WriteEndElement();

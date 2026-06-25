@@ -46,7 +46,7 @@ namespace AnimeStudio
 
         public class AssetFilterDataItemEqualityComparer : IEqualityComparer<AssetFilterDataItem>
         {
-            public bool Equals(AssetFilterDataItem? d1, AssetFilterDataItem? d2)
+            public bool Equals(AssetFilterDataItem d1, AssetFilterDataItem d2)
             {
                 if (ReferenceEquals(d1, d2))
                     return true;
@@ -63,6 +63,8 @@ namespace AnimeStudio
         public AssetFilterData FilterData = new AssetFilterData { Items = new List<AssetFilterDataItem>() };
 
         public Dictionary<string, List<long>> OffsetData = new();
+        private int FilterDataIndexCount = -1;
+        private Dictionary<string, List<long>> FilterDataOffsetsBySourceKey = new(StringComparer.OrdinalIgnoreCase);
 
         public void LoadFiles(params string[] files)
         {
@@ -153,34 +155,14 @@ namespace AnimeStudio
             OffsetData.Clear();
             if (FilterData.Items.Count > 0)
             {
-                var key = reader.FileName;
-
-                if (!OffsetData.TryGetValue(key, out var existingList))
-                    existingList = new List<long>();
-
-                var set = new HashSet<long>();
-                if (existingList != null)
-                    foreach (var off in existingList)
-                        set.Add(off);
-
-                foreach (var item in FilterData.Items)
+                if (!TryGetFilterOffsets(reader, out var offsets))
                 {
-                    if (string.IsNullOrEmpty(item.Source))
-                        continue;
-
-                    var itemFileName = Path.GetFileName(item.Source);
-                    if (!item.Source.Equals(key, StringComparison.OrdinalIgnoreCase) && !itemFileName.Equals(key, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    if (item.Offset >= 0)
-                        set.Add(item.Offset);
-                    else
-                        if (AssetsHelper.TryGet(item.Source, out var offsets) && offsets.Length > 0)
-                        foreach (var off in offsets)
-                            set.Add(off);
+                    Logger.Verbose($"Skipping {reader.FullPath}; no filter_data or dependency offsets matched");
+                    reader.Dispose();
+                    return;
                 }
 
-                OffsetData[key] = set.ToList();
+                OffsetData[reader.FileName] = offsets;
             }
 
             switch (reader.FileType)
@@ -494,6 +476,97 @@ namespace AnimeStudio
             {
                 reader.Dispose();
             }
+        }
+
+        private void EnsureFilterDataIndex()
+        {
+            if (FilterDataIndexCount == FilterData.Items.Count)
+            {
+                return;
+            }
+
+            FilterDataOffsetsBySourceKey = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in FilterData.Items)
+            {
+                if (string.IsNullOrEmpty(item.Source))
+                {
+                    continue;
+                }
+
+                var offsets = new HashSet<long>();
+                if (item.Offset >= 0)
+                {
+                    offsets.Add(item.Offset);
+                }
+                else if (AssetsHelper.TryGet(item.Source, out var dependencyOffsets) && dependencyOffsets.Length > 0)
+                {
+                    foreach (var off in dependencyOffsets)
+                    {
+                        offsets.Add(off);
+                    }
+                }
+
+                if (offsets.Count == 0)
+                {
+                    continue;
+                }
+
+                AddFilterOffsets(item.Source, offsets);
+                AddFilterOffsets(Path.GetFileName(item.Source), offsets);
+            }
+
+            FilterDataIndexCount = FilterData.Items.Count;
+        }
+
+        private void AddFilterOffsets(string key, IEnumerable<long> offsets)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                return;
+            }
+
+            if (!FilterDataOffsetsBySourceKey.TryGetValue(key, out var cachedOffsets))
+            {
+                cachedOffsets = new List<long>();
+                FilterDataOffsetsBySourceKey[key] = cachedOffsets;
+            }
+
+            cachedOffsets.AddRange(offsets);
+        }
+
+        private bool TryGetFilterOffsets(FileReader reader, out List<long> offsets)
+        {
+            EnsureFilterDataIndex();
+
+            var set = new HashSet<long>();
+            if (AssetsHelper.TryGet(reader.FullPath, out var dependencyOffsets) && dependencyOffsets.Length > 0)
+            {
+                foreach (var off in dependencyOffsets)
+                {
+                    set.Add(off);
+                }
+            }
+
+            foreach (var key in new[] { reader.FullPath, reader.FileName, Path.GetFileName(reader.FullPath) })
+            {
+                if (string.IsNullOrEmpty(key))
+                {
+                    continue;
+                }
+
+                if (!FilterDataOffsetsBySourceKey.TryGetValue(key, out var keyedOffsets))
+                {
+                    continue;
+                }
+
+                foreach (var offset in keyedOffsets)
+                {
+                    set.Add(offset);
+                }
+            }
+
+            offsets = set.ToList();
+            return offsets.Count > 0;
         }
         private void LoadGameBlockFile(FileReader reader, string originalPath = null, long originalOffset = 0, bool log = true)
         {

@@ -46,6 +46,7 @@ namespace AnimeStudio.CLI
                 Logger.FileLogging = Settings.Default.enableFileLogging;
                 AssetsHelper.Minimal = Settings.Default.minimalAssetMap;
                 AssetsHelper.SetUnityVersion(o.UnityVersion);
+                Studio.MonoBehaviourTypeTreePriorityMode = o.MonoBehaviourTypeTreePriority;
 
                 var configuredTypes = JsonConvert.DeserializeObject<Dictionary<ClassIDType, (bool, bool)>>(Settings.Default.types)
                     ?? new Dictionary<ClassIDType, (bool, bool)>();
@@ -93,7 +94,7 @@ namespace AnimeStudio.CLI
                     
                             classTypeFilterList.Add(type);
                         }
-                        catch(Exception e)
+                        catch(Exception)
                         {
                             Logger.Error($"{typeStr} has invalid format, skipping...");
                             continue;
@@ -125,6 +126,11 @@ namespace AnimeStudio.CLI
                     TypeFlags.SetType(ClassIDType.AssetBundle, true, false);
                 }
 
+                if (o.DummyDllFolder != null || o.MonoBehaviourTypeTreePriority == MonoBehaviourTypeTreePriority.ScriptFirst)
+                {
+                    TypeFlags.SetType(ClassIDType.MonoScript, true, ClassIDType.MonoScript.CanExport());
+                }
+
                 assetsManager.Silent = o.Silent;
                 assetsManager.Game = game;
                 assetsManager.SpecifyUnityVersion = o.UnityVersion;
@@ -144,6 +150,20 @@ namespace AnimeStudio.CLI
                 if (o.DummyDllFolder != null)
                 {
                     assemblyLoader.Load(o.DummyDllFolder.FullName);
+                    Logger.Info(
+                        $"[DummyDll] Loaded {assemblyLoader.LastLoadSuccessCount}/{assemblyLoader.LastLoadFileCount} assemblies " +
+                        $"from {o.DummyDllFolder.FullName} ({assemblyLoader.LastLoadFailureCount} failed, {assemblyLoader.ModuleCount} modules available)"
+                    );
+                    if (!assemblyLoader.Loaded)
+                    {
+                        Logger.Warning($"[DummyDll] No usable assemblies were loaded from {o.DummyDllFolder.FullName}");
+                    }
+                }
+
+                if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && !assemblyLoader.Loaded)
+                {
+                    Logger.Warning("[DummyDll] ScriptFirst MonoBehaviour TypeTree priority requested without usable DummyDlls; falling back to SerializedFirst.");
+                    Studio.MonoBehaviourTypeTreePriorityMode = MonoBehaviourTypeTreePriority.SerializedFirst;
                 }
 
                 if (o.FilterDataFile != null && o.FilterDataFile.Exists)
@@ -165,19 +185,29 @@ namespace AnimeStudio.CLI
                 {
                     if (o.MapOp.HasFlag(MapOpType.Load))
                     {
-                        AssetsHelper.BuildCABMap(files, o.MapName, o.Input.FullName, game);
+                        AssetsHelper.LoadCABMapInternal(o.MapName);
+                        assetsManager.ResolveDependencies = true;
                     }
                     else
                     {
-                        AssetsHelper.LoadCABMapInternal(o.MapName);
-                        assetsManager.ResolveDependencies = true;
+                        AssetsHelper.BuildCABMap(files, o.MapName, o.Input.FullName, game);
                     }
                 }
                 if (o.MapOp.HasFlag(MapOpType.AssetMap))
                 {
                     if (o.MapOp.HasFlag(MapOpType.Load))
                     {
-                        files = AssetsHelper.ParseAssetMap(o.MapName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter);
+                        var matchedEntries = AssetsHelper.ParseAssetMapEntries(o.MapName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter);
+                        files = matchedEntries.Select(entry => entry.Source).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                        assetsManager.FilterData.Items.AddRange(matchedEntries.Select(entry => new AssetsManager.AssetFilterDataItem
+                        {
+                            Source = entry.Source,
+                            Offset = entry.Offset,
+                            Name = entry.Name,
+                            PathID = entry.PathID,
+                            Type = entry.Type,
+                        }));
+                        Logger.Info($"[AssetMap] Loaded {matchedEntries.Count} matching map entries across {files.Length} files");
                     }
                     else
                     {
@@ -190,6 +220,12 @@ namespace AnimeStudio.CLI
                 }
                 if (o.MapOp.Equals(MapOpType.None) || o.MapOp.HasFlag(MapOpType.Load))
                 {
+                    if (files.Length == 0)
+                    {
+                        Logger.Warning("No files selected for export after map/filter matching.");
+                        return;
+                    }
+
                     var i = 0;
 
                     var path = Path.GetDirectoryName(Path.GetFullPath(files[0]));
@@ -219,6 +255,7 @@ namespace AnimeStudio.CLI
             catch (Exception e)
             {
                 Console.WriteLine(e);
+                Environment.ExitCode = 1;
             }
         }
     }

@@ -36,6 +36,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.Key,
                 optionsBinder.AIFile,
                 optionsBinder.DummyDllFolder,
+                optionsBinder.MonoBehaviourTypeTreePriorityOption,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Input,
                 optionsBinder.Output
@@ -46,6 +47,12 @@ namespace AnimeStudio.CLI
             return rootCommand;
         }
     }
+    public enum MonoBehaviourTypeTreePriority
+    {
+        SerializedFirst,
+        ScriptFirst,
+    }
+
     public class Options
     {
         public bool Silent { get; set; }
@@ -63,6 +70,7 @@ namespace AnimeStudio.CLI
         public byte Key { get; set; }
         public FileInfo AIFile { get; set; }
         public DirectoryInfo DummyDllFolder { get; set; }
+        public MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriority { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public FileInfo Input { get; set; }
         public DirectoryInfo Output { get; set; }
@@ -85,6 +93,7 @@ namespace AnimeStudio.CLI
         public readonly Option<byte> Key;
         public readonly Option<FileInfo> AIFile;
         public readonly Option<DirectoryInfo> DummyDllFolder;
+        public readonly Option<MonoBehaviourTypeTreePriority> MonoBehaviourTypeTreePriorityOption;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Argument<FileInfo> Input;
         public readonly Argument<DirectoryInfo> Output;
@@ -112,7 +121,7 @@ namespace AnimeStudio.CLI
                         {
                             items.Add(new Regex(line, RegexOptions.IgnoreCase));
                         }
-                        catch (ArgumentException e)
+                        catch (ArgumentException)
                         {
                             continue;
                         }
@@ -143,7 +152,7 @@ namespace AnimeStudio.CLI
                         {
                             items.Add(new Regex(line, RegexOptions.IgnoreCase));
                         }
-                        catch (ArgumentException e)
+                        catch (ArgumentException)
                         {
                             continue;
                         }
@@ -165,6 +174,7 @@ namespace AnimeStudio.CLI
             AssetExportType = new Option<ExportType>("--export_type", "Specify how assets should be exported.");
             AIFile = new Option<FileInfo>("--ai_file", "Specify asset_index json file path (to recover GI containers).").LegalFilePathsOnly();
             DummyDllFolder = new Option<DirectoryInfo>("--dummy_dlls", "Specify DummyDll path.").LegalFilePathsOnly();
+            MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Input = new Argument<FileInfo>("input_path", "Input file/folder.").LegalFilePathsOnly();
             Output = new Argument<DirectoryInfo>("output_path", "Output folder.").LegalFilePathsOnly();
@@ -198,6 +208,7 @@ namespace AnimeStudio.CLI
             AssetExportType.SetDefaultValue(ExportType.Convert);
             MapOp.SetDefaultValue(MapOpType.None);
             MapType.SetDefaultValue(ExportListType.XML);
+            MonoBehaviourTypeTreePriorityOption.SetDefaultValue(MonoBehaviourTypeTreePriority.SerializedFirst);
         }
         
         public byte ParseKey(string value)
@@ -222,6 +233,30 @@ namespace AnimeStudio.CLI
                 {
                     result.ErrorMessage = "Empty string.";
                     return;
+                }
+
+                if (File.Exists(val))
+                {
+                    var lineNumber = 0;
+                    foreach (var line in File.ReadLines(val))
+                    {
+                        lineNumber++;
+                        if (string.IsNullOrWhiteSpace(line))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            Regex.Match("", line, RegexOptions.IgnoreCase);
+                        }
+                        catch (ArgumentException e)
+                        {
+                            result.ErrorMessage = $"Invalid Regex in {val}:{lineNumber}.\n" + e.Message;
+                            return;
+                        }
+                    }
+                    continue;
                 }
 
                 try
@@ -254,6 +289,7 @@ namespace AnimeStudio.CLI
             Key = bindingContext.ParseResult.GetValueForOption(Key),
             AIFile = bindingContext.ParseResult.GetValueForOption(AIFile),
             DummyDllFolder = bindingContext.ParseResult.GetValueForOption(DummyDllFolder),
+            MonoBehaviourTypeTreePriority = bindingContext.ParseResult.GetValueForOption(MonoBehaviourTypeTreePriorityOption),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),
             Output = bindingContext.ParseResult.GetValueForArgument(Output)

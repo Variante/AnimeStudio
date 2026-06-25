@@ -182,6 +182,45 @@ namespace AnimeStudio
             return obj;
         }
 
+        public static OrderedDictionary ReadTypePartial(TypeTree m_Types, ObjectReader reader, out Exception readException, out long bytesRead)
+        {
+            reader.Reset();
+            var obj = new OrderedDictionary();
+            var m_Nodes = m_Types.m_Nodes;
+            readException = null;
+
+            for (int i = 1; i < m_Nodes.Count; i++)
+            {
+                var m_Node = m_Nodes[i];
+                var varNameStr = m_Node.m_Name;
+                var fieldStartOffset = reader.Position - reader.byteStart;
+                try
+                {
+                    obj[varNameStr] = ReadValue(m_Nodes, reader, ref i);
+                }
+                catch (Exception ex)
+                {
+                    readException = ex;
+                    obj["$partialDecodeStoppedAt"] = new OrderedDictionary
+                    {
+                        { "field", varNameStr },
+                        { "type", m_Node.m_Type },
+                        { "startOffset", fieldStartOffset },
+                        { "offset", reader.Position - reader.byteStart },
+                        { "error", $"{ex.GetType().Name}: {ex.Message}" },
+                    };
+                    break;
+                }
+            }
+
+            bytesRead = reader.Position - reader.byteStart;
+            if (readException == null && bytesRead != reader.byteSize)
+            {
+                Logger.Info($"Error while read type, read {bytesRead} bytes but expected {reader.byteSize} bytes");
+            }
+            return obj;
+        }
+
         private static object ReadValue(List<TypeTreeNode> m_Nodes, EndianBinaryReader reader, ref int i)
         {
             var m_Node = m_Nodes[i];
@@ -193,7 +232,9 @@ namespace AnimeStudio
 
             if (reader.Remaining <= 0)
             {
-                return 0;
+                throw new EndOfStreamException(
+                    $"No bytes remain while reading {m_Node.m_Name}:{varTypeStr} at position 0x{reader.Position:X}."
+                );
             }
 
             switch (varTypeStr)
