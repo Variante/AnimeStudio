@@ -11,7 +11,16 @@ namespace AnimeStudio.CLI
 {
     public class Program
     {
-        public static void Main(string[] args) => CommandLine.Init(args);
+        public static void Main(string[] args)
+        {
+            if (EndfieldVfsCli.TryRun(args, out var exitCode))
+            {
+                Environment.ExitCode = exitCode;
+                return;
+            }
+
+            CommandLine.Init(args);
+        }
 
         public static void Run(Options o)
         {
