@@ -186,9 +186,19 @@ namespace AnimeStudio.CLI
                     }
                 }
 
-                Logger.Info("Scanning for files...");
-                var files = o.Input.Attributes.HasFlag(FileAttributes.Directory) ? Directory.GetFiles(o.Input.FullName, "*.*", SearchOption.AllDirectories).OrderBy(x => x.Length).ToArray() : new string[] { o.Input.FullName };
-                Logger.Info($"Found {files.Length} files");
+                string[] files = null;
+                string[] GetInputFiles()
+                {
+                    if (files != null)
+                    {
+                        return files;
+                    }
+
+                    Logger.Info("Scanning for files...");
+                    files = o.Input.Attributes.HasFlag(FileAttributes.Directory) ? Directory.GetFiles(o.Input.FullName, "*.*", SearchOption.AllDirectories).OrderBy(x => x.Length).ToArray() : new string[] { o.Input.FullName };
+                    Logger.Info($"Found {files.Length} files");
+                    return files;
+                }
 
                 if (o.MapOp.HasFlag(MapOpType.CABMap))
                 {
@@ -199,7 +209,7 @@ namespace AnimeStudio.CLI
                     }
                     else
                     {
-                        AssetsHelper.BuildCABMap(files, o.MapName, o.Input.FullName, game);
+                        AssetsHelper.BuildCABMap(GetInputFiles(), o.MapName, o.Input.FullName, game);
                     }
                 }
                 if (o.MapOp.HasFlag(MapOpType.AssetMap))
@@ -220,16 +230,17 @@ namespace AnimeStudio.CLI
                     }
                     else
                     {
-                        Task.Run(() => AssetsHelper.BuildAssetMap(files, o.MapName, game, o.Output.FullName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter)).Wait();
+                        Task.Run(() => AssetsHelper.BuildAssetMap(GetInputFiles(), o.MapName, game, o.Output.FullName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter)).Wait();
                     }
                 }
                 if (o.MapOp.HasFlag(MapOpType.Both))
                 {
-                    Task.Run(() => AssetsHelper.BuildBoth(files, o.MapName, o.Input.FullName, game, o.Output.FullName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter)).Wait();
+                    Task.Run(() => AssetsHelper.BuildBoth(GetInputFiles(), o.MapName, o.Input.FullName, game, o.Output.FullName, o.MapType, classTypeFilter, o.NameFilter, o.ContainerFilter)).Wait();
                 }
                 if (o.MapOp.Equals(MapOpType.None) || o.MapOp.HasFlag(MapOpType.Load))
                 {
-                    if (files.Length == 0)
+                    var selectedFiles = files ?? GetInputFiles();
+                    if (selectedFiles.Length == 0)
                     {
                         Logger.Warning("No files selected for export after map/filter matching.");
                         return;
@@ -237,14 +248,14 @@ namespace AnimeStudio.CLI
 
                     var i = 0;
 
-                    var path = Path.GetDirectoryName(Path.GetFullPath(files[0]));
+                    var path = Path.GetDirectoryName(Path.GetFullPath(selectedFiles[0]));
                     ImportHelper.MergeSplitAssets(path);
-                    var toReadFile = ImportHelper.ProcessingSplitFiles(files.ToList());
+                    var toReadFile = ImportHelper.ProcessingSplitFiles(selectedFiles.ToList());
 
                     var fileList = new List<string>(toReadFile);
                     foreach (var file in fileList)
                     {
-                        assetsManager.LoadFiles(file);
+                        assetsManager.LoadPreparedFiles(file);
                         if (assetsManager.assetsFileList.Count > 0)
                         {
                             BuildAssetData(classTypeFilter, o.NameFilter, o.ContainerFilter, ref i);

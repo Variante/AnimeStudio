@@ -185,7 +185,7 @@ namespace AnimeStudio
             for (int i = 0; i < filesList.Count; i++)
             {
                 var file = filesList[i];
-                assetsManager.LoadFiles(file);
+                assetsManager.LoadPreparedFiles(file);
                 if (assetsManager.assetsFileList.Count > 0)
                 {
                     yield return file;

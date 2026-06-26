@@ -88,6 +88,26 @@ namespace AnimeStudio
             }
         }
 
+        public void LoadPreparedFiles(params string[] files)
+        {
+            if (Silent)
+            {
+                Logger.Silent = true;
+                Progress.Silent = true;
+            }
+
+            var toReadFile = files;
+            if (ResolveDependencies)
+                toReadFile = AssetsHelper.ProcessDependencies(toReadFile);
+            Load(toReadFile);
+
+            if (Silent)
+            {
+                Logger.Silent = false;
+                Progress.Silent = false;
+            }
+        }
+
         public void LoadFolder(string path)
         {
             if (Silent)
