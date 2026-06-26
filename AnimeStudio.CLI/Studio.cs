@@ -31,6 +31,20 @@ namespace AnimeStudio.CLI
         public static MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriorityMode = MonoBehaviourTypeTreePriority.SerializedFirst;
         public static List<AssetItem> exportableAssets = new List<AssetItem>();
 
+        public sealed class ExportAssetsResult
+        {
+            public ExportAssetsResult(int requestedCount, int exportedCount, int errorCount)
+            {
+                RequestedCount = requestedCount;
+                ExportedCount = exportedCount;
+                ErrorCount = errorCount;
+            }
+
+            public int RequestedCount { get; }
+            public int ExportedCount { get; }
+            public int ErrorCount { get; }
+        }
+
         public static Dictionary<ulong, string> Paths {  get; set; } = new Dictionary<ulong, string>();
         public static List<string> PathStrings { get; set; } = new List<string>();
         public static List<string> VOStrings { get; set; } = new List<string>();
@@ -388,10 +402,11 @@ namespace AnimeStudio.CLI
             }
         }
 
-        public static void ExportAssets(string savePath, List<AssetItem> toExportAssets, AssetGroupOption assetGroupOption, ExportType exportType)
+        public static ExportAssetsResult ExportAssets(string savePath, List<AssetItem> toExportAssets, AssetGroupOption assetGroupOption, ExportType exportType)
         {
             int toExportCount = toExportAssets.Count;
             int exportedCount = 0;
+            int errorCount = 0;
             foreach (var asset in toExportAssets)
             {
                 string exportPath;
@@ -458,6 +473,7 @@ namespace AnimeStudio.CLI
                 }
                 catch (Exception ex)
                 {
+                    errorCount++;
                     Logger.Error($"Export {asset.Type}:{asset.Text} error\r\n{ex.Message}\r\n{ex.StackTrace}");
                 }
             }
@@ -470,6 +486,7 @@ namespace AnimeStudio.CLI
             }
 
             Logger.Info(statusText);
+            return new ExportAssetsResult(toExportCount, exportedCount, errorCount);
         }
 
         public static void ExportAssetsMap(string savePath, List<AssetEntry> toExportAssets, string exportListName, ExportListType exportListType)

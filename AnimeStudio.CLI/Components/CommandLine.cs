@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.CommandLine;
@@ -33,6 +33,9 @@ namespace AnimeStudio.CLI
                 optionsBinder.UnityVersion,
                 optionsBinder.GroupAssetsType,
                 optionsBinder.AssetExportType,
+                optionsBinder.SecondaryAssetExportType,
+                optionsBinder.SecondaryOutput,
+                optionsBinder.SecondaryTypeFilter,
                 optionsBinder.Key,
                 optionsBinder.AIFile,
                 optionsBinder.DummyDllFolder,
@@ -67,6 +70,9 @@ namespace AnimeStudio.CLI
         public string UnityVersion { get; set; }
         public AssetGroupOption GroupAssetsType { get; set; }
         public ExportType AssetExportType { get; set; }
+        public ExportType? SecondaryAssetExportType { get; set; }
+        public DirectoryInfo SecondaryOutput { get; set; }
+        public string[] SecondaryTypeFilter { get; set; }
         public byte Key { get; set; }
         public FileInfo AIFile { get; set; }
         public DirectoryInfo DummyDllFolder { get; set; }
@@ -90,6 +96,9 @@ namespace AnimeStudio.CLI
         public readonly Option<string> UnityVersion;
         public readonly Option<AssetGroupOption> GroupAssetsType;
         public readonly Option<ExportType> AssetExportType;
+        public readonly Option<ExportType?> SecondaryAssetExportType;
+        public readonly Option<DirectoryInfo> SecondaryOutput;
+        public readonly Option<string[]> SecondaryTypeFilter;
         public readonly Option<byte> Key;
         public readonly Option<FileInfo> AIFile;
         public readonly Option<DirectoryInfo> DummyDllFolder;
@@ -172,6 +181,9 @@ namespace AnimeStudio.CLI
             UnityVersion = new Option<string>("--unity_version", "Specify Unity version.");
             GroupAssetsType = new Option<AssetGroupOption>("--group_assets", "Specify how exported assets should be grouped.");
             AssetExportType = new Option<ExportType>("--export_type", "Specify how assets should be exported.");
+            SecondaryAssetExportType = new Option<ExportType?>("--secondary_export_type", "Specify an additional export type to run over the same loaded assets.");
+            SecondaryOutput = new Option<DirectoryInfo>("--secondary_export_path", "Output folder for the additional export.").LegalFilePathsOnly();
+            SecondaryTypeFilter = new Option<string[]>("--secondary_types", "Specify unity class type(s) for the additional export.") { AllowMultipleArgumentsPerToken = true, ArgumentHelpName = "Texture2D|Shader:Parse|Sprite:Both|etc.." };
             AIFile = new Option<FileInfo>("--ai_file", "Specify asset_index json file path (to recover GI containers).").LegalFilePathsOnly();
             DummyDllFolder = new Option<DirectoryInfo>("--dummy_dlls", "Specify DummyDll path.").LegalFilePathsOnly();
             MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
@@ -186,6 +198,7 @@ namespace AnimeStudio.CLI
 
             LoggerFlags.AddValidator(FilterValidator);
             TypeFilter.AddValidator(FilterValidator);
+            SecondaryTypeFilter.AddValidator(FilterValidator);
             NameFilter.AddValidator(FilterValidator);
             ContainerFilter.AddValidator(FilterValidator);
             Key.AddValidator(result =>
@@ -286,6 +299,9 @@ namespace AnimeStudio.CLI
             UnityVersion = bindingContext.ParseResult.GetValueForOption(UnityVersion),
             GroupAssetsType = bindingContext.ParseResult.GetValueForOption(GroupAssetsType),
             AssetExportType = bindingContext.ParseResult.GetValueForOption(AssetExportType),
+            SecondaryAssetExportType = bindingContext.ParseResult.GetValueForOption(SecondaryAssetExportType),
+            SecondaryOutput = bindingContext.ParseResult.GetValueForOption(SecondaryOutput),
+            SecondaryTypeFilter = bindingContext.ParseResult.GetValueForOption(SecondaryTypeFilter),
             Key = bindingContext.ParseResult.GetValueForOption(Key),
             AIFile = bindingContext.ParseResult.GetValueForOption(AIFile),
             DummyDllFolder = bindingContext.ParseResult.GetValueForOption(DummyDllFolder),

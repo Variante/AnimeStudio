@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -61,8 +61,10 @@ namespace AnimeStudio.CLI
                     ?? new Dictionary<ClassIDType, (bool, bool)>();
                 TypeFlags.SetTypes(configuredTypes);
 
+                var primaryClassTypeFilter = Array.Empty<ClassIDType>();
+                var secondaryClassTypeFilter = Array.Empty<ClassIDType>();
                 var classTypeFilter = Array.Empty<ClassIDType>();
-                if (!o.TypeFilter.IsNullOrEmpty())
+                if (!o.TypeFilter.IsNullOrEmpty() || !o.SecondaryTypeFilter.IsNullOrEmpty())
                 {
                     // When the CLI receives an explicit type list, treat it as the full parse/export surface
                     // instead of layering it on top of the default settings from App.config.
@@ -71,45 +73,68 @@ namespace AnimeStudio.CLI
                     var exportTexture2D = false;
                     var exportMaterial = false;
                     var classTypeFilterList = new List<ClassIDType>();
-                    for (int i = 0; i < o.TypeFilter.Length; i++)
-                    {
-                        var typeStr = o.TypeFilter[i];
-                        var type = ClassIDType.UnknownType;
-                        var flag = TypeFlag.Both;
-                    
-                        try
-                        {
-                            if (typeStr.Contains(':'))
-                            {
-                                var param = typeStr.Split(':');
-                    
-                                flag = (TypeFlag)Enum.Parse(typeof(TypeFlag), param[1], true);
-                    
-                                typeStr = param[0];
-                            }
-                    
-                            type = (ClassIDType)Enum.Parse(typeof(ClassIDType), typeStr, true);
 
-                            if (type == ClassIDType.Texture2D)
-                            {
-                                exportTexture2D = flag.HasFlag(TypeFlag.Export);
-                            }
-                            else if (type == ClassIDType.Material)
-                            {
-                                exportMaterial = flag.HasFlag(TypeFlag.Export);
-                            }
-                    
-                            TypeFlags.SetType(type, flag.HasFlag(TypeFlag.Parse), flag.HasFlag(TypeFlag.Export));
-                    
-                            classTypeFilterList.Add(type);
-                        }
-                        catch(Exception)
+                    ClassIDType[] ParseTypeFilter(string[] typeFilters, string label)
+                    {
+                        var targetClassTypeFilterList = new List<ClassIDType>();
+                        if (typeFilters.IsNullOrEmpty())
                         {
-                            Logger.Error($"{typeStr} has invalid format, skipping...");
-                            continue;
+                            return targetClassTypeFilterList.ToArray();
                         }
+
+                        for (int i = 0; i < typeFilters.Length; i++)
+                        {
+                            var typeStr = typeFilters[i];
+                            var type = ClassIDType.UnknownType;
+                            var flag = TypeFlag.Both;
+
+                            try
+                            {
+                                if (typeStr.Contains(':'))
+                                {
+                                    var param = typeStr.Split(':');
+
+                                    flag = (TypeFlag)Enum.Parse(typeof(TypeFlag), param[1], true);
+
+                                    typeStr = param[0];
+                                }
+
+                                type = (ClassIDType)Enum.Parse(typeof(ClassIDType), typeStr, true);
+
+                                if (type == ClassIDType.Texture2D)
+                                {
+                                    exportTexture2D = flag.HasFlag(TypeFlag.Export);
+                                }
+                                else if (type == ClassIDType.Material)
+                                {
+                                    exportMaterial = flag.HasFlag(TypeFlag.Export);
+                                }
+
+                                TypeFlags.SetType(type, flag.HasFlag(TypeFlag.Parse), flag.HasFlag(TypeFlag.Export));
+
+                                if (!targetClassTypeFilterList.Contains(type))
+                                {
+                                    targetClassTypeFilterList.Add(type);
+                                }
+                                if (!classTypeFilterList.Contains(type))
+                                {
+                                    classTypeFilterList.Add(type);
+                                }
+                            }
+                            catch(Exception)
+                            {
+                                Logger.Error($"{label} type {typeStr} has invalid format, skipping...");
+                                continue;
+                            }
+                        }
+
+                        return targetClassTypeFilterList.ToArray();
                     }
 
+                    primaryClassTypeFilter = ParseTypeFilter(o.TypeFilter, "primary");
+                    secondaryClassTypeFilter = o.SecondaryTypeFilter.IsNullOrEmpty()
+                        ? primaryClassTypeFilter
+                        : ParseTypeFilter(o.SecondaryTypeFilter, "secondary");
                     classTypeFilter = classTypeFilterList.ToArray();
 
                     if (ClassIDType.GameObject.CanExport() || ClassIDType.Animator.CanExport())
@@ -129,7 +154,6 @@ namespace AnimeStudio.CLI
                         }
                     }
                 }
-
                 if (o.GroupAssetsType == AssetGroupOption.ByContainer)
                 {
                     TypeFlags.SetType(ClassIDType.AssetBundle, true, false);
@@ -143,7 +167,28 @@ namespace AnimeStudio.CLI
                 assetsManager.Silent = o.Silent;
                 assetsManager.Game = game;
                 assetsManager.SpecifyUnityVersion = o.UnityVersion;
+
+                var hasSecondaryExportType = o.SecondaryAssetExportType.HasValue;
+                var hasSecondaryOutput = o.SecondaryOutput != null;
+                if (hasSecondaryExportType != hasSecondaryOutput)
+                {
+                    Console.Error.WriteLine("--secondary_export_type and --secondary_export_path must be specified together.");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                var exportTargets = new List<(DirectoryInfo Output, ExportType ExportType, string Label, ClassIDType[] TypeFilter)>
+                {
+                    (o.Output, o.AssetExportType, "primary", primaryClassTypeFilter)
+                };
+
                 o.Output.Create();
+                if (hasSecondaryExportType)
+                {
+                    o.SecondaryOutput.Create();
+                    exportTargets.Add((o.SecondaryOutput, o.SecondaryAssetExportType.Value, "secondary", secondaryClassTypeFilter));
+                    Logger.Info($"[SecondaryExport] Also exporting {o.SecondaryAssetExportType.Value} assets to {o.SecondaryOutput.FullName}");
+                }
 
                 if (o.Key != default)
                 {
@@ -239,6 +284,8 @@ namespace AnimeStudio.CLI
                 }
                 if (o.MapOp.Equals(MapOpType.None) || o.MapOp.HasFlag(MapOpType.Load))
                 {
+                    var exportHadErrors = false;
+                    var isMultiOutputExport = exportTargets.Count > 1;
                     var selectedFiles = files ?? GetInputFiles();
                     if (selectedFiles.Length == 0)
                     {
@@ -259,10 +306,32 @@ namespace AnimeStudio.CLI
                         if (assetsManager.assetsFileList.Count > 0)
                         {
                             BuildAssetData(classTypeFilter, o.NameFilter, o.ContainerFilter, ref i);
-                            ExportAssets(o.Output.FullName, exportableAssets, o.GroupAssetsType, o.AssetExportType);
+                            foreach (var target in exportTargets)
+                            {
+                                if (isMultiOutputExport)
+                                {
+                                    Logger.Info($"[{target.Label}] Exporting {target.ExportType} assets to {target.Output.FullName}");
+                                }
+                                var targetAssets = target.TypeFilter.IsNullOrEmpty()
+                                    ? exportableAssets
+                                    : exportableAssets.Where(asset => target.TypeFilter.Contains(asset.Type)).ToList();
+                                var result = ExportAssets(target.Output.FullName, targetAssets, o.GroupAssetsType, target.ExportType);
+                                if (result.ErrorCount > 0)
+                                {
+                                    exportHadErrors = true;
+                                    if (isMultiOutputExport)
+                                    {
+                                        Logger.Error($"[{target.Label}] Export failed for {result.ErrorCount} assets.");
+                                    }
+                                }
+                            }
                         }
                         exportableAssets.Clear();
                         assetsManager.Clear();
+                    }
+                    if (isMultiOutputExport && exportHadErrors)
+                    {
+                        Environment.ExitCode = 1;
                     }
                 }
                 if (Properties.Settings.Default.scrapeMonos)
