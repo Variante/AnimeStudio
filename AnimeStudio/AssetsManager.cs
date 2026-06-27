@@ -64,7 +64,7 @@ namespace AnimeStudio
 
         public Dictionary<string, List<long>> OffsetData = new();
         private int FilterDataIndexCount = -1;
-        private Dictionary<string, List<long>> FilterDataOffsetsBySourceKey = new(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<string, HashSet<long>> FilterDataOffsetsBySourceKey = new(StringComparer.OrdinalIgnoreCase);
 
         public void LoadFiles(params string[] files)
         {
@@ -505,7 +505,7 @@ namespace AnimeStudio
                 return;
             }
 
-            FilterDataOffsetsBySourceKey = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
+            FilterDataOffsetsBySourceKey = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in FilterData.Items)
             {
                 if (string.IsNullOrEmpty(item.Source))
@@ -547,11 +547,14 @@ namespace AnimeStudio
 
             if (!FilterDataOffsetsBySourceKey.TryGetValue(key, out var cachedOffsets))
             {
-                cachedOffsets = new List<long>();
+                cachedOffsets = new HashSet<long>();
                 FilterDataOffsetsBySourceKey[key] = cachedOffsets;
             }
 
-            cachedOffsets.AddRange(offsets);
+            foreach (var offset in offsets)
+            {
+                cachedOffsets.Add(offset);
+            }
         }
 
         private bool TryGetFilterOffsets(FileReader reader, out List<long> offsets)
