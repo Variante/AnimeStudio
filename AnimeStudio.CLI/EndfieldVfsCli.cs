@@ -190,9 +190,6 @@ namespace AnimeStudio.CLI
         private static IEnumerable<EndfieldVfsFileInfo> SelectedFiles(VfsOptions options, EndfieldVfsChunkInfo chunk) =>
             chunk.Files.Where(file => IsSelectedFile(options, file));
 
-        private static int CountSelectedFiles(VfsOptions options, EndfieldVfsBlockMainInfo blockInfo) =>
-            blockInfo.Chunks.Sum(chunk => SelectedFiles(options, chunk).Count());
-
         private static void DumpBlock(EndfieldVfsLoader loader, VfsBlockSelection block, string output, VfsOptions options)
         {
             var blockType = block.BlockType;
@@ -200,15 +197,18 @@ namespace AnimeStudio.CLI
 
             var successCount = 0;
             var errorCount = 0;
-            var totalFiles = CountSelectedFiles(options, blockInfo);
+            var selectedChunks = blockInfo.Chunks
+                .Select(chunk => new VfsChunkSelection(chunk, SelectedFiles(options, chunk).ToList()))
+                .ToList();
+            var totalFiles = selectedChunks.Sum(chunk => chunk.Files.Count);
 
-            foreach (var chunk in blockInfo.Chunks)
+            foreach (var selectedChunk in selectedChunks)
             {
-                Parallel.ForEach(SelectedFiles(options, chunk), file =>
+                Parallel.ForEach(selectedChunk.Files, file =>
                 {
                     try
                     {
-                        ProcessDumpFile(loader, blockType, chunk, file, output);
+                        ProcessDumpFile(loader, blockType, selectedChunk.Chunk, file, output);
                         Interlocked.Increment(ref successCount);
                     }
                     catch (Exception e)
@@ -725,6 +725,18 @@ namespace AnimeStudio.CLI
                 }
                 BlockFilterName = string.Join(", ", BlockTypes.Select(item => item.GetName()));
             }
+        }
+
+        private sealed class VfsChunkSelection
+        {
+            public VfsChunkSelection(EndfieldVfsChunkInfo chunk, List<EndfieldVfsFileInfo> files)
+            {
+                Chunk = chunk;
+                Files = files;
+            }
+
+            public EndfieldVfsChunkInfo Chunk { get; }
+            public List<EndfieldVfsFileInfo> Files { get; }
         }
 
         private sealed class VfsBlockSelection
