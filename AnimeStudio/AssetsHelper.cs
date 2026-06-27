@@ -520,25 +520,18 @@ namespace AnimeStudio
                 }
             }
 
-            assets.AddRange(matches.Where(x =>
-            {
-                var isMatchRegex = nameFilters.IsNullOrEmpty() || nameFilters.Any(y => y.IsMatch(x.Name));
-                var isFilteredType = typeFilters.IsNullOrEmpty() || typeFilters.Contains(x.Type);
-                var isContainerMatch = containerFilters.IsNullOrEmpty() || containerFilters.Any(y => y.IsMatch(x.Container));
-                return isMatchRegex && isFilteredType && isContainerMatch;
-            }));
+            var matcher = new AssetEntryMatcher(typeFilters, nameFilters, containerFilters);
+            assets.AddRange(matches.Where(matcher.Matches));
         }
 
         public static List<AssetEntry> ParseAssetMapEntries(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
         {
             var matches = new List<AssetEntry>();
+            var matcher = new AssetEntryMatcher(typeFilter, nameFilter, containerFilter);
 
             void AddIfMatch(AssetEntry entry)
             {
-                var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(entry.Name));
-                var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(entry.Container));
-                var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x == entry.Type);
-                if (isNameMatch && isContainerMatch && isTypeMatch)
+                if (matcher.Matches(entry))
                 {
                     matches.Add(entry);
                 }
@@ -563,22 +556,13 @@ namespace AnimeStudio
                         foreach (var assetElement in document.Root?.Elements("Asset") ?? Enumerable.Empty<XElement>())
                         {
                             var name = assetElement.Element("Name")?.Value ?? string.Empty;
-
-                            var isNameMatch = nameFilter.Length == 0 || nameFilter.Any(x => x.IsMatch(name));
-
                             var container = assetElement.Element("Container")?.Value ?? string.Empty;
-
-                            var isContainerMatch = containerFilter.Length == 0 || containerFilter.Any(x => x.IsMatch(container));
-
                             var type = assetElement.Element("Type")?.Value ?? string.Empty;
-
-                            var isTypeMatch = typeFilter.Length == 0 || typeFilter.Any(x => x.ToString().Equals(type, StringComparison.OrdinalIgnoreCase));
-
                             var pathID = assetElement.Element("PathID")?.Value ?? string.Empty;
                             var source = assetElement.Element("Source")?.Value ?? string.Empty;
                             var offset = assetElement.Element("Offset")?.Value ?? string.Empty;
 
-                            if (isNameMatch && isContainerMatch && isTypeMatch && Enum.TryParse<ClassIDType>(type, true, out var parsedType))
+                            if (Enum.TryParse<ClassIDType>(type, true, out var parsedType) && matcher.Matches(name, container, parsedType))
                             {
                                 long.TryParse(pathID, out var parsedPathID);
                                 if (!long.TryParse(offset, out var parsedOffset))
@@ -622,6 +606,33 @@ namespace AnimeStudio
             }
 
             return matches;
+        }
+
+        private sealed class AssetEntryMatcher
+        {
+            private readonly HashSet<ClassIDType> typeFilter;
+            private readonly Regex[] nameFilter;
+            private readonly Regex[] containerFilter;
+
+            public AssetEntryMatcher(ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
+            {
+                this.typeFilter = typeFilter.IsNullOrEmpty()
+                    ? new HashSet<ClassIDType>()
+                    : new HashSet<ClassIDType>(typeFilter);
+                this.nameFilter = nameFilter ?? Array.Empty<Regex>();
+                this.containerFilter = containerFilter ?? Array.Empty<Regex>();
+            }
+
+            public bool Matches(AssetEntry entry) =>
+                entry != null && Matches(entry.Name, entry.Container, entry.Type);
+
+            public bool Matches(string name, string container, ClassIDType type) =>
+                MatchesRegex(nameFilter, name) &&
+                MatchesRegex(containerFilter, container) &&
+                (typeFilter.Count == 0 || typeFilter.Contains(type));
+
+            private static bool MatchesRegex(Regex[] filters, string value) =>
+                filters.Length == 0 || filters.Any(filter => filter.IsMatch(value ?? string.Empty));
         }
 
         public static string[] ParseAssetMap(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)
