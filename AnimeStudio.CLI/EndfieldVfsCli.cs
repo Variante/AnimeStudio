@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +18,7 @@ namespace AnimeStudio.CLI
         {
             "dump",
             "audio",
+            "stream",
             "vfs-index",
             "vfsindex",
             "list",
@@ -52,6 +54,9 @@ namespace AnimeStudio.CLI
                         return true;
                     case "audio":
                         EndfieldAudioCli.Run(args);
+                        return true;
+                    case "stream":
+                        RunStream(ParseVfsOptions(args, ""));
                         return true;
                 }
             }
@@ -103,11 +108,60 @@ namespace AnimeStudio.CLI
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
             foreach (var blockType in options.SelectedBlockTypes())
             {
-                DumpBlock(loader, blockType, options.Output);
+                DumpBlock(loader, blockType, options.Output, options);
             }
         }
 
-        private static void DumpBlock(EndfieldVfsLoader loader, EndfieldVfsBlockType blockType, string output)
+        private static void RunStream(VfsOptions options)
+        {
+            var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+            var emittedCount = 0;
+            foreach (var blockType in options.SelectedBlockTypes())
+            {
+                EndfieldVfsBlockMainInfo blockInfo;
+                try
+                {
+                    blockInfo = loader.LoadBlockInfo(blockType);
+                }
+                catch (EndfieldVfsBlockNotFoundException e)
+                {
+                    Console.Error.WriteLine($"Warning: Block {e.HashDirectory} not found, skipping");
+                    continue;
+                }
+
+                foreach (var chunk in blockInfo.Chunks)
+                {
+                    foreach (var file in chunk.Files)
+                    {
+                        if (!IsDumpCandidate(options, file))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                            var payload = new JObject
+                            {
+                                ["blockType"] = blockType.GetName(),
+                                ["fileName"] = file.FileName,
+                                ["length"] = data.Length,
+                                ["dataBase64"] = Convert.ToBase64String(data),
+                            };
+                            Console.Out.WriteLine(payload.ToString(Formatting.None));
+                            emittedCount++;
+                        }
+                        catch (Exception e)
+                        {
+                            Console.Error.WriteLine($"Error: Failed to stream {file.FileName}: {e.Message}");
+                        }
+                    }
+                }
+            }
+            Console.Error.WriteLine($"Streamed {emittedCount} files");
+        }
+
+        private static void DumpBlock(EndfieldVfsLoader loader, EndfieldVfsBlockType blockType, string output, VfsOptions options)
         {
             Console.WriteLine($"Dumping {blockType.GetName()} files...");
             EndfieldVfsBlockMainInfo blockInfo;
@@ -123,7 +177,7 @@ namespace AnimeStudio.CLI
 
             var successCount = 0;
             var errorCount = 0;
-            var totalFiles = blockInfo.Chunks.Sum(chunk => chunk.Files.Count);
+            var totalFiles = blockInfo.Chunks.Sum(chunk => chunk.Files.Count(file => IsDumpCandidate(options, file)));
 
             foreach (var chunk in blockInfo.Chunks)
             {
@@ -131,8 +185,10 @@ namespace AnimeStudio.CLI
                 {
                     try
                     {
-                        ProcessDumpFile(loader, blockType, chunk, file, output);
-                        Interlocked.Increment(ref successCount);
+                        if (ProcessDumpFile(loader, options, blockType, chunk, file, output))
+                        {
+                            Interlocked.Increment(ref successCount);
+                        }
                     }
                     catch (Exception e)
                     {
@@ -149,16 +205,25 @@ namespace AnimeStudio.CLI
             }
         }
 
-        private static void ProcessDumpFile(
+        private static bool IsDumpCandidate(VfsOptions options, EndfieldVfsFileInfo file)
+        {
+            return !string.IsNullOrEmpty(file.FileName)
+                && !file.FileName.EndsWith("/")
+                && !file.FileName.EndsWith("\\")
+                && options.ShouldDumpFile(file.FileName);
+        }
+
+        private static bool ProcessDumpFile(
             EndfieldVfsLoader loader,
+            VfsOptions options,
             EndfieldVfsBlockType blockType,
             EndfieldVfsChunkInfo chunk,
             EndfieldVfsFileInfo file,
             string output)
         {
-            if (string.IsNullOrEmpty(file.FileName) || file.FileName.EndsWith("/") || file.FileName.EndsWith("\\"))
+            if (!IsDumpCandidate(options, file))
             {
-                return;
+                return false;
             }
 
             string outputPath;
@@ -193,6 +258,7 @@ namespace AnimeStudio.CLI
             {
                 throw new IOException($"Failed to create output file: {outputPath}");
             }
+            return true;
         }
 
         private static void RunVfsIndex(VfsOptions options)
@@ -257,6 +323,10 @@ namespace AnimeStudio.CLI
                     var files = new JArray();
                     foreach (var file in chunk.Files)
                     {
+                        if (!IsDumpCandidate(options, file))
+                        {
+                            continue;
+                        }
                         files.Add(new JObject
                         {
                             ["blockType"] = file.BlockType.GetName(),
@@ -296,7 +366,9 @@ namespace AnimeStudio.CLI
                     }
 
                     var chunkFileCount = files.Count;
-                    var chunkByteCount = chunk.Files.Sum(file => file.Length);
+                    var chunkByteCount = chunk.Files
+                        .Where(file => IsDumpCandidate(options, file))
+                        .Sum(file => file.Length);
                     blockFileCount += chunkFileCount;
                     blockByteCount += chunkByteCount;
 
@@ -420,7 +492,6 @@ namespace AnimeStudio.CLI
             var options = new VfsOptions
             {
                 Output = defaultOutput,
-                BlockFilterName = "All",
             };
 
             for (var i = 1; i < args.Length; i++)
@@ -458,18 +529,19 @@ namespace AnimeStudio.CLI
                         var rawBlock = value ?? NextValue(args, ref i, token);
                         if (string.Equals(rawBlock, "all", StringComparison.OrdinalIgnoreCase))
                         {
-                            options.BlockType = null;
-                            options.BlockFilterName = "All";
+                            options.SelectAllBlockTypes();
                         }
                         else if (EndfieldVfsBlockTypes.TryParseCliValue(rawBlock, out var blockType))
                         {
-                            options.BlockType = blockType;
-                            options.BlockFilterName = blockType.GetName();
+                            options.AddBlockType(blockType);
                         }
                         else
                         {
                             throw new ArgumentException($"invalid block type: {rawBlock}");
                         }
+                        break;
+                    case "--file-regex":
+                        options.AddFileRegex(value ?? NextValue(args, ref i, token));
                         break;
                     default:
                         throw new ArgumentException($"unexpected argument: {token}");
@@ -516,6 +588,26 @@ namespace AnimeStudio.CLI
                         "          [default: ./output]",
                         "  -b, --block-type <BLOCK_TYPE>",
                         $"          {blockTypeValues}",
+                        "          May be repeated to dump multiple block types.",
+                        "      --file-regex <REGEX>",
+                        "          Only dump files whose VFS filename matches the regex. May be repeated.",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
+                case "stream":
+                    PrintHelpLines(
+                        $"Usage: {executable} stream [OPTIONS] --streaming-assets <STREAMING_ASSETS>",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <STREAMING_ASSETS>",
+                        "          ",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          ",
+                        "  -b, --block-type <BLOCK_TYPE>",
+                        $"          {blockTypeValues}",
+                        "          May be repeated to stream multiple block types.",
+                        "      --file-regex <REGEX>",
+                        "          Only stream files whose VFS filename matches the regex. May be repeated.",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -533,6 +625,9 @@ namespace AnimeStudio.CLI
                         "          [default: ./vfs_index.json]",
                         "  -b, --block-type <BLOCK_TYPE>",
                         $"          {blockTypeValues}",
+                        "          May be repeated to index multiple block types.",
+                        "      --file-regex <REGEX>",
+                        "          Only index files whose VFS filename matches the regex. May be repeated.",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -579,11 +674,50 @@ namespace AnimeStudio.CLI
             public string StreamingAssets { get; set; }
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
-            public EndfieldVfsBlockType? BlockType { get; set; }
-            public string BlockFilterName { get; set; }
+            public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
+            public List<Regex> FileRegexes { get; } = new();
+            public bool UseAllBlockTypes { get; private set; } = true;
+            public string BlockFilterName { get; private set; } = "All";
 
             public IEnumerable<EndfieldVfsBlockType> SelectedBlockTypes() =>
-                BlockType.HasValue ? new[] { BlockType.Value } : EndfieldVfsBlockTypes.AllDumpable;
+                UseAllBlockTypes || BlockTypes.Count == 0 ? EndfieldVfsBlockTypes.AllDumpable : BlockTypes;
+
+            public bool ShouldDumpFile(string fileName)
+            {
+                if (FileRegexes.Count == 0)
+                {
+                    return true;
+                }
+                var normalized = NormalizePath(fileName);
+                return FileRegexes.Any(regex => regex.IsMatch(normalized));
+            }
+
+            public void AddFileRegex(string pattern)
+            {
+                FileRegexes.Add(new Regex(pattern, RegexOptions.IgnoreCase));
+            }
+
+            public void SelectAllBlockTypes()
+            {
+                UseAllBlockTypes = true;
+                BlockTypes.Clear();
+                BlockFilterName = "All";
+            }
+
+            public void AddBlockType(EndfieldVfsBlockType blockType)
+            {
+                if (UseAllBlockTypes)
+                {
+                    UseAllBlockTypes = false;
+                    BlockTypes.Clear();
+                }
+
+                if (!BlockTypes.Contains(blockType))
+                {
+                    BlockTypes.Add(blockType);
+                }
+                BlockFilterName = string.Join(", ", BlockTypes.Select(item => item.GetName()));
+            }
         }
 
         private sealed class HelpRequestedException : Exception

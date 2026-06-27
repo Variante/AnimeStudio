@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
@@ -402,12 +402,50 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static string ExportAssetIdentityKey(AssetItem asset)
+        {
+            var sourceFile = asset.SourceFile;
+            var sourceOriginalPath = sourceFile?.originalPath ?? string.Empty;
+            var sourceName = sourceFile?.fileName ?? string.Empty;
+            var sourceOffset = sourceFile?.offset ?? 0;
+            var sourcePath = sourceOriginalPath.Length > 0 ? sourceOriginalPath : sourceName;
+            var normalizedSourcePath = sourcePath.Length > 0
+                ? sourcePath.Replace('\\', '/').ToUpperInvariant()
+                : "<NO_SOURCE>";
+            return string.Join("|",
+                normalizedSourcePath,
+                sourceName.ToUpperInvariant(),
+                sourceOffset.ToString(CultureInfo.InvariantCulture),
+                asset.Type.ToString(),
+                asset.m_PathID.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static List<AssetItem> DeduplicateExportAssets(List<AssetItem> assets)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var unique = new List<AssetItem>(assets.Count);
+            foreach (var asset in assets)
+            {
+                if (seen.Add(ExportAssetIdentityKey(asset)))
+                {
+                    unique.Add(asset);
+                }
+            }
+            var duplicateCount = assets.Count - unique.Count;
+            if (duplicateCount > 0)
+            {
+                Logger.Info($"Skipped {duplicateCount} duplicate export asset request(s) before writing files.");
+            }
+            return unique;
+        }
+
         public static ExportAssetsResult ExportAssets(string savePath, List<AssetItem> toExportAssets, AssetGroupOption assetGroupOption, ExportType exportType)
         {
-            int toExportCount = toExportAssets.Count;
+            var uniqueExportAssets = DeduplicateExportAssets(toExportAssets);
+            int toExportCount = uniqueExportAssets.Count;
             int exportedCount = 0;
             int errorCount = 0;
-            foreach (var asset in toExportAssets)
+            foreach (var asset in uniqueExportAssets)
             {
                 string exportPath;
                 switch (assetGroupOption)
