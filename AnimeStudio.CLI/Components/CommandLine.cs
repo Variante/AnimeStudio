@@ -112,68 +112,8 @@ namespace AnimeStudio.CLI
             Silent = new Option<bool>("--silent", "Hide log messages.");
             LoggerFlags = new Option<LoggerEvent[]>("--logger_flags", "Flags to control toggle log events.") { AllowMultipleArgumentsPerToken = true, ArgumentHelpName = "Verbose|Debug|Info|etc.." };
             TypeFilter = new Option<string[]>("--types", "Specify unity class type(s)") { AllowMultipleArgumentsPerToken = true, ArgumentHelpName = "Texture2D|Shader:Parse|Sprite:Both|etc.." };
-            NameFilter = new Option<Regex[]>("--names", result => 
-            {
-                var items = new List<Regex>();
-                var value = result.Tokens.Single().Value;
-                if (File.Exists(value))
-                {
-                    var lines = File.ReadLines(value);
-                    foreach (var line in lines)
-                    {
-                        if (string.IsNullOrWhiteSpace(line))
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            items.Add(new Regex(line, RegexOptions.IgnoreCase));
-                        }
-                        catch (ArgumentException)
-                        {
-                            continue;
-                        }
-                    }
-                }
-                else
-                {
-                    items.AddRange(result.Tokens.Select(x => new Regex(x.Value, RegexOptions.IgnoreCase)).ToArray());
-                }
-
-                return items.ToArray();
-            }, false, "Specify name regex filter(s).") { AllowMultipleArgumentsPerToken = true };
-            ContainerFilter = new Option<Regex[]>("--containers", result =>
-            {
-                var items = new List<Regex>();
-                var value = result.Tokens.Single().Value;
-                if (File.Exists(value))
-                {
-                    var lines = File.ReadLines(value);
-                    foreach(var line in lines)
-                    {
-                        if (string.IsNullOrWhiteSpace(line))
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            items.Add(new Regex(line, RegexOptions.IgnoreCase));
-                        }
-                        catch (ArgumentException)
-                        {
-                            continue;
-                        }
-                    }
-                }
-                else
-                {
-                    items.AddRange(result.Tokens.Select(x => new Regex(x.Value, RegexOptions.IgnoreCase)).ToArray());
-                }
-
-                return items.ToArray();
-            }, false, "Specify container regex filter(s).") { AllowMultipleArgumentsPerToken = true };
+            NameFilter = new Option<Regex[]>("--names", ParseRegexFilters, false, "Specify name regex filter(s).") { AllowMultipleArgumentsPerToken = true };
+            ContainerFilter = new Option<Regex[]>("--containers", ParseRegexFilters, false, "Specify container regex filter(s).") { AllowMultipleArgumentsPerToken = true };
             GameName = new Option<string>("--game", $"Specify Game.") { IsRequired = true };
             MapOp = new Option<MapOpType>("--map_op", "Specify which map to build.");
             MapType = new Option<ExportListType>("--map_type", "AssetMap output type.");
@@ -224,6 +164,43 @@ namespace AnimeStudio.CLI
             MonoBehaviourTypeTreePriorityOption.SetDefaultValue(MonoBehaviourTypeTreePriority.SerializedFirst);
         }
         
+        private static Regex[] ParseRegexFilters(ArgumentResult result)
+        {
+            var items = new List<Regex>();
+            foreach (var token in result.Tokens.Select(x => x.Value))
+            {
+                if (File.Exists(token))
+                {
+                    foreach (var line in File.ReadLines(token))
+                    {
+                        AddRegex(items, line);
+                    }
+                }
+                else
+                {
+                    AddRegex(items, token);
+                }
+            }
+
+            return items.ToArray();
+        }
+
+        private static void AddRegex(List<Regex> items, string pattern)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                return;
+            }
+
+            try
+            {
+                items.Add(new Regex(pattern, RegexOptions.IgnoreCase));
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+
         public byte ParseKey(string value)
         {
             if (value.StartsWith("0x"))
