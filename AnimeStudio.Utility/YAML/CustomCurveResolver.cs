@@ -131,7 +131,7 @@ namespace AnimeStudio
                             return "m_Sprite";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
                 case BindingCustomType.MonoBehaviour:
                     {
@@ -140,7 +140,7 @@ namespace AnimeStudio
                             return "m_Enabled";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
                 case BindingCustomType.Light:
                     {
@@ -209,7 +209,7 @@ namespace AnimeStudio
                             return "m_ColorTemperature";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
                 case BindingCustomType.RendererShadows:
                     {
@@ -222,7 +222,7 @@ namespace AnimeStudio
                             return "m_SortingOrder";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.ParticleSystem:
@@ -290,7 +290,7 @@ namespace AnimeStudio
                             return PivotY;
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.LineRenderer:
@@ -350,7 +350,7 @@ namespace AnimeStudio
                                 return $"m_Sources.Array.data[{attribute >> 8}].weight";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.RotationConstraint:
@@ -386,7 +386,7 @@ namespace AnimeStudio
                                 return $"m_Sources.Array.data[{attribute >> 8}].weight";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.ScaleConstraint:
@@ -422,7 +422,7 @@ namespace AnimeStudio
                                 return $"m_Sources.Array.data[{attribute >> 8}].weight";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.AimConstraint:
@@ -448,7 +448,7 @@ namespace AnimeStudio
                                 return $"m_Sources.Array.data[{attribute >> 8}].weight";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.ParentConstraint:
@@ -490,7 +490,7 @@ namespace AnimeStudio
                                 return $"m_Sources.Array.data[{attribute >> 8}].weight";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
 #warning TODO:
                 case BindingCustomType.LookAtConstraint:
@@ -512,7 +512,7 @@ namespace AnimeStudio
                                 return "m_Roll";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
                 case BindingCustomType.Camera:
                     {
@@ -525,11 +525,17 @@ namespace AnimeStudio
                             return "m_FocalLength";
                         }
                     }
-                    throw new ArgumentException($"Unknown attribute {attribute} for {type}");
+                    return UnknownCustomAttributeName(type, attribute);
 
                 default:
-                    throw new ArgumentException(type.ToString());
+                    return UnknownCustomAttributeName(type, attribute);
             }
+        }
+
+        private static string UnknownCustomAttributeName(BindingCustomType type, uint attribute)
+        {
+            var typeName = Enum.GetName(typeof(BindingCustomType), type) ?? $"CustomType{(byte)type}";
+            return $"unknown_{typeName}_{attribute}";
         }
 
         private GameObject[] Roots

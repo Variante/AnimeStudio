@@ -512,7 +512,12 @@ namespace AnimeStudio.CLI
                 catch (Exception ex)
                 {
                     errorCount++;
-                    Logger.Error($"Export {asset.Type}:{asset.Text} error\r\n{ex.Message}\r\n{ex.StackTrace}");
+                    Logger.Error(
+                        $"Export {asset.Type}:{asset.Text} error " +
+                        $"[PathID={asset.m_PathID}, SourceFile={asset.SourceFile?.fileName ?? ""}, " +
+                        $"SourceOriginalPath={asset.SourceFile?.originalPath ?? ""}, Container={asset.Container ?? ""}]\r\n" +
+                        $"{ex.Message}\r\n{ex.StackTrace}"
+                    );
                 }
             }
 

@@ -21,6 +21,18 @@ namespace AnimeStudio
             {
                 return null;
             }
+            try
+            {
+                return ConvertCore(shader);
+            }
+            catch (Exception ex) when (IsRecoverableShaderBlobFailure(ex))
+            {
+                return header + ConvertUnsupportedShader(shader, ex);
+            }
+        }
+
+        private static string ConvertCore(Shader shader)
+        {
             if (shader.m_SubProgramBlob != null) //5.3 - 5.4
             {
                 var decompressedBytes = new byte[shader.decompressedSize];
@@ -50,6 +62,93 @@ namespace AnimeStudio
             return header + Encoding.UTF8.GetString(shader.m_Script);
         }
 
+        private static bool IsRecoverableShaderBlobFailure(Exception ex)
+        {
+            return ex is IOException
+                || ex is ArgumentException
+                || ex is ArgumentOutOfRangeException
+                || ex is IndexOutOfRangeException
+                || ex is NotSupportedException;
+        }
+
+        private static string ConvertUnsupportedShader(Shader shader, Exception ex)
+        {
+            var reason = ClassifyShaderBlobFailure(shader, ex);
+            Logger.Warning(
+                $"Shader {shader.Name} exported without bytecode " +
+                $"[PathID={shader.m_PathID}, SourceFile={shader.assetsFile?.fileName ?? ""}, " +
+                $"SourceOriginalPath={shader.assetsFile?.originalPath ?? ""}]: {reason}"
+            );
+
+            var sb = new StringBuilder();
+            sb.Append($"// AnimeStudio shader bytecode unavailable: {SanitizeComment(reason)}\n");
+            sb.Append("// Parsed Shader metadata was exported; compiled subprogram bytecode was skipped.\n");
+
+            if (shader.m_ParsedForm != null)
+            {
+                sb.Append(ConvertSerializedShader(shader.m_ParsedForm, shader.platforms ?? Array.Empty<ShaderCompilerPlatform>(), null, reason));
+            }
+            else
+            {
+                sb.Append($"Shader \"{EscapeShaderName(shader.Name)}\" {{\n}}\n");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string ClassifyShaderBlobFailure(Shader shader, Exception ex)
+        {
+            var storage = DescribeShaderStorage(shader);
+            var message = ex.Message ?? ex.GetType().Name;
+            var match = Regex.Match(message, @"ReadAlignedString requests (\d+) bytes at offset (0x[0-9A-Fa-f]+)");
+            if (match.Success && uint.TryParse(match.Groups[1].Value, out var length))
+            {
+                return $"unsupported shader bytecode blob layout (string length decoded as {length}/0x{length:X8}/'{FormatFourCC(length)}' at {match.Groups[2].Value}); {storage}";
+            }
+
+            if (message.Contains("Lz4 decompression error", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"unsupported or encrypted shader compressed blob ({message}); {storage}";
+            }
+
+            return $"unsupported shader bytecode blob ({ex.GetType().Name}: {message}); {storage}";
+        }
+
+        private static string DescribeShaderStorage(Shader shader)
+        {
+            var parts = new List<string>();
+            if (shader.subShaderBlobs != null)
+            {
+                parts.Add($"subShaderBlobs={shader.subShaderBlobs.Count}");
+            }
+            if (shader.compressedBlob != null)
+            {
+                parts.Add($"compressedBlob={shader.compressedBlob.Length} bytes");
+            }
+            if (shader.platforms != null)
+            {
+                parts.Add($"platforms={shader.platforms.Length}");
+            }
+            parts.Add($"compressionType={shader.m_CompressionType}");
+            return string.Join(", ", parts);
+        }
+
+        private static string FormatFourCC(uint value)
+        {
+            var bytes = BitConverter.GetBytes(value);
+            var chars = bytes.Select(x => x >= 32 && x <= 126 ? (char)x : '.').ToArray();
+            return new string(chars);
+        }
+
+        private static string SanitizeComment(string value)
+        {
+            return (value ?? "unknown").Replace('\r', ' ').Replace('\n', ' ');
+        }
+
+        private static string EscapeShaderName(string value)
+        {
+            return (value ?? "Unnamed Shader").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
         private static string ConvertSerializedShader(Shader shader, IReadOnlyList<SubShaderBlob> subShaderBlobs)
         {
             if (subShaderBlobs.Count == 1)
@@ -115,7 +214,7 @@ namespace AnimeStudio
             return ConvertSerializedShader(shader.m_ParsedForm, shader.platforms, shaderPrograms);
         }
 
-        private static string ConvertSerializedShader(SerializedShader m_ParsedForm, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static string ConvertSerializedShader(SerializedShader m_ParsedForm, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             sb.Append($"Shader \"{m_ParsedForm.m_Name}\" {{\n");
@@ -124,7 +223,7 @@ namespace AnimeStudio
 
             foreach (var m_SubShader in m_ParsedForm.m_SubShaders)
             {
-                sb.Append(ConvertSerializedSubShader(m_SubShader, platforms, shaderPrograms));
+                sb.Append(ConvertSerializedSubShader(m_SubShader, platforms, shaderPrograms, unavailableReason));
             }
 
             if (!string.IsNullOrEmpty(m_ParsedForm.m_FallbackName))
@@ -141,7 +240,7 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
-        private static string ConvertSerializedSubShader(SerializedSubShader m_SubShader, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static string ConvertSerializedSubShader(SerializedSubShader m_SubShader, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             sb.Append("SubShader {\n");
@@ -154,13 +253,13 @@ namespace AnimeStudio
 
             foreach (var m_Passe in m_SubShader.m_Passes)
             {
-                sb.Append(ConvertSerializedPass(m_Passe, platforms, shaderPrograms));
+                sb.Append(ConvertSerializedPass(m_Passe, platforms, shaderPrograms, unavailableReason));
             }
             sb.Append("}\n");
             return sb.ToString();
         }
 
-        private static string ConvertSerializedPass(SerializedPass m_Passe, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static string ConvertSerializedPass(SerializedPass m_Passe, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             switch (m_Passe.m_Type)
@@ -197,42 +296,42 @@ namespace AnimeStudio
                     if (m_Passe.progVertex.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"vp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (m_Passe.progFragment.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"fp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (m_Passe.progGeometry.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"gp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (m_Passe.progHull.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"hp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (m_Passe.progDomain.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"dp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (m_Passe.progRayTracing?.m_SubPrograms.Count > 0)
                     {
                         sb.Append("Program \"rtp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms));
+                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
                 }
@@ -241,7 +340,7 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
-        private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             var groups = m_SubPrograms.GroupBy(x => x.m_BlobIndex);
@@ -250,6 +349,17 @@ namespace AnimeStudio
                 var programs = group.GroupBy(x => x.m_GpuProgramType);
                 foreach (var program in programs)
                 {
+                    if (platforms == null || platforms.Length == 0)
+                    {
+                        foreach (var subProgram in program)
+                        {
+                            sb.Append("SubProgram \"unknown\" {\n");
+                            AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                            sb.Append("\n}\n");
+                        }
+                        continue;
+                    }
+
                     for (int i = 0; i < platforms.Length; i++)
                     {
                         var platform = platforms[i];
@@ -265,7 +375,14 @@ namespace AnimeStudio
                                     sb.Append($"hw_tier{subProgram.m_ShaderHardwareTier:00} ");
                                 }
                                 sb.Append("\" {\n");
-                                sb.Append(shaderPrograms[i].m_SubPrograms[subProgram.m_BlobIndex].Export());
+                                if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
+                                {
+                                    sb.Append(parsedSubProgram.Export());
+                                }
+                                else
+                                {
+                                    AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                                }
                                 sb.Append("\n}\n");
                             }
                             break;
@@ -276,6 +393,38 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
+        private static bool TryGetShaderSubProgram(ShaderProgram[] shaderPrograms, int platformIndex, uint blobIndex, out ShaderSubProgram subProgram)
+        {
+            subProgram = null;
+            if (shaderPrograms == null
+                || platformIndex < 0
+                || platformIndex >= shaderPrograms.Length
+                || shaderPrograms[platformIndex] == null
+                || shaderPrograms[platformIndex].m_SubPrograms == null
+                || blobIndex > int.MaxValue)
+            {
+                return false;
+            }
+
+            var index = (int)blobIndex;
+            if (index < 0 || index >= shaderPrograms[platformIndex].m_SubPrograms.Length)
+            {
+                return false;
+            }
+
+            subProgram = shaderPrograms[platformIndex].m_SubPrograms[index];
+            return subProgram != null;
+        }
+
+        private static void AppendUnavailableSubProgram(StringBuilder sb, SerializedSubProgram subProgram, string reason)
+        {
+            sb.Append($"// AnimeStudio: shader bytecode unavailable for blob {subProgram.m_BlobIndex}, gpu {subProgram.m_GpuProgramType}, tier {subProgram.m_ShaderHardwareTier}.");
+            if (!string.IsNullOrEmpty(reason))
+            {
+                sb.Append($" {SanitizeComment(reason)}");
+            }
+            sb.Append("\n");
+        }
         private static string ConvertSerializedShaderState(SerializedShaderState m_State)
         {
             var sb = new StringBuilder();
