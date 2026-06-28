@@ -1002,6 +1002,7 @@ namespace AnimeStudio.CLI
         private sealed class ManagedReferencePayloadReader
         {
             private readonly byte[] rawData;
+            private readonly int start;
             private readonly int end;
 
             public ManagedReferencePayloadReader(byte[] rawData, int offset, int length)
@@ -1011,6 +1012,7 @@ namespace AnimeStudio.CLI
                 {
                     throw new InvalidDataException("payload range is outside raw data");
                 }
+                start = offset;
                 Position = offset;
                 end = offset + length;
             }
@@ -1022,6 +1024,15 @@ namespace AnimeStudio.CLI
             public int End => end;
 
             public int Remaining => end - Position;
+
+            public void SetPosition(int position)
+            {
+                if (position < start || position > end)
+                {
+                    throw new InvalidDataException("payload reader position is outside payload bounds");
+                }
+                Position = position;
+            }
 
             public void EnsureComplete()
             {
@@ -1464,6 +1475,10 @@ namespace AnimeStudio.CLI
                         },
                         { "modeConfig", ReadAbilitySystemModeConfig(reader) },
                     };
+                    if (TryReadAbilitySystemSkillDataBundle(reader, out var skillDataBundle))
+                    {
+                        data["skillDataBundle"] = skillDataBundle;
+                    }
                     data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
                     data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
                     reader.EnsureComplete();
@@ -2042,12 +2057,113 @@ namespace AnimeStudio.CLI
                 { "animBoolName", reader.ReadAlignedAsciiString("modeConfig.modes.animBoolName") },
             };
 
-            var compactTail = ReadAbilitySystemModeCompactTail(reader);
-            if (compactTail.Count > 0)
+            if (!TryReadAbilitySystemModeExtendedTail(reader, item))
             {
-                item["compactTailRawWords"] = compactTail;
+                var compactTail = ReadAbilitySystemModeCompactTail(reader);
+                if (compactTail.Count > 0)
+                {
+                    item["compactTailRawWords"] = compactTail;
+                }
             }
             return item;
+        }
+
+        private static bool TryReadAbilitySystemModeExtendedTail(
+            ManagedReferencePayloadReader reader,
+            OrderedDictionary item
+        )
+        {
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            var tail = new OrderedDictionary();
+            try
+            {
+                var overrideStateClip = local.ReadBool32("modeConfig.modes.overrideStateClip");
+                tail["overrideStateClip"] = overrideStateClip;
+                if (overrideStateClip)
+                {
+                    tail["overrideClipMappingRawWords"] = ReadAbilitySystemRawWordList(
+                        local,
+                        "modeConfig.modes.overrideClipMappingRawWords",
+                        64
+                    );
+                }
+
+                tail["overrideAnimCfg"] = local.ReadBool32("modeConfig.modes.overrideAnimCfg");
+                tail["animCfgPath"] = local.ReadAlignedAsciiString("modeConfig.modes.animCfgPath");
+                tail["overrideModelKey"] = local.ReadBool32("modeConfig.modes.overrideModelKey");
+                tail["modelKey"] = local.ReadAlignedAsciiString("modeConfig.modes.modelKey");
+                tail["mountPointDefIndex"] = local.ReadInt32("modeConfig.modes.mountPointDefIndex");
+                tail["overrideCmdMapping"] = local.ReadBool32("modeConfig.modes.overrideCmdMapping");
+                tail["cmdMappingRawWords"] = ReadPayloadRawInt32Words(
+                    local,
+                    "modeConfig.modes.cmdMappingRawWords",
+                    4
+                );
+                foreach (DictionaryEntry entry in tail)
+                {
+                    item[entry.Key] = entry.Value;
+                }
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static bool TryReadAbilitySystemSkillDataBundle(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "$partial", true },
+                    { "layout", "Beyond.Gameplay.Core.SkillDataBundle" },
+                    { "layoutNote", "decoded through comboSkillSpecialNodeName; defaultCmdMapping and later AbilitySystemData fields remain in remainingRawWords" },
+                    { "allNormalAttackId", ReadPayloadStringList(local, "skillDataBundle.allNormalAttackId", 256) },
+                    { "allActiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allActiveSkillId", 256) },
+                    { "allPassiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allPassiveSkillId", 256) },
+                    { "normalAttackList", ReadPayloadStringList(local, "skillDataBundle.normalAttackList", 256) },
+                    { "enabledBreakingNormalAttacks", ReadPayloadStringList(local, "skillDataBundle.enabledBreakingNormalAttacks", 256) },
+                    { "enabledPassiveSkills", ReadPayloadStringList(local, "skillDataBundle.enabledPassiveSkills", 256) },
+                    { "normalSkillId", local.ReadAlignedAsciiString("skillDataBundle.normalSkillId") },
+                    { "ultimateSkillId", local.ReadAlignedAsciiString("skillDataBundle.ultimateSkillId") },
+                    { "plungingAttackStartId", local.ReadAlignedAsciiString("skillDataBundle.plungingAttackStartId") },
+                    { "plungingAttackEndId", local.ReadAlignedAsciiString("skillDataBundle.plungingAttackEndId") },
+                    { "dodgeSkillId", local.ReadAlignedAsciiString("skillDataBundle.dodgeSkillId") },
+                    { "comboSkillConditionsRawWords", ReadAbilitySystemRawWordList(local, "skillDataBundle.comboSkillConditionsRawWords", 64) },
+                    { "comboSkillId", local.ReadAlignedAsciiString("skillDataBundle.comboSkillId") },
+                    { "comboSkillSpecialNodeName", local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName") },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadAbilitySystemRawWordList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            return ReadPayloadRawInt32Words(reader, fieldName, count);
         }
 
         private static List<OrderedDictionary> ReadAbilitySystemModeCompactTail(ManagedReferencePayloadReader reader)
