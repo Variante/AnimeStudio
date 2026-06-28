@@ -784,6 +784,15 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeCharacterDisplayData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
             if (TryDecodeDialogTeleportEntityActionData(
                 header,
                 rawData,
@@ -892,6 +901,366 @@ namespace AnimeStudio.CLI
             return data;
         }
 
+        private sealed class ManagedReferencePayloadReader
+        {
+            private readonly byte[] rawData;
+            private readonly int end;
+
+            public ManagedReferencePayloadReader(byte[] rawData, int offset, int length)
+            {
+                this.rawData = rawData ?? throw new InvalidDataException("payload bytes are missing");
+                if (offset < 0 || length < 0 || offset > rawData.Length || offset + length > rawData.Length)
+                {
+                    throw new InvalidDataException("payload range is outside raw data");
+                }
+                Position = offset;
+                end = offset + length;
+            }
+
+            public int Position { get; private set; }
+
+            public int End => end;
+
+            public void EnsureComplete()
+            {
+                if (Position != end)
+                {
+                    throw new InvalidDataException($"payload parser stopped at {Position}, expected {end}");
+                }
+            }
+
+            public int ReadInt32(string fieldName)
+            {
+                EnsureAvailable(4, fieldName);
+                var value = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4));
+                Position += 4;
+                return value;
+            }
+
+            public long ReadInt64(string fieldName)
+            {
+                EnsureAvailable(8, fieldName);
+                var value = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(Position, 8));
+                Position += 8;
+                return value;
+            }
+
+            public float ReadFloat(string fieldName)
+            {
+                var value = BitConverter.Int32BitsToSingle(ReadInt32(fieldName));
+                if (float.IsNaN(value) || float.IsInfinity(value))
+                {
+                    throw new InvalidDataException($"invalid float in {fieldName}");
+                }
+                return value;
+            }
+
+            public bool ReadBool32(string fieldName)
+            {
+                var value = ReadInt32(fieldName);
+                if (value != 0 && value != 1)
+                {
+                    throw new InvalidDataException($"invalid bool32 {value} in {fieldName}");
+                }
+                return value != 0;
+            }
+
+            public string ReadAlignedAsciiString(string fieldName)
+            {
+                var stringOffset = Position;
+                var length = ReadInt32(fieldName);
+                if (length < 0 || length > 512)
+                {
+                    throw new InvalidDataException($"invalid string length {length} in {fieldName}");
+                }
+                EnsureAvailable(length, fieldName);
+                for (var i = Position; i < Position + length; i++)
+                {
+                    if (rawData[i] < 0x20 || rawData[i] > 0x7E)
+                    {
+                        throw new InvalidDataException($"non-ASCII byte in {fieldName} at {i}");
+                    }
+                }
+
+                var value = Encoding.UTF8.GetString(rawData, Position, length);
+                Position = (Position + length + 3) & ~3;
+                if (Position > end)
+                {
+                    throw new InvalidDataException($"aligned string {fieldName} at {stringOffset} passes payload end");
+                }
+                return value;
+            }
+
+            private void EnsureAvailable(int byteCount, string fieldName)
+            {
+                if (byteCount < 0 || Position > end - byteCount)
+                {
+                    throw new InvalidDataException($"not enough bytes for {fieldName}");
+                }
+            }
+        }
+
+        private static bool TryDecodeCharacterDisplayData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "CharacterDisplayData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "layout", "Beyond.Gameplay.CharacterDisplayData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "decoItemConfig", ReadCharacterDisplayDecoItemConfig(reader) },
+                    { "potentialEffectConfig", ReadCharacterDisplayPotentialEffectConfig(reader) },
+                    { "weaponConfig", ReadCharacterDisplayWeaponConfig(reader) },
+                    { "height", BuildCharacterHeightEnum(reader.ReadInt32("height")) },
+                    { "cameraConfig", new OrderedDictionary
+                        {
+                            { "charFormationOverride", reader.ReadAlignedAsciiString("cameraConfig.charFormationOverride") },
+                        }
+                    },
+                    { "charInfoCameraGroup", reader.ReadAlignedAsciiString("charInfoCameraGroup") },
+                    { "charInfoLightGroup", reader.ReadAlignedAsciiString("charInfoLightGroup") },
+                    { "talentPanelRotate", ReadPayloadVector4(reader, "talentPanelRotate") },
+                    { "talentPanelScale", ReadPayloadVector3(reader, "talentPanelScale") },
+                    { "overviewImgOffset", ReadPayloadVector3(reader, "overviewImgOffset") },
+                    { "overrideSpIdleConfig", reader.ReadBool32("overrideSpIdleConfig") },
+                    { "charRelaxSpIdleConfig", ReadCharacterDisplayCharRelaxSpIdleConfig(reader) },
+                    { "charRelaxReactConfig", ReadCharacterDisplayCharRelaxReactConfig(reader) },
+                    { "charId", reader.ReadAlignedAsciiString("charId") },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayDecoItemConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "decoItemData", ReadPayloadObjectList(reader, "decoItemConfig.decoItemData", 32, ReadCharacterDisplayDecoItemData) },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayDecoItemData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "prefabPath", reader.ReadAlignedAsciiString("decoItemData.prefabPath") },
+                { "mountPoint", reader.ReadAlignedAsciiString("decoItemData.mountPoint") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayPotentialEffectConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "potentialEffects", ReadPayloadObjectList(reader, "potentialEffectConfig.potentialEffects", 32, ReadCharacterDisplayEffectData) },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayEffectData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "name", reader.ReadAlignedAsciiString("effect.name") },
+                { "mountPoint", reader.ReadAlignedAsciiString("effect.mountPoint") },
+                { "followScale", reader.ReadBool32("effect.followScale") },
+                { "followRotation", reader.ReadBool32("effect.followRotation") },
+                { "offset", ReadPayloadVector3(reader, "effect.offset") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayWeaponConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "weaponData", ReadPayloadObjectList(reader, "weaponConfig.weaponData", 16, ReadCharacterDisplayDynamicWeaponData) },
+                { "staticWeaponData", ReadPayloadObjectList(reader, "weaponConfig.staticWeaponData", 16, ReadCharacterDisplayStaticWeaponData) },
+                { "weaponAppearEffectName", ReadPayloadStringList(reader, "weaponConfig.weaponAppearEffectName", 32) },
+                { "weaponDisappearEffectName", ReadPayloadStringList(reader, "weaponConfig.weaponDisappearEffectName", 32) },
+                { "weaponAppearEffectDuration", reader.ReadFloat("weaponConfig.weaponAppearEffectDuration") },
+                { "weaponDisappearEffectDuration", reader.ReadFloat("weaponConfig.weaponDisappearEffectDuration") },
+                { "weaponChangeEffects", ReadPayloadObjectList(reader, "weaponConfig.weaponChangeEffects", 16, ReadCharacterDisplayEffectData) },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayDynamicWeaponData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "weaponIndex", reader.ReadInt32("weaponData.weaponIndex") },
+                { "vfxKey", reader.ReadAlignedAsciiString("weaponData.vfxKey") },
+                { "weaponScale", reader.ReadFloat("weaponData.weaponScale") },
+                { "showWhenIdle", reader.ReadBool32("weaponData.showWhenIdle") },
+                { "idleMountPoint", reader.ReadInt32("weaponData.idleMountPoint") },
+                { "showWhenFight", reader.ReadBool32("weaponData.showWhenFight") },
+                { "fightMountPoint", reader.ReadInt32("weaponData.fightMountPoint") },
+                { "overrideAnimation", reader.ReadBool32("weaponData.overrideAnimation") },
+                { "overrideController", ReadPayloadPPtr(reader, "weaponData.overrideController") },
+                { "weaponPath", reader.ReadAlignedAsciiString("weaponData.weaponPath") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayStaticWeaponData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "weaponIndex", reader.ReadInt32("staticWeaponData.weaponIndex") },
+                { "vfxKey", reader.ReadAlignedAsciiString("staticWeaponData.vfxKey") },
+                { "weaponScale", reader.ReadFloat("staticWeaponData.weaponScale") },
+                { "weaponPath", reader.ReadAlignedAsciiString("staticWeaponData.weaponPath") },
+                { "showWhenIdle", reader.ReadBool32("staticWeaponData.showWhenIdle") },
+                { "idleMountPoint", reader.ReadInt32("staticWeaponData.idleMountPoint") },
+                { "showWhenFight", reader.ReadBool32("staticWeaponData.showWhenFight") },
+                { "fightMountPoint", reader.ReadInt32("staticWeaponData.fightMountPoint") },
+                { "overrideAnimation", reader.ReadBool32("staticWeaponData.overrideAnimation") },
+                { "overrideController", ReadPayloadPPtr(reader, "staticWeaponData.overrideController") },
+                { "nodeUIIdle", reader.ReadAlignedAsciiString("staticWeaponData.nodeUIIdle") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayCharRelaxSpIdleConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "minIdleTime", reader.ReadFloat("charRelaxSpIdleConfig.minIdleTime") },
+                { "sp1IdleWeight", reader.ReadFloat("charRelaxSpIdleConfig.sp1IdleWeight") },
+                { "sp2IdleWeight", reader.ReadFloat("charRelaxSpIdleConfig.sp2IdleWeight") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterDisplayCharRelaxReactConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "relativeAngleDegreeRange", ReadPayloadVector2(reader, "charRelaxReactConfig.relativeAngleDegreeRange") },
+                { "invertRange", reader.ReadBool32("charRelaxReactConfig.invertRange") },
+                { "cameraZoomScaleRange", ReadPayloadVector2(reader, "charRelaxReactConfig.cameraZoomScaleRange") },
+                { "triggerOnce", reader.ReadBool32("charRelaxReactConfig.triggerOnce") },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadPayloadObjectList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            Func<ManagedReferencePayloadReader, OrderedDictionary> readItem
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(readItem(reader));
+            }
+            return items;
+        }
+
+        private static List<string> ReadPayloadStringList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<string>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(reader.ReadAlignedAsciiString($"{fieldName}[{i}]"));
+            }
+            return items;
+        }
+
+        private static OrderedDictionary ReadPayloadPPtr(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "fileId", reader.ReadInt32($"{fieldName}.fileId") },
+                { "pathId", reader.ReadInt64($"{fieldName}.pathId") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadVector2(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "x", reader.ReadFloat($"{fieldName}.x") },
+                { "y", reader.ReadFloat($"{fieldName}.y") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadVector3(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "x", reader.ReadFloat($"{fieldName}.x") },
+                { "y", reader.ReadFloat($"{fieldName}.y") },
+                { "z", reader.ReadFloat($"{fieldName}.z") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadVector4(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "x", reader.ReadFloat($"{fieldName}.x") },
+                { "y", reader.ReadFloat($"{fieldName}.y") },
+                { "z", reader.ReadFloat($"{fieldName}.z") },
+                { "w", reader.ReadFloat($"{fieldName}.w") },
+            };
+        }
+
+        private static OrderedDictionary BuildCharacterHeightEnum(int value)
+        {
+            return new OrderedDictionary
+            {
+                { "value", value },
+                { "name", value switch
+                    {
+                        0 => "GirlFlattie",
+                        1 => "GirlHighHeel",
+                        2 => "Female",
+                        3 => "Male",
+                        _ => "",
+                    }
+                },
+            };
+        }
         private static bool TryDecodeDialogMainFlowData(
             ManagedReferenceHeader header,
             byte[] rawData,
