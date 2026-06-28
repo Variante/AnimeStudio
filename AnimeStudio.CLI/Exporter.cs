@@ -1388,7 +1388,84 @@ namespace AnimeStudio.CLI
                     };
                     reader.EnsureComplete();
                     return true;
-                }                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityTemplateData", StringComparison.Ordinal))
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.AbilityEntityTemplateData",
+                        "metadata field order is known, but BB field-meta blocks, surrounding/follow configs, skillDataBundle, model/nav/physical/interactive tails are still preserved as raw words",
+                        new[]
+                        {
+                            "maxStackingCnt", "maxStackingCntBB", "lifeType", "duration", "durationBB",
+                            "maxDurationForServer", "canMove", "moveHeight", "moveRadius", "moveType",
+                            "useFrameTick", "surroundingConfig", "followMountPointConfig", "hasSkill",
+                            "skillDataBundle", "requiresCastSkillConfirm", "hasModel", "modelKey",
+                            "mountPointDef", "modelParts", "hasNavObstacle", "navObstacleConfig",
+                            "canBeSelect", "detectedHeight", "detectedRadius", "physical", "physicalData",
+                            "hasBattlePhysicalComponents", "hasAirborneComponent", "hasKnockDownComponent",
+                            "hasPullComponent", "hasMovementComponent", "hasAnimation", "animationPath",
+                            "hasInteractiveAction", "maxPickUpTime", "interactiveActions", "isEnergySource",
+                            "maxIgniteNum", "maxIgniteNumBB", "isUltimateShow", "hasSuperArmor",
+                            "initialSuperArmor", "healthType", "headBarType", "overrideHeadBarDeltaTowardCamera",
+                            "headBarDeltaTowardCamera", "headBar2DOffset", "useHeadBarGuideLine"
+                        }
+                    );
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityRootComponentData", StringComparison.Ordinal))
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.Core.AbilityEntityRootComponentData",
+                        "metadata field order is known, but BB field-meta/string blocks are not yet field-accurate; payload is preserved as raw words",
+                        new[]
+                        {
+                            "maxStackingCnt", "maxStackingCntBB", "lifeType", "duration", "durationBB",
+                            "isEnergySource", "maxIgniteNum", "maxIgniteNumBB", "moveUseFrameTick", "headBarType"
+                        }
+                    );
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityControllerData", StringComparison.Ordinal))
+                {
+                    if (length == 0)
+                    {
+                        data = new OrderedDictionary
+                        {
+                            { "$decoded", true },
+                            { "layout", "Beyond.Gameplay.Core.AbilityEntityControllerData" },
+                            { "offset", offset },
+                            { "length", length },
+                        };
+                    }
+                    else
+                    {
+                        data = BuildPartialAbilityEntityPayloadData(
+                            rawData,
+                            offset,
+                            length,
+                            "Beyond.Gameplay.Core.AbilityEntityControllerData",
+                            "metadata has no own fields; observed payload contains nested movement/rotation serialized blocks and is preserved as raw words/string hints"
+                        );
+                    }
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyRootComponentData", StringComparison.Ordinal))
                 {
@@ -1535,6 +1612,23 @@ namespace AnimeStudio.CLI
                         { "rawFloat32", ReadPayloadFloatArray(reader, "rawFloat32", 12) },
                     };
                     reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterMovementComponentData", StringComparison.Ordinal)
+                    && length > 0
+                    && length != 48)
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.Core.CharacterMovementComponentData",
+                        "non-enemy payload length differs from the known 48-byte movement block; preserved as raw words until MovementData/proxyShape/list sections are decoded",
+                        new[] { "movementData", "proxyShape", "overrideMoveMode", "abilityEntityMovementDataList" }
+                    );
                     return true;
                 }
 
@@ -1800,6 +1894,42 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static OrderedDictionary BuildPartialAbilityEntityPayloadData(
+            byte[] rawData,
+            int offset,
+            int length,
+            string layout,
+            string layoutNote,
+            string[] metadataFieldOrder = null
+        )
+        {
+            var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+            var data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "layoutNote", layoutNote },
+                { "offset", offset },
+                { "length", length },
+            };
+            if (metadataFieldOrder != null && metadataFieldOrder.Length > 0)
+            {
+                data["metadataFieldOrder"] = metadataFieldOrder;
+            }
+
+            var stringHintBudget = 64;
+            var stringHints = CollectAlignedStringHints(rawData, offset, length, ref stringHintBudget);
+            if (stringHints.Count > 0)
+            {
+                data["stringHints"] = stringHints;
+            }
+            data["rawWords"] = ReadRemainingPayloadRawInt32Words(reader, "rawWords", 8192);
+            reader.EnsureComplete();
+            return data;
         }
 
         private static bool IsEmptyEnemyComponentType(ManagedReferenceHeader header)
