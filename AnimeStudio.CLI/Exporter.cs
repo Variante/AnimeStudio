@@ -224,6 +224,7 @@ namespace AnimeStudio.CLI
                 OrderedDictionary recoveredManagedReferences = null;
                 HashSet<long> expectedManagedReferenceRids = null;
                 var recoveredManagedReferencesTail = false;
+                var recoveredManagedReferencesFullyDecoded = false;
                 string partialTypeTreeSourceLabel = null;
 
                 if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && Studio.assemblyLoader.Loaded)
@@ -338,6 +339,7 @@ namespace AnimeStudio.CLI
                         recoveredManagedReferences = recoveredReferences;
                         type["references"] = recoveredReferences;
                         recoveredManagedReferencesTail = true;
+                        recoveredManagedReferencesFullyDecoded = !ContainsManagedReferenceRecoveryMarker(recoveredReferences);
                     }
                 }
 
@@ -392,7 +394,7 @@ namespace AnimeStudio.CLI
                     exportTypeTree,
                     typeTreeSource,
                     rawSidecar,
-                    builtInTypeTreeException,
+                    recoveredManagedReferencesFullyDecoded ? null : builtInTypeTreeException,
                     scriptTypeTreeConversion,
                     scriptTypeTreeDecodeException,
                     type
@@ -405,12 +407,16 @@ namespace AnimeStudio.CLI
                         {
                             { "field", "references" },
                             { "type", "ManagedReferencesRegistry" },
+                            { "status", recoveredManagedReferencesFullyDecoded ? "fullyDecoded" : "heuristic" },
                             { "source", partialTypeTreeSourceLabel ?? typeTreeSource },
                             { "bytesReadBeforeRecovery", partialTypeTreeBytesRead },
-                            { "decodeError", $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}" },
                             { "expectedRidCount", expectedManagedReferenceRids?.Count ?? 0 },
                         };
-                        if (partialTypeTreeStoppedAt != null)
+                        if (!recoveredManagedReferencesFullyDecoded)
+                        {
+                            recovery["decodeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
+                        }
+                        if (partialTypeTreeStoppedAt != null && !recoveredManagedReferencesFullyDecoded)
                         {
                             recovery["stoppedAt"] = partialTypeTreeStoppedAt;
                         }
@@ -419,6 +425,7 @@ namespace AnimeStudio.CLI
                             recovery["recoveredRidCount"] = recoveredRefIds.Count;
                         }
                         meta["managedReferencesRegistryRecovered"] = true;
+                        meta["managedReferencesRegistryFullyDecoded"] = recoveredManagedReferencesFullyDecoded;
                         meta["managedReferencesRegistryRecovery"] = recovery;
                     }
                     else
@@ -688,16 +695,64 @@ namespace AnimeStudio.CLI
             references = new OrderedDictionary
             {
                 { "$recovered", true },
-                { "$heuristic", true },
-                { "stringHintLimitPerReference", MaxHeuristicStringHintsPerReference },
-                { "stringHintLimitPerObject", MaxHeuristicStringHintsPerObject },
-                { "ridLinkLimitPerReference", MaxHeuristicRidLinksPerReference },
-                { "ridLinkLimitPerObject", MaxHeuristicRidLinksPerObject },
                 { "version", version },
                 { "count", count },
                 { "RefIds", entries },
             };
+            if (headers.Any(header => !header.IsNullSentinel && !IsStrongManagedReferenceHeader(header))
+                || entries.Any(ContainsManagedReferenceRecoveryMarker))
+            {
+                references["$heuristic"] = true;
+                references["stringHintLimitPerReference"] = MaxHeuristicStringHintsPerReference;
+                references["stringHintLimitPerObject"] = MaxHeuristicStringHintsPerObject;
+                references["ridLinkLimitPerReference"] = MaxHeuristicRidLinksPerReference;
+                references["ridLinkLimitPerObject"] = MaxHeuristicRidLinksPerObject;
+            }
+            else
+            {
+                references["$decoded"] = true;
+            }
             return true;
+        }
+
+        private static bool ContainsManagedReferenceRecoveryMarker(object value)
+        {
+            if (value == null)
+            {
+                return false;
+            }
+
+            if (value is OrderedDictionary dictionary)
+            {
+                if ((dictionary.Contains("$heuristic") && dictionary["$heuristic"] is bool heuristic && heuristic)
+                    || (dictionary.Contains("$unparsed") && dictionary["$unparsed"] is bool unparsed && unparsed)
+                    || (dictionary.Contains("$partial") && dictionary["$partial"] is bool partial && partial))
+                {
+                    return true;
+                }
+
+                foreach (DictionaryEntry entry in dictionary)
+                {
+                    if (ContainsManagedReferenceRecoveryMarker(entry.Value))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            if (value is IEnumerable enumerable && value is not string)
+            {
+                foreach (var item in enumerable)
+                {
+                    if (ContainsManagedReferenceRecoveryMarker(item))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static bool TryParseManagedReferenceHeaders(
