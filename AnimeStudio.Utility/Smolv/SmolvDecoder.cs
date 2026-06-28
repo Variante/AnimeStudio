@@ -38,12 +38,15 @@ namespace Smolv
 			}
 
 			long initPosition = stream.Position;
-			stream.Position += HeaderSize - sizeof(uint);
-			int size = stream.ReadByte() | stream.ReadByte() << 8 | stream.ReadByte() << 16 | stream.ReadByte() << 24;
+			var header = new byte[HeaderSize];
+			int read = stream.Read(header, 0, header.Length);
 			stream.Position = initPosition;
-			return size;
+			if (read != HeaderSize || !CheckSmolHeader(header))
+			{
+				return 0;
+			}
+			return BitConverter.ToInt32(header, 5 * sizeof(uint));
 		}
-
 		public static byte[] Decode(byte[] data)
 		{
 			if (data == null)
@@ -112,7 +115,13 @@ namespace Smolv
 			{
 				throw new ArgumentNullException(nameof(outputStream));
 			}
-			if (inputStream.Length < HeaderSize)
+			if (inputSize < HeaderSize)
+			{
+				return false;
+			}
+			long inputStartPosition = inputStream.Position;
+			long inputEndPosition = inputStartPosition + inputSize;
+			if (inputEndPosition > inputStream.Length)
 			{
 				return false;
 			}
@@ -121,29 +130,43 @@ namespace Smolv
 			{
 				using (BinaryWriter output = new BinaryWriter(outputStream, Encoding.UTF8, true))
 				{
-					long inputEndPosition = input.BaseStream.Position + inputSize;
 					long outputStartPosition = output.BaseStream.Position;
 
-					// Header
+					uint magic = input.ReadUInt32();
+					if (magic != SmolHeaderMagic)
+					{
+						return false;
+					}
+
+					// Header. The top byte of the version word is SMOL-V's own encoding version.
 					output.Write(SpirVHeaderMagic);
-					input.BaseStream.Position += sizeof(uint);
-					uint version = input.ReadUInt32();
+					uint versionWord = input.ReadUInt32();
+					int smolVersion = (int)(versionWord >> 24);
+					uint version = versionWord & 0x00FFFFFF;
+					if (!IsValidSpirVVersion(version) || smolVersion < 0 || smolVersion > CurrentSmolEncodingVersion)
+					{
+						return false;
+					}
+					int knownOpsCount = SpvOpExtensions.GetKnownOpsCount(smolVersion);
+					if (knownOpsCount == 0)
+					{
+						return false;
+					}
 					output.Write(version);
 					uint generator = input.ReadUInt32();
 					output.Write(generator);
-					int bound = input.ReadInt32();
+					uint bound = input.ReadUInt32();
 					output.Write(bound);
 					uint schema = input.ReadUInt32();
 					output.Write(schema);
 					int decodedSize = input.ReadInt32();
 
-					// Body
-					int prevResult = 0;
-					int prevDecorate = 0;
+					uint prevResult = 0;
+					uint prevDecorate = 0;
 					while (input.BaseStream.Position < inputEndPosition)
 					{
 						// read length + opcode
-						if (!ReadLengthOp(input, out uint instrLen, out SpvOp op))
+						if (!ReadLengthOp(input, inputEndPosition, out uint instrLen, out SpvOp op))
 						{
 							return false;
 						}
@@ -157,9 +180,9 @@ namespace Smolv
 
 						uint ioffs = 1;
 						// read type as varint, if we have it
-						if (op.OpHasType())
+						if (op.OpHasType(knownOpsCount))
 						{
-							if (!ReadVarint(input, out uint value))
+							if (!ReadVarint(input, inputEndPosition, out uint value))
 							{
 								return false;
 							}
@@ -169,14 +192,14 @@ namespace Smolv
 						}
 
 						// read result as delta+varint, if we have it
-						if (op.OpHasResult())
+						if (op.OpHasResult(knownOpsCount))
 						{
-							if (!ReadVarint(input, out uint value))
+							if (!ReadVarint(input, inputEndPosition, out uint value))
 							{
 								return false;
 							}
 
-							int zds = prevResult + ZigDecode(value);
+							uint zds = prevResult + unchecked((uint)ZigDecode(value));
 							output.Write(zds);
 							prevResult = zds;
 							ioffs++;
@@ -185,50 +208,123 @@ namespace Smolv
 						// Decorate: IDs relative to previous decorate
 						if (op == SpvOp.Decorate || op == SpvOp.MemberDecorate)
 						{
-							if (!ReadVarint(input, out uint value))
+							if (!ReadVarint(input, inputEndPosition, out uint value))
 							{
 								return false;
 							}
 
-							int zds = prevDecorate + unchecked((int)value);
+							uint zds = prevDecorate + unchecked((uint)ZigDecode(value));
 							output.Write(zds);
 							prevDecorate = zds;
 							ioffs++;
 						}
 
-						// Read this many IDs, that are relative to result ID
-						int relativeCount = op.OpDeltaFromResult();
-						bool inverted = false;
-						if (relativeCount < 0)
+						// SMOL-V version 0+ stores all MemberDecorate entries for one target in a compact run.
+						if (op == SpvOp.MemberDecorate)
 						{
-							inverted = true;
-							relativeCount = -relativeCount;
+							if (input.BaseStream.Position >= inputEndPosition)
+							{
+								return false;
+							}
+							int count = input.ReadByte();
+							int prevIndex = 0;
+							int prevOffset = 0;
+							for (int m = 0; m < count; ++m)
+							{
+								if (!ReadVarint(input, inputEndPosition, out uint memberIndex))
+								{
+									return false;
+								}
+								memberIndex += unchecked((uint)prevIndex);
+								prevIndex = unchecked((int)memberIndex);
+
+								if (!ReadVarint(input, inputEndPosition, out uint memberDec))
+								{
+									return false;
+								}
+								int knownExtraOps = DecorationExtraOps(unchecked((int)memberDec));
+								uint memberLen;
+								if (knownExtraOps == -1)
+								{
+									if (!ReadVarint(input, inputEndPosition, out memberLen))
+									{
+										return false;
+									}
+									memberLen += 4;
+								}
+								else
+								{
+									memberLen = (uint)(4 + knownExtraOps);
+								}
+
+								if (m != 0)
+								{
+									output.Write((memberLen << 16) | (uint)op);
+									output.Write(prevDecorate);
+								}
+								output.Write(memberIndex);
+								output.Write(memberDec);
+
+								if (memberDec == 35)
+								{
+									if (memberLen != 5)
+									{
+										return false;
+									}
+									if (!ReadVarint(input, inputEndPosition, out uint value))
+									{
+										return false;
+									}
+									value += unchecked((uint)prevOffset);
+									output.Write(value);
+									prevOffset = unchecked((int)value);
+								}
+								else
+								{
+									for (uint i = 4; i < memberLen; ++i)
+									{
+										if (!ReadVarint(input, inputEndPosition, out uint value))
+										{
+											return false;
+										}
+										output.Write(value);
+									}
+								}
+							}
+							continue;
 						}
+
+						// Read this many IDs, that are relative to result ID.
+						int relativeCount = op.OpDeltaFromResult(knownOpsCount);
 						for (int i = 0; i < relativeCount && ioffs < instrLen; ++i, ++ioffs)
 						{
-							if (!ReadVarint(input, out uint value))
+							if (!ReadVarint(input, inputEndPosition, out uint value))
 							{
 								return false;
 							}
 
-							int zd = inverted ? ZigDecode(value) : unchecked((int)value);
+							uint zd = unchecked((uint)ZigDecode(value));
 							output.Write(prevResult - zd);
 						}
 
 						if (wasSwizzle && instrLen <= 9)
 						{
+							if (input.BaseStream.Position >= inputEndPosition)
+							{
+								return false;
+							}
 							uint swizzle = input.ReadByte();
 							if (instrLen > 5) output.Write(swizzle >> 6);
 							if (instrLen > 6) output.Write((swizzle >> 4) & 3);
 							if (instrLen > 7) output.Write((swizzle >> 2) & 3);
 							if (instrLen > 8) output.Write(swizzle & 3);
 						}
-						else if (op.OpVarRest())
+						else if (op.OpVarRest(knownOpsCount))
 						{
 							// read rest of words with variable encoding
 							for (; ioffs < instrLen; ++ioffs)
 							{
-								if (!ReadVarint(input, out uint value))
+								if (!ReadVarint(input, inputEndPosition, out uint value))
 								{
 									return false;
 								}
@@ -240,7 +336,7 @@ namespace Smolv
 							// read rest of words without any encoding
 							for (; ioffs < instrLen; ++ioffs)
 							{
-								if (input.BaseStream.Position + 4 > input.BaseStream.Length)
+								if (input.BaseStream.Position + 4 > inputEndPosition)
 								{
 									return false;
 								}
@@ -260,18 +356,18 @@ namespace Smolv
 				}
 			}
 		}
-
 		private static bool CheckSmolHeader(byte[] data)
 		{
-			if (!CheckGenericHeader(data, SmolHeaderMagic))
+			if (!CheckGenericHeader(data, SmolHeaderMagic, 0x00FFFFFF))
 			{
 				return false;
 			}
 
-			return true;
+			int smolVersion = (int)(BitConverter.ToUInt32(data, 1 * sizeof(uint)) >> 24);
+			return smolVersion >= 0 && smolVersion <= CurrentSmolEncodingVersion;
 		}
 
-		private static bool CheckGenericHeader(byte[] data, uint expectedMagic)
+		private static bool CheckGenericHeader(byte[] data, uint expectedMagic, uint versionMask)
 		{
 			if (data == null)
 			{
@@ -288,41 +384,39 @@ namespace Smolv
 				return false;
 			}
 
-			uint headerVersion = BitConverter.ToUInt32(data, 1 * sizeof(uint));
-			if (headerVersion < 0x00010000 || headerVersion > 0x00010300)
-			{
-				// only support 1.0 through 1.3
-				return false;
-			}
-
-			return true;
+			uint headerVersion = BitConverter.ToUInt32(data, 1 * sizeof(uint)) & versionMask;
+			return IsValidSpirVVersion(headerVersion);
 		}
 
-		private static bool ReadVarint(BinaryReader input, out uint value)
+		private static bool IsValidSpirVVersion(uint version)
+		{
+			return version >= 0x00010000 && version <= 0x00010600;
+		}
+		private static bool ReadVarint(BinaryReader input, long inputEndPosition, out uint value)
 		{
 			uint v = 0;
 			int shift = 0;
-			while (input.BaseStream.Position < input.BaseStream.Length)
+			while (input.BaseStream.Position < inputEndPosition && shift <= 28)
 			{
 				byte b = input.ReadByte();
 				v |= unchecked((uint)(b & 127) << shift);
-				shift += 7;
 				if ((b & 128) == 0)
 				{
-					break;
+					value = v;
+					return true;
 				}
+				shift += 7;
 			}
 
-			value = v;
-			// @TODO: report failures
-			return true;
+			value = 0;
+			return false;
 		}
 
-		private static bool ReadLengthOp(BinaryReader input, out uint len, out SpvOp op)
+		private static bool ReadLengthOp(BinaryReader input, long inputEndPosition, out uint len, out SpvOp op)
 		{
 			len = default;
 			op = default;
-			if (!ReadVarint(input, out uint value))
+			if (!ReadVarint(input, inputEndPosition, out uint value))
 			{
 				return false;
 			}
@@ -333,7 +427,6 @@ namespace Smolv
 			len = DecodeLen(op, len);
 			return true;
 		}
-
 		/// <summary>
 		/// Remap most common Op codes (Load, Store, Decorate, VectorShuffle etc.) to be in &lt; 16 range, for 
 		/// more compact varint encoding. This basically swaps rarely used op values that are &lt; 16 with the
@@ -475,5 +568,6 @@ namespace Smolv
 		public const uint SmolHeaderMagic = 0x534D4F4C;
 
 		private const int HeaderSize = 6 * sizeof(uint);
+		private const int CurrentSmolEncodingVersion = 1;
 	}
 }

@@ -310,15 +310,72 @@ namespace Smolv
 		NamedBarrierInitialize = 328,
 		MemoryNamedBarrier = 329,
 		ModuleProcessed = 330,
-
+		ExecutionModeId = 331,
+		DecorateId = 332,
+		GroupNonUniformElect = 333,
+		GroupNonUniformAll = 334,
+		GroupNonUniformAny = 335,
+		GroupNonUniformAllEqual = 336,
+		GroupNonUniformBroadcast = 337,
+		GroupNonUniformBroadcastFirst = 338,
+		GroupNonUniformBallot = 339,
+		GroupNonUniformInverseBallot = 340,
+		GroupNonUniformBallotBitExtract = 341,
+		GroupNonUniformBallotBitCount = 342,
+		GroupNonUniformBallotFindLSB = 343,
+		GroupNonUniformBallotFindMSB = 344,
+		GroupNonUniformShuffle = 345,
+		GroupNonUniformShuffleXor = 346,
+		GroupNonUniformShuffleUp = 347,
+		GroupNonUniformShuffleDown = 348,
+		GroupNonUniformIAdd = 349,
+		GroupNonUniformFAdd = 350,
+		GroupNonUniformIMul = 351,
+		GroupNonUniformFMul = 352,
+		GroupNonUniformSMin = 353,
+		GroupNonUniformUMin = 354,
+		GroupNonUniformFMin = 355,
+		GroupNonUniformSMax = 356,
+		GroupNonUniformUMax = 357,
+		GroupNonUniformFMax = 358,
+		GroupNonUniformBitwiseAnd = 359,
+		GroupNonUniformBitwiseOr = 360,
+		GroupNonUniformBitwiseXor = 361,
+		GroupNonUniformLogicalAnd = 362,
+		GroupNonUniformLogicalOr = 363,
+		GroupNonUniformLogicalXor = 364,
+		GroupNonUniformQuadBroadcast = 365,
+		GroupNonUniformQuadSwap = 366,
 		KnownOpsCount,
 	}
 
 	public static class SpvOpExtensions
 	{
+		public static int GetKnownOpsCount(int version)
+		{
+			if (version == 0)
+			{
+				return (int)SpvOp.ModuleProcessed + 1;
+			}
+			if (version == 1)
+			{
+				return (int)SpvOp.GroupNonUniformQuadSwap + 1;
+			}
+			return 0;
+		}
+
 		public static bool OpHasResult(this SpvOp _this)
 		{
+			return _this.OpHasResult((int)SpvOp.KnownOpsCount);
+		}
+
+		public static bool OpHasResult(this SpvOp _this, int knownOpsCount)
+		{
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
+			{
+				return false;
+			}
+			if ((int)_this >= knownOpsCount)
 			{
 				return false;
 			}
@@ -327,7 +384,16 @@ namespace Smolv
 
 		public static bool OpHasType(this SpvOp _this)
 		{
+			return _this.OpHasType((int)SpvOp.KnownOpsCount);
+		}
+
+		public static bool OpHasType(this SpvOp _this, int knownOpsCount)
+		{
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
+			{
+				return false;
+			}
+			if ((int)_this >= knownOpsCount)
 			{
 				return false;
 			}
@@ -336,7 +402,16 @@ namespace Smolv
 
 		public static int OpDeltaFromResult(this SpvOp _this)
 		{
+			return _this.OpDeltaFromResult((int)SpvOp.KnownOpsCount);
+		}
+
+		public static int OpDeltaFromResult(this SpvOp _this, int knownOpsCount)
+		{
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
+			{
+				return 0;
+			}
+			if ((int)_this >= knownOpsCount)
 			{
 				return 0;
 			}
@@ -345,7 +420,16 @@ namespace Smolv
 
 		public static bool OpVarRest(this SpvOp _this)
 		{
+			return _this.OpVarRest((int)SpvOp.KnownOpsCount);
+		}
+
+		public static bool OpVarRest(this SpvOp _this, int knownOpsCount)
+		{
 			if (_this < 0 || _this >= SpvOp.KnownOpsCount)
+			{
+				return false;
+			}
+			if ((int)_this >= knownOpsCount)
 			{
 				return false;
 			}
