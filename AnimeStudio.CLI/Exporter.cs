@@ -43,6 +43,46 @@ namespace AnimeStudio.CLI
             "LPT9",
         };
 
+        private static string Texture2DNoOutputReason(Texture2D texture)
+        {
+            if (texture.m_Width <= 0 || texture.m_Height <= 0)
+                return "zero_size_texture";
+            if ((texture.image_data?.Size ?? 0) == 0)
+                return "empty_image_payload";
+            return "decode_failed";
+        }
+
+        private static string EscapeLogField(string value)
+        {
+            return (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        private static string QuoteLogField(string value)
+        {
+            return $"\"{EscapeLogField(value)}\"";
+        }
+
+        private static void LogTexture2DNoOutput(AssetItem item, Texture2D texture)
+        {
+            var streamData = texture.m_StreamData;
+            Logger.Warning(
+                "Texture2D no output " +
+                $"reason={Texture2DNoOutputReason(texture)} " +
+                $"name={QuoteLogField(item.Text)} " +
+                $"PathID={item.m_PathID} " +
+                $"SourceFile={QuoteLogField(item.SourceFile?.fileName)} " +
+                $"SourceOriginalPath={QuoteLogField(item.SourceFile?.originalPath)} " +
+                $"SourceOffset={item.SourceFile?.offset ?? -1} " +
+                $"Container={QuoteLogField(item.Container)} " +
+                $"Width={texture.m_Width} " +
+                $"Height={texture.m_Height} " +
+                $"Format={texture.m_TextureFormat} " +
+                $"ImageSize={texture.image_data?.Size ?? 0} " +
+                $"StreamSize={streamData?.size ?? 0} " +
+                $"StreamOffset={streamData?.offset ?? 0} " +
+                $"StreamPath={QuoteLogField(streamData?.path)}");
+        }
+
         public static bool ExportTexture2D(AssetItem item, string exportPath)
         {
             var m_Texture2D = (Texture2D)item.Asset;
@@ -53,7 +93,10 @@ namespace AnimeStudio.CLI
                     return false;
                 var image = m_Texture2D.ConvertToImage(true);
                 if (image == null)
+                {
+                    LogTexture2DNoOutput(item, m_Texture2D);
                     return false;
+                }
                 using (image)
                 {
                     using (var file = File.Create(exportFullPath))
