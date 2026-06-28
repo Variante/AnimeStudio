@@ -890,6 +890,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeStoryConfigManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeEnemySimpleComponentData(
                 header,
                 rawData,
@@ -1106,6 +1116,34 @@ namespace AnimeStudio.CLI
                 }
 
                 var value = Encoding.UTF8.GetString(rawData, Position, length);
+                Position = (Position + length + 3) & ~3;
+                if (Position > end)
+                {
+                    throw new InvalidDataException($"aligned string {fieldName} at {stringOffset} passes payload end");
+                }
+                return value;
+            }
+
+            public string ReadAlignedUtf8String(string fieldName)
+            {
+                var stringOffset = Position;
+                var length = ReadInt32(fieldName);
+                if (length < 0 || length > 1024)
+                {
+                    throw new InvalidDataException($"invalid string length {length} in {fieldName}");
+                }
+                EnsureAvailable(length, fieldName);
+
+                string value;
+                try
+                {
+                    value = StrictUtf8Encoding.GetString(rawData, Position, length);
+                }
+                catch (DecoderFallbackException ex)
+                {
+                    throw new InvalidDataException($"invalid UTF-8 bytes in {fieldName}", ex);
+                }
+
                 Position = (Position + length + 3) & ~3;
                 if (Position > end)
                 {
@@ -1394,6 +1432,71 @@ namespace AnimeStudio.CLI
                 data = null;
                 return false;
             }
+        }
+
+        private static bool TryDecodeStoryConfigManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length < 0
+                || offset + length > rawData.Length
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (string.Equals(header.ClassName, "CameraTrackData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.CameraTrackData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "modeDesc", reader.ReadAlignedUtf8String("modeDesc") },
+                        { "camResName", reader.ReadAlignedUtf8String("camResName") },
+                        { "useTarget", reader.ReadBool32("useTarget") },
+                        { "mountPoint", reader.ReadInt32("mountPoint") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "I18NSubtitleAudioBean", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.I18NSubtitleAudioBean" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "defaultPlayable", ReadPayloadPPtr(reader, "defaultPlayable") },
+                        { "audioLangKey2SubtitleTrack", ReadPayloadIntPPtrDictionary(reader, "audioLangKey2SubtitleTrack", "audioLangKey", "subtitleTrack", 16) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
         }
 
         private static bool TryDecodeEnemySimpleComponentData(
@@ -2030,6 +2133,42 @@ namespace AnimeStudio.CLI
                 items.Add(reader.ReadInt32($"{fieldName}[{i}]"));
             }
             return items;
+        }
+
+        private static OrderedDictionary ReadPayloadIntPPtrDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string keyName,
+            string valueName,
+            int maxCount
+        )
+        {
+            var keys = ReadPayloadInt32List(reader, $"{fieldName}.keys", maxCount);
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keys.Count)
+            {
+                throw new InvalidDataException($"key/value count mismatch for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = ReadPayloadPPtr(reader, $"{fieldName}.values[{i}]");
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { keyName, keys[i] },
+                    { valueName, value },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", keys },
+                { "values", values },
+                { "entries", entries },
+            };
         }
 
         private static List<string> ReadPayloadStringListFixed(
