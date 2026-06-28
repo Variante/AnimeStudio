@@ -292,10 +292,52 @@ namespace AnimeStudio.CLI
                 var isMatchRegex = nameFilters.IsNullOrEmpty() || nameFilters.Any(y => y.IsMatch(x.Text));
                 var isFilteredType = typeFilters.IsNullOrEmpty() || typeFilters.Contains(x.Type);
                 var isContainerMatch = containerFilters.IsNullOrEmpty() || containerFilters.Any(y => y.IsMatch(x.Container));
-                return isMatchRegex && isFilteredType && isContainerMatch;
+                var isFilterDataMatch = !isMatchRegex && MatchesFilterDataIdentity(x);
+                return (isMatchRegex || isFilterDataMatch) && isFilteredType && isContainerMatch;
             }).ToArray();
             exportableAssets.Clear();
             exportableAssets.AddRange(matches);
+        }
+
+        private static bool MatchesFilterDataIdentity(AssetItem asset)
+        {
+            var filterItems = assetsManager.FilterData?.Items;
+            if (asset == null || filterItems == null || filterItems.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var item in filterItems)
+            {
+                if (item.Type != asset.Type || item.PathID != asset.m_PathID)
+                {
+                    continue;
+                }
+                if (item.Offset >= 0 && (asset.SourceFile?.offset ?? -1L) != item.Offset)
+                {
+                    continue;
+                }
+                if (!MatchesFilterDataSource(asset.SourceFile, item.Source))
+                {
+                    continue;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        private static bool MatchesFilterDataSource(SerializedFile sourceFile, string filterSource)
+        {
+            if (sourceFile == null || string.IsNullOrEmpty(filterSource))
+            {
+                return false;
+            }
+
+            var sourceOriginalPath = sourceFile.originalPath ?? string.Empty;
+            var sourceName = sourceFile.fileName ?? string.Empty;
+            return string.Equals(sourceOriginalPath, filterSource, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(sourceName, filterSource, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetFileName(sourceOriginalPath), Path.GetFileName(filterSource), StringComparison.OrdinalIgnoreCase);
         }
 
         public static void ProcessAssetData(Object asset, Dictionary<Object, AssetItem> objectAssetItemDic, List<(PPtr<Object>, string)> mihoyoBinDataNames, List<(PPtr<Object>, string)> containers, ref int i) 
