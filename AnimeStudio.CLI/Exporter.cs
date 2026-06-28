@@ -222,6 +222,9 @@ namespace AnimeStudio.CLI
                 long partialTypeTreeBytesRead = 0;
                 OrderedDictionary partialTypeTreeStoppedAt = null;
                 OrderedDictionary recoveredManagedReferences = null;
+                HashSet<long> expectedManagedReferenceRids = null;
+                var recoveredManagedReferencesTail = false;
+                string partialTypeTreeSourceLabel = null;
 
                 if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && Studio.assemblyLoader.Loaded)
                 {
@@ -288,16 +291,18 @@ namespace AnimeStudio.CLI
 
                 if (type == null && builtInTypeTreeException != null && exportTypeTree != null)
                 {
-                    TryDecodeMonoBehaviourPartial(
+                    if (TryDecodeMonoBehaviourPartial(
                         item,
                         m_MonoBehaviour,
                         exportTypeTree,
                         builtInTypeTreeException,
-                        "serialized TypeTree",
                         out type,
                         out partialTypeTreeException,
                         out partialTypeTreeBytesRead
-                    );
+                    ))
+                    {
+                        partialTypeTreeSourceLabel = "serialized TypeTree";
+                    }
                 }
 
                 if (type == null
@@ -309,13 +314,13 @@ namespace AnimeStudio.CLI
                         m_MonoBehaviour,
                         scriptTypeTreeConversion.TypeTree,
                         scriptTypeTreeDecodeException,
-                        "script-derived TypeTree",
                         out type,
                         out partialTypeTreeException,
                         out partialTypeTreeBytesRead))
                     {
                         exportTypeTree = scriptTypeTreeConversion.TypeTree;
                         typeTreeSource = "scriptDerivedPartial";
+                        partialTypeTreeSourceLabel = "script-derived TypeTree";
                     }
                 }
 
@@ -327,11 +332,12 @@ namespace AnimeStudio.CLI
                     && TryGetPartialDecodeStart(partialTypeTreeStoppedAt, "references", "ManagedReferencesRegistry", out var referencesStartOffset)
                     && IsFinalTopLevelTypeTreeField(exportTypeTree, "references", "ManagedReferencesRegistry"))
                 {
-                    var expectedRids = CollectManagedReferenceRids(type);
-                    if (expectedRids.Count > 0
-                        && TryRecoverManagedReferences(rawData, referencesStartOffset, expectedRids, out var recoveredReferences))
+                    expectedManagedReferenceRids = CollectManagedReferenceRids(type);
+                    if (TryRecoverManagedReferences(rawData, referencesStartOffset, expectedManagedReferenceRids, out var recoveredReferences))
                     {
                         recoveredManagedReferences = recoveredReferences;
+                        type["references"] = recoveredReferences;
+                        recoveredManagedReferencesTail = true;
                     }
                 }
 
@@ -368,6 +374,14 @@ namespace AnimeStudio.CLI
                     }
                     return false;
                 }
+                if (partialTypeTreeException != null && !recoveredManagedReferencesTail)
+                {
+                    LogPartialMonoBehaviourDecode(
+                        item,
+                        partialTypeTreeSourceLabel ?? typeTreeSource,
+                        partialTypeTreeException ?? decodeException
+                    );
+                }
                 // Embed export metadata so consumers can rebuild PathID links and
                 // tie script-derived MonoBehaviours back to their runtime class.
                 // Stored under "$animestudio" to avoid colliding with real fields.
@@ -385,16 +399,41 @@ namespace AnimeStudio.CLI
                 );
                 if (partialTypeTreeException != null)
                 {
-                    meta["partialTypeTreeDecode"] = true;
-                    meta["partialTypeTreeBytesRead"] = partialTypeTreeBytesRead;
-                    meta["partialTypeTreeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
-                    if (partialTypeTreeStoppedAt != null)
+                    if (recoveredManagedReferencesTail)
                     {
-                        meta["partialTypeTreeStoppedAt"] = partialTypeTreeStoppedAt;
+                        var recovery = new OrderedDictionary
+                        {
+                            { "field", "references" },
+                            { "type", "ManagedReferencesRegistry" },
+                            { "source", partialTypeTreeSourceLabel ?? typeTreeSource },
+                            { "bytesReadBeforeRecovery", partialTypeTreeBytesRead },
+                            { "decodeError", $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}" },
+                            { "expectedRidCount", expectedManagedReferenceRids?.Count ?? 0 },
+                        };
+                        if (partialTypeTreeStoppedAt != null)
+                        {
+                            recovery["stoppedAt"] = partialTypeTreeStoppedAt;
+                        }
+                        if (recoveredManagedReferences?["RefIds"] is ICollection recoveredRefIds)
+                        {
+                            recovery["recoveredRidCount"] = recoveredRefIds.Count;
+                        }
+                        meta["managedReferencesRegistryRecovered"] = true;
+                        meta["managedReferencesRegistryRecovery"] = recovery;
                     }
-                    if (recoveredManagedReferences != null)
+                    else
                     {
-                        meta["recoveredManagedReferences"] = recoveredManagedReferences;
+                        meta["partialTypeTreeDecode"] = true;
+                        meta["partialTypeTreeBytesRead"] = partialTypeTreeBytesRead;
+                        meta["partialTypeTreeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
+                        if (partialTypeTreeStoppedAt != null)
+                        {
+                            meta["partialTypeTreeStoppedAt"] = partialTypeTreeStoppedAt;
+                        }
+                        if (recoveredManagedReferences != null)
+                        {
+                            meta["recoveredManagedReferences"] = recoveredManagedReferences;
+                        }
                     }
                 }
                 type.Insert(0, "$animestudio", meta);
@@ -411,11 +450,12 @@ namespace AnimeStudio.CLI
             public string ClassName { get; set; }
             public string Namespace { get; set; }
             public string AssemblyName { get; set; }
+            public bool IsNullSentinel { get; set; }
             public int HeaderStart { get; set; }
             public int DataStart { get; set; }
         }
 
-        private const int MinManagedReferenceHeaderBytes = 24;
+        private const int MinManagedReferenceHeaderBytes = 20;
         private const int MaxHeuristicStringHintsPerReference = 16;
         private const int MaxHeuristicStringHintsPerObject = 256;
         private const int MaxHeuristicRidLinksPerReference = 64;
@@ -580,7 +620,8 @@ namespace AnimeStudio.CLI
         )
         {
             references = null;
-            if (rawData == null || startOffset < 0 || startOffset > rawData.Length - 8 || expectedRids == null || expectedRids.Count == 0)
+            expectedRids ??= new HashSet<long>();
+            if (rawData == null || startOffset < 0 || startOffset > rawData.Length - 8)
             {
                 return false;
             }
@@ -720,6 +761,17 @@ namespace AnimeStudio.CLI
             ref int remainingRidLinkBudget
         )
         {
+            if (header?.IsNullSentinel == true && length == 0)
+            {
+                return new OrderedDictionary
+                {
+                    { "$null", true },
+                    { "$inferred", true },
+                    { "offset", offset },
+                    { "length", length },
+                };
+            }
+
             if (TryDecodeDialogMainFlowData(
                 header,
                 rawData,
@@ -2137,19 +2189,25 @@ namespace AnimeStudio.CLI
             var pos = offset;
             var rid = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(pos, 8));
             pos += 8;
-            if (rid <= 0)
-            {
-                return false;
-            }
             if (!TryReadAlignedAsciiString(rawData, ref pos, out var className)
                 || !TryReadAlignedAsciiString(rawData, ref pos, out var namespaceName)
                 || !TryReadAlignedAsciiString(rawData, ref pos, out var assemblyName))
             {
                 return false;
             }
-            if (!LooksLikeManagedReferenceClassName(className)
-                || !LooksLikeManagedReferenceNamespace(namespaceName)
-                || !LooksLikeManagedReferenceAssemblyName(assemblyName))
+
+            var isNullSentinel = rid < 0
+                && string.IsNullOrEmpty(className)
+                && string.IsNullOrEmpty(namespaceName)
+                && string.IsNullOrEmpty(assemblyName);
+            if (rid == 0 || (rid < 0 && !isNullSentinel))
+            {
+                return false;
+            }
+            if (!isNullSentinel
+                && (!LooksLikeManagedReferenceClassName(className)
+                    || !LooksLikeManagedReferenceNamespace(namespaceName)
+                    || !LooksLikeManagedReferenceAssemblyName(assemblyName)))
             {
                 return false;
             }
@@ -2160,6 +2218,7 @@ namespace AnimeStudio.CLI
                 ClassName = className,
                 Namespace = namespaceName,
                 AssemblyName = assemblyName,
+                IsNullSentinel = isNullSentinel,
                 HeaderStart = offset,
                 DataStart = pos,
             };
@@ -2284,12 +2343,29 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static void LogPartialMonoBehaviourDecode(AssetItem item, string sourceLabel, Exception reason)
+        {
+            var itemLocation =
+                $" [PathID={item.m_PathID}, SourceFile={item.SourceFile?.fileName ?? ""}, " +
+                $"SourceOriginalPath={item.SourceFile?.originalPath ?? ""}, Container={item.Container ?? ""}]";
+            if (reason != null)
+            {
+                Logger.Warning(
+                    $"Partially decoded MonoBehaviour {item.Text} with {sourceLabel}{itemLocation} after " +
+                    $"{reason.GetType().Name}: {reason.Message}"
+                );
+            }
+            else
+            {
+                Logger.Warning($"Partially decoded MonoBehaviour {item.Text} with {sourceLabel}{itemLocation}");
+            }
+        }
+
         private static bool TryDecodeMonoBehaviourPartial(
             AssetItem item,
             MonoBehaviour m_MonoBehaviour,
             TypeTree typeTree,
             Exception decodeException,
-            string sourceLabel,
             out OrderedDictionary type,
             out Exception partialTypeTreeException,
             out long partialTypeTreeBytesRead
@@ -2316,19 +2392,6 @@ namespace AnimeStudio.CLI
                 }
 
                 type = partialType;
-                var reason = partialTypeTreeException ?? decodeException;
-                if (reason != null)
-                {
-                    Logger.Warning(
-                        $"Partially decoded MonoBehaviour {item.Text} with {sourceLabel} after " +
-                        $"{reason.GetType().Name}: {reason.Message}"
-                    );
-                }
-                else
-                {
-                    Logger.Warning($"Partially decoded MonoBehaviour {item.Text} with {sourceLabel}");
-                }
-
                 partialTypeTreeException ??= decodeException;
                 return true;
             }
