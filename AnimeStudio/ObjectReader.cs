@@ -32,7 +32,17 @@ namespace AnimeStudio
             else
             {
                 type = ClassIDType.UnknownType;
-                Logger.Warning($"Unknown ClassIDType {objectInfo.classID} for object with PathID {m_PathID} in file {assetsFile.fileName}");
+                var typeTreeRoot = objectInfo.serializedType?.m_Type?.m_Nodes?.Count > 0
+                    ? $"{objectInfo.serializedType.m_Type.m_Nodes[0].m_Type} {objectInfo.serializedType.m_Type.m_Nodes[0].m_Name}".Trim()
+                    : "<none>";
+                var sourcePath = string.IsNullOrEmpty(assetsFile.originalPath) ? assetsFile.fullName : assetsFile.originalPath;
+                Logger.Warning(
+                    $"Unknown ClassIDType {objectInfo.classID} (0x{unchecked((uint)objectInfo.classID):X8}) " +
+                    $"for object with PathID {m_PathID} in file {assetsFile.fileName}; " +
+                    $"source={sourcePath}; bundleOffset=0x{assetsFile.offset:X8}; " +
+                    $"byteStart=0x{objectInfo.byteStart:X8}; byteSize=0x{objectInfo.byteSize:X8}; " +
+                    $"typeID={objectInfo.typeID}; typeTreeRoot={typeTreeRoot}"
+                );
             }
             serializedType = objectInfo.serializedType;
             platform = assetsFile.m_TargetPlatform;

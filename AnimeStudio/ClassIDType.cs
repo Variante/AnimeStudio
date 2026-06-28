@@ -458,6 +458,7 @@ namespace AnimeStudio
         SkinnedMeshTessellationData = 1169597823,
         GPUParticleSystemAsset = 1169606015,
         LookAtConstraint = 1183024399,
+        HGCorrectiveBoneData = 1186182244,
         PipelineStateObjectCollection = 1196786179,
         VolumetricFogVolume = 1202048452,
         SpriteAtlasImporter = 1210832254,
