@@ -793,6 +793,38 @@ namespace AnimeStudio.CLI
             {
                 return decodedData;
             }
+
+            if (TryDecodeSkeletalMorphMappingData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeSkeletalMorphShaderParamData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeSkeletalMorphShaderPropMappingData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeDialogTeleportEntityActionData(
                 header,
                 rawData,
@@ -1056,6 +1088,209 @@ namespace AnimeStudio.CLI
                 data = null;
                 return false;
             }
+        }
+
+        private static bool TryDecodeSkeletalMorphMappingData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "SkeletalMorphMappingData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length < 20
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.SkeletalMorphMappingData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "id", reader.ReadInt32("id") },
+                    { "nameHash", BuildPayloadHash32(reader.ReadInt32("nameHash")) },
+                    { "tagHash", BuildPayloadHash32(reader.ReadInt32("tagHash")) },
+                    { "partType", reader.ReadInt32("partType") },
+                    { "bones", ReadPayloadObjectList(reader, "bones", 64, ReadSkeletalMorphBoneMappingData) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeSkeletalMorphShaderParamData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (string.Equals(header.ClassName, "SkMorphShaderParamFloat", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.SkMorphShaderParamFloat" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "name", reader.ReadAlignedAsciiString("name") },
+                        { "channelIndex", reader.ReadInt32("channelIndex") },
+                        { "value", reader.ReadFloat("value") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "SkMorphShaderParamVector4", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.SkMorphShaderParamVector4" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "name", reader.ReadAlignedAsciiString("name") },
+                        { "channelIndex", reader.ReadInt32("channelIndex") },
+                        { "value", ReadPayloadVector4(reader, "value") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeSkeletalMorphShaderPropMappingData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "SkeletalMorphShaderPropMappingData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 32
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var paramRidOffset = offset + 24;
+                var paramRid = default(long);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.SkeletalMorphShaderPropMappingData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "id", reader.ReadInt32("id") },
+                    { "nameHash", BuildPayloadHash32(reader.ReadInt32("nameHash")) },
+                    { "tagHash", BuildPayloadHash32(reader.ReadInt32("tagHash")) },
+                    { "partType", reader.ReadInt32("partType") },
+                    { "paramSetIndex", reader.ReadInt32("paramSetIndex") },
+                    { "componentIndex", reader.ReadInt32("componentIndex") },
+                };
+                paramRid = reader.ReadInt64("shaderParamRid");
+                data["shaderParam"] = BuildManagedReferenceRidValue(paramRid, recoveredByRid, paramRidOffset);
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary BuildManagedReferenceRidValue(
+            long rid,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            int offset
+        )
+        {
+            if (recoveredByRid != null && recoveredByRid.TryGetValue(rid, out var target))
+            {
+                return BuildManagedReferenceRidLink(rid, target, offset);
+            }
+
+            return new OrderedDictionary
+            {
+                { "offset", offset },
+                { "rid", rid },
+            };
+        }
+
+        private static OrderedDictionary ReadSkeletalMorphBoneMappingData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "nameHash", BuildPayloadHash32(reader.ReadInt32("bones.nameHash")) },
+                { "index", reader.ReadInt32("bones.index") },
+                { "position", ReadPayloadVector3(reader, "bones.position") },
+                { "rotation", ReadPayloadVector3(reader, "bones.rotation") },
+                { "scale", ReadPayloadVector3(reader, "bones.scale") },
+            };
+        }
+
+        private static OrderedDictionary BuildPayloadHash32(int value)
+        {
+            return new OrderedDictionary
+            {
+                { "value", value },
+                { "hex", $"0x{unchecked((uint)value):x8}" },
+            };
         }
 
         private static OrderedDictionary ReadCharacterDisplayDecoItemConfig(ManagedReferencePayloadReader reader)
