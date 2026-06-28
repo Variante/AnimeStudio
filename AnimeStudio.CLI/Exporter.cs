@@ -1289,6 +1289,38 @@ namespace AnimeStudio.CLI
             try
             {
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyTemplateData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var modelKey = reader.ReadAlignedAsciiString("modelKey");
+                    if (!TryFindEnemyTemplateTail(rawData, reader.Position, offset + length, out var postModelOffset))
+                    {
+                        throw new InvalidDataException("EnemyTemplateData tail layout was not recognized");
+                    }
+                    if (((postModelOffset - reader.Position) % 4) != 0)
+                    {
+                        throw new InvalidDataException("EnemyTemplateData attributes block is not word-aligned");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.EnemyTemplateData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "modelKey", modelKey },
+                        { "attributesDataRawWords", ReadPayloadRawInt32Words(reader, "attributesDataRawWords", (postModelOffset - reader.Position) / 4) },
+                        { "postModelKey", reader.ReadAlignedAsciiString("postModelKey") },
+                        { "rank", ReadPayloadEnum32(reader, "rank", 0, 8) },
+                        { "subRank", ReadPayloadEnum32(reader, "subRank", 0, 16) },
+                        { "dontBlockCharge", reader.ReadBool32("dontBlockCharge") },
+                        { "animConfigPath", reader.ReadAlignedAsciiString("animConfigPath") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyRootComponentData", StringComparison.Ordinal))
                 {
@@ -1577,6 +1609,46 @@ namespace AnimeStudio.CLI
                 }
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilitySystemForEnemyPartData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    if ((length % 4) != 0)
+                    {
+                        throw new InvalidDataException("AbilitySystemForEnemyPartData payload is not word-aligned");
+                    }
+
+                    var wordCount = length / 4;
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.AbilitySystemForEnemyPartData" },
+                        { "offset", offset },
+                        { "length", length },
+                    };
+
+                    if (wordCount >= EnemyPartAbilityScalarWordCount
+                        && CanDecodeEnemyPartAbilityScalarTail(rawData, offset + length - (EnemyPartAbilityScalarWordCount * 4), EnemyPartAbilityScalarWordCount * 4))
+                    {
+                        data["partAttributesRawWords"] = ReadPayloadRawInt32Words(
+                            reader,
+                            "partAttributesRawWords",
+                            wordCount - EnemyPartAbilityScalarWordCount
+                        );
+                        data["fields"] = ReadEnemyPartAbilityScalarFields(reader);
+                    }
+                    else
+                    {
+                        data["$partial"] = true;
+                        data["layoutNote"] = "word-aligned numeric payload; scalar tail did not match the known AbilitySystemForEnemyPartData field constraints";
+                        data["rawWords"] = ReadPayloadRawInt32Words(reader, "rawWords", wordCount);
+                    }
+
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "NavMeshObstacleCapsuleData", StringComparison.Ordinal))
                 {
                     var reader = new ManagedReferencePayloadReader(rawData, offset, length);
@@ -1649,6 +1721,8 @@ namespace AnimeStudio.CLI
                 || (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AdditionalBattleShapeComponentData", StringComparison.Ordinal));
         }
+
+        private const int EnemyPartAbilityScalarWordCount = 20;
 
         private static List<int> ReadPayloadInt32List(
             ManagedReferencePayloadReader reader,
@@ -1725,6 +1799,122 @@ namespace AnimeStudio.CLI
                 values.Add(BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}]")));
             }
             return values;
+        }
+
+        private static bool TryFindEnemyTemplateTail(
+            byte[] rawData,
+            int searchStart,
+            int payloadEnd,
+            out int postModelOffset
+        )
+        {
+            postModelOffset = -1;
+            if (rawData == null || searchStart < 0 || payloadEnd < searchStart || payloadEnd > rawData.Length)
+            {
+                return false;
+            }
+
+            for (var candidate = searchStart; candidate <= payloadEnd - 16; candidate += 4)
+            {
+                var postEnd = candidate;
+                if (!TryReadAlignedAsciiString(rawData, ref postEnd, out var postModelKey)
+                    || postModelKey.Length == 0
+                    || postEnd > payloadEnd - 12)
+                {
+                    continue;
+                }
+
+                var animOffset = postEnd + 12;
+                var animEnd = animOffset;
+                if (!TryReadAlignedAsciiString(rawData, ref animEnd, out var animConfigPath)
+                    || animEnd != payloadEnd
+                    || !animConfigPath.StartsWith("Assets/", StringComparison.Ordinal)
+                    || !animConfigPath.EndsWith(".asset", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                postModelOffset = candidate;
+                return true;
+            }
+
+            return false;
+        }
+        private static bool CanDecodeEnemyPartAbilityScalarTail(byte[] rawData, int offset, int length)
+        {
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                ReadEnemyPartAbilityScalarFields(reader);
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadEnemyPartAbilityScalarFields(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "defaultEnabled", reader.ReadBool32("defaultEnabled") },
+                { "asIndividualInExcludeTargetProcessor", reader.ReadBool32("asIndividualInExcludeTargetProcessor") },
+                { "useMainBodyHp", reader.ReadBool32("useMainBodyHp") },
+                { "useMainBodyPoise", reader.ReadBool32("useMainBodyPoise") },
+                { "showHpBar", reader.ReadBool32("showHpBar") },
+                { "hpBarMountPoint", ReadPayloadEnum32(reader, "hpBarMountPoint", 0, 256) },
+                { "hpBarEnemyRank", ReadPayloadEnum32(reader, "hpBarEnemyRank", 0, 2) },
+                { "showPoise", reader.ReadBool32("showPoise") },
+                { "canBeHitIndividually", reader.ReadBool32("canBeHitIndividually") },
+                { "halfBlockAngle", ReadPayloadFloatRange(reader, "halfBlockAngle", -360f, 360f) },
+                { "halfRecommendedAngle", ReadPayloadFloatRange(reader, "halfRecommendedAngle", -360f, 360f) },
+                { "onlyHitByNormalAttack", reader.ReadBool32("onlyHitByNormalAttack") },
+                { "canBeDirectlyBuffed", reader.ReadBool32("canBeDirectlyBuffed") },
+                { "damageRatio", ReadPayloadFloatRange(reader, "damageRatio", -1000f, 1000f) },
+                { "poiseRatio", ReadPayloadFloatRange(reader, "poiseRatio", -1000f, 1000f) },
+                { "showDamageTextPart", reader.ReadBool32("showDamageTextPart") },
+                { "showDamageTextTransferred", reader.ReadBool32("showDamageTextTransferred") },
+                { "transferredDamageTextLocation", ReadPayloadEnum32(reader, "transferredDamageTextLocation", 0, 2) },
+                { "overrideLockPoint", ReadPayloadEnum32(reader, "overrideLockPoint", 0, 256) },
+                { "damageTransferType", ReadPayloadEnum32(reader, "damageTransferType", 0, 2) },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadEnum32(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int min,
+            int max
+        )
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value < min || value > max)
+            {
+                throw new InvalidDataException($"invalid enum32 {value} in {fieldName}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "value", value },
+            };
+        }
+
+        private static float ReadPayloadFloatRange(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            float min,
+            float max
+        )
+        {
+            var value = reader.ReadFloat(fieldName);
+            if (value < min || value > max)
+            {
+                throw new InvalidDataException($"float {value} in {fieldName} is outside [{min}, {max}]");
+            }
+
+            return value;
         }
 
         private static List<OrderedDictionary> ReadRemainingPayloadRawInt32Words(
