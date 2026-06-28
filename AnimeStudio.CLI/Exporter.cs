@@ -960,6 +960,8 @@ namespace AnimeStudio.CLI
                 end = offset + length;
             }
 
+            public byte[] RawData => rawData;
+
             public int Position { get; private set; }
 
             public int End => end;
@@ -1387,6 +1389,31 @@ namespace AnimeStudio.CLI
                 }
 
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilitySystemData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "$partial", true },
+                        { "layout", "Beyond.Gameplay.Core.AbilitySystemData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "shapeData", new OrderedDictionary
+                            {
+                                { "detectedRadius", reader.ReadFloat("shapeData.detectedRadius") },
+                                { "detectedHeight", reader.ReadFloat("shapeData.detectedHeight") },
+                            }
+                        },
+                        { "modeConfig", ReadAbilitySystemModeConfig(reader) },
+                    };
+                    data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
+                    data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
+                    reader.EnsureComplete();
+                    return true;
+                }                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyAIComponentData", StringComparison.Ordinal))
                 {
@@ -1930,6 +1957,144 @@ namespace AnimeStudio.CLI
             return ReadPayloadRawInt32Words(reader, fieldName, reader.Remaining / 4);
         }
 
+        private static OrderedDictionary ReadAbilitySystemModeConfig(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "modes", ReadPayloadObjectList(reader, "modeConfig.modes", 128, ReadAbilitySystemModeData) },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemModeData(ManagedReferencePayloadReader reader)
+        {
+            var item = new OrderedDictionary
+            {
+                { "modeId", reader.ReadAlignedAsciiString("modeConfig.modes.modeId") },
+                { "defaultEnable", reader.ReadBool32("modeConfig.modes.defaultEnable") },
+                { "modeLayer", reader.ReadAlignedAsciiString("modeConfig.modes.modeLayer") },
+                { "parentModeId", reader.ReadAlignedAsciiString("modeConfig.modes.parentModeId") },
+                { "addExtraPassiveSkill", reader.ReadBool32("modeConfig.modes.addExtraPassiveSkill") },
+                { "extraPassiveSkillId", ReadPayloadStringList(reader, "modeConfig.modes.extraPassiveSkillId", 64) },
+                { "overrideMoveSpeed", reader.ReadBool32("modeConfig.modes.overrideMoveSpeed") },
+                { "moveSpeed", reader.ReadFloat("modeConfig.modes.moveSpeed") },
+                { "overrideRotateRate", reader.ReadBool32("modeConfig.modes.overrideRotateRate") },
+                { "rotateRate", reader.ReadFloat("modeConfig.modes.rotateRate") },
+                { "isStrafing", reader.ReadBool32("modeConfig.modes.isStrafing") },
+                { "moveInterruptAttack", reader.ReadBool32("modeConfig.modes.moveInterruptAttack") },
+                { "overrideNormalAttackList", reader.ReadBool32("modeConfig.modes.overrideNormalAttackList") },
+                { "normalAttackList", ReadPayloadStringList(reader, "modeConfig.modes.normalAttackList", 64) },
+                { "applyAnimBool", reader.ReadBool32("modeConfig.modes.applyAnimBool") },
+                { "animBoolName", reader.ReadAlignedAsciiString("modeConfig.modes.animBoolName") },
+            };
+
+            var compactTail = ReadAbilitySystemModeCompactTail(reader);
+            if (compactTail.Count > 0)
+            {
+                item["compactTailRawWords"] = compactTail;
+            }
+            return item;
+        }
+
+        private static List<OrderedDictionary> ReadAbilitySystemModeCompactTail(ManagedReferencePayloadReader reader)
+        {
+            var words = new List<OrderedDictionary>();
+            while (reader.Remaining >= 4)
+            {
+                if (LooksLikeAbilitySystemSectionString(reader, out _))
+                {
+                    break;
+                }
+
+                words.Add(BuildPayloadHash32(reader.ReadInt32("modeConfig.modes.compactTailRawWords")));
+            }
+            return words;
+        }
+
+        private static bool LooksLikeAbilitySystemSectionString(ManagedReferencePayloadReader reader, out string value)
+        {
+            value = null;
+            if (reader.Remaining < 4)
+            {
+                return false;
+            }
+
+            var pos = reader.Position;
+            if (!TryReadAlignedAsciiString(reader.RawData, ref pos, out value) || pos > reader.End || value.Length == 0)
+            {
+                value = null;
+                return false;
+            }
+
+            return value.Length >= 3 && IsLikelyAbilitySystemSectionString(value);
+        }
+
+        private static bool IsLikelyAbilitySystemSectionString(string value)
+        {
+            return value.StartsWith("Skill", StringComparison.Ordinal)
+                || value.StartsWith("Battle", StringComparison.Ordinal)
+                || value.StartsWith("Patrol", StringComparison.Ordinal)
+                || value.StartsWith("Vigilance", StringComparison.Ordinal)
+                || value.StartsWith("eny_", StringComparison.Ordinal)
+                || value.StartsWith("buff_", StringComparison.Ordinal)
+                || value.StartsWith("common_", StringComparison.Ordinal)
+                || value.StartsWith("EntityBB_", StringComparison.Ordinal);
+        }
+
+        private static List<OrderedDictionary> CollectAbilitySystemRemainingStringHints(
+            byte[] rawData,
+            int offset,
+            int length,
+            int maxCount
+        )
+        {
+            var hints = new List<OrderedDictionary>();
+            if (rawData == null || offset < 0 || length <= 0 || offset + length > rawData.Length)
+            {
+                return hints;
+            }
+
+            var end = offset + length;
+            for (var pos = offset; pos <= end - 4 && hints.Count < maxCount; pos += 4)
+            {
+                var stringPos = pos;
+                if (TryReadAlignedAsciiString(rawData, ref stringPos, out var value)
+                    && stringPos <= end
+                    && value.Length >= 3
+                    && IsLikelyAbilitySystemSectionString(value))
+                {
+                    hints.Add(new OrderedDictionary
+                    {
+                        { "offset", pos },
+                        { "value", value },
+                    });
+                }
+            }
+            return hints;
+        }
+        private static List<OrderedDictionary> ReadRemainingPayloadRawInt32Words(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            if ((reader.Remaining % 4) != 0)
+            {
+                throw new InvalidDataException($"remaining bytes for {fieldName} are not word-aligned");
+            }
+
+            var count = reader.Remaining / 4;
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid word count {count} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}]")));
+            }
+            return values;
+        }
         private static OrderedDictionary ReadEnemyRootTransformRecord(ManagedReferencePayloadReader reader)
         {
             return new OrderedDictionary
