@@ -825,6 +825,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeEnemySimpleComponentData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeDialogTeleportEntityActionData(
                 header,
                 rawData,
@@ -952,6 +962,8 @@ namespace AnimeStudio.CLI
             public int Position { get; private set; }
 
             public int End => end;
+
+            public int Remaining => end - Position;
 
             public void EnsureComplete()
             {
@@ -1254,6 +1266,471 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static bool TryDecodeEnemySimpleComponentData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length < 0
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyRootComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var locatorIds = ReadPayloadInt32List(reader, "locatorIds", 128);
+                    var locatorNameCount = reader.ReadInt32("locatorNames.count");
+                    if (locatorNameCount != locatorIds.Count)
+                    {
+                        throw new InvalidDataException("EnemyRootComponentData id/name count mismatch");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.EnemyRootComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "locatorIds", locatorIds },
+                        { "locatorNames", ReadPayloadStringListFixed(reader, "locatorNames", locatorNameCount) },
+                        { "unknown0", reader.ReadInt32("unknown0") },
+                        { "transformRecords", ReadPayloadObjectList(reader, "transformRecords", 16, ReadEnemyRootTransformRecord) },
+                        { "trailingWords", ReadRemainingPayloadRawInt32Words(reader, "trailingWords") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ModelComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.View.ModelComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "modelId", reader.ReadAlignedAsciiString("modelId") },
+                        { "modelScale", reader.ReadFloat("modelScale") },
+                        { "enableBornFadeIn", reader.ReadBool32("enableBornFadeIn") },
+                        { "bornFadeInTime", reader.ReadFloat("bornFadeInTime") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyAnimationComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.EnemyAnimationComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "animationConfigPath", reader.ReadAlignedAsciiString("animationConfigPath") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyAIComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyAIComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "aiCfgPath", reader.ReadAlignedAsciiString("aiCfgPath") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "RotatorComponentData", StringComparison.Ordinal)
+                    && length == 4)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.RotatorComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWord", BuildPayloadHash32(reader.ReadInt32("rawWord")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterMovementComponentData", StringComparison.Ordinal)
+                    && length == 48)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.CharacterMovementComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawFloat32", ReadPayloadFloatArray(reader, "rawFloat32", 12) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "RVOComponentData", StringComparison.Ordinal)
+                    && length == 12)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.RVOComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rvoCfgRawWords", ReadPayloadRawInt32Words(reader, "rvoCfgRawWords", 3) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyControllerData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.Core.EnemyControllerData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "deadEffectDelay", reader.ReadFloat("deadEffectDelay") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ControlledStateComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.ControlledStateComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "airborneEnabled", reader.ReadBool32("airborneEnabled") },
+                        { "knockDownEnabled", reader.ReadBool32("knockDownEnabled") },
+                        { "blowOffEnabled", reader.ReadBool32("blowOffEnabled") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "MeshAdjustComponentData", StringComparison.Ordinal)
+                    && length == 96)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.MeshAdjustComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawFloat32", ReadPayloadFloatArray(reader, "rawFloat32", 24) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPivotComponentData", StringComparison.Ordinal)
+                    && length == 20)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.EnemyPivotComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 4) },
+                        { "maxWarpRatio", reader.ReadFloat("maxWarpRatio") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPartAnimatorComponentData", StringComparison.Ordinal)
+                    && length == 4)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.EnemyPartAnimatorComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWord", BuildPayloadHash32(reader.ReadInt32("rawWord")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPartsRootComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "prefixWords", ReadPayloadRawInt32Words(reader, "prefixWords", 8) },
+                        { "partName", reader.ReadAlignedAsciiString("partName") },
+                        { "partTags", ReadEnemyPartTagList(reader) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NavMeshObstacleCapsuleData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.Core.NavMeshObstacleCapsuleData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "m_radius", reader.ReadFloat("m_radius") },
+                        { "m_height", reader.ReadFloat("m_height") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NavMeshObstacleBoxData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.Core.NavMeshObstacleBoxData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "size", ReadPayloadVector3(reader, "size") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (length == 0
+                    && string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && IsEmptyEnemyComponentType(header))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", string.IsNullOrEmpty(header.Namespace) ? header.ClassName : $"{header.Namespace}.{header.ClassName}" },
+                        { "offset", offset },
+                        { "length", length },
+                    };
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool IsEmptyEnemyComponentType(ManagedReferenceHeader header)
+        {
+            if (header == null)
+            {
+                return false;
+            }
+
+            return (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && (string.Equals(header.ClassName, "NavigationComponentData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "PullComponentData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "EnemyAudioComponentData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "EnemyHurtAnimComponentData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "PushBackComponentData", StringComparison.Ordinal)))
+                || (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AdditionalBattleShapeComponentData", StringComparison.Ordinal));
+        }
+
+        private static List<int> ReadPayloadInt32List(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<int>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(reader.ReadInt32($"{fieldName}[{i}]"));
+            }
+            return items;
+        }
+
+        private static List<string> ReadPayloadStringListFixed(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count
+        )
+        {
+            if (count < 0 || count > 256)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<string>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(reader.ReadAlignedAsciiString($"{fieldName}[{i}]"));
+            }
+            return items;
+        }
+
+        private static List<float> ReadPayloadFloatArray(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count
+        )
+        {
+            if (count < 0 || count > 1024)
+            {
+                throw new InvalidDataException($"invalid float count {count} for {fieldName}");
+            }
+
+            var values = new List<float>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(reader.ReadFloat($"{fieldName}[{i}]"));
+            }
+            return values;
+        }
+
+        private static List<OrderedDictionary> ReadPayloadRawInt32Words(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count
+        )
+        {
+            if (count < 0 || count > 1024)
+            {
+                throw new InvalidDataException($"invalid word count {count} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}]")));
+            }
+            return values;
+        }
+
+        private static List<OrderedDictionary> ReadRemainingPayloadRawInt32Words(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            if ((reader.Remaining % 4) != 0)
+            {
+                throw new InvalidDataException($"remaining bytes for {fieldName} are not word-aligned");
+            }
+
+            return ReadPayloadRawInt32Words(reader, fieldName, reader.Remaining / 4);
+        }
+
+        private static OrderedDictionary ReadEnemyRootTransformRecord(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "name", reader.ReadAlignedAsciiString("transformRecords.name") },
+                { "rawFloat32", ReadPayloadFloatArray(reader, "transformRecords.rawFloat32", 7) },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartTagList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("partTags.count");
+            if (count < 0 || count > 16)
+            {
+                throw new InvalidDataException($"invalid count {count} for partTags");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "path", reader.ReadAlignedAsciiString($"partTags[{i}].path") },
+                    { "hash", BuildPayloadHash32(reader.ReadInt32($"partTags[{i}].hash")) },
+                });
+            }
+            return values;
+        }
         private static OrderedDictionary BuildManagedReferenceRidValue(
             long rid,
             IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
