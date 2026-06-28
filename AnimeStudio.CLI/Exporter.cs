@@ -52,6 +52,17 @@ namespace AnimeStudio.CLI
             return "decode_failed";
         }
 
+        private static string MeshNoOutputReason(Mesh mesh)
+        {
+            if (mesh.m_VertexCount <= 0)
+                return "zero_vertex_count";
+            if (mesh.m_Vertices == null)
+                return "missing_vertex_buffer";
+            if (mesh.m_Vertices.Length == 0)
+                return "empty_vertex_buffer";
+            return "unknown";
+        }
+
         private static string EscapeLogField(string value)
         {
             return (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -81,6 +92,24 @@ namespace AnimeStudio.CLI
                 $"StreamSize={streamData?.size ?? 0} " +
                 $"StreamOffset={streamData?.offset ?? 0} " +
                 $"StreamPath={QuoteLogField(streamData?.path)}");
+        }
+
+        private static void LogMeshNoOutput(AssetItem item, Mesh mesh, string reason = null)
+        {
+            Logger.Warning(
+                "Mesh no output " +
+                $"reason={reason ?? MeshNoOutputReason(mesh)} " +
+                $"name={QuoteLogField(item.Text)} " +
+                $"PathID={item.m_PathID} " +
+                $"SourceFile={QuoteLogField(item.SourceFile?.fileName)} " +
+                $"SourceOriginalPath={QuoteLogField(item.SourceFile?.originalPath)} " +
+                $"SourceOffset={item.SourceFile?.offset ?? -1} " +
+                $"Container={QuoteLogField(item.Container)} " +
+                $"VertexCount={mesh.m_VertexCount} " +
+                $"VerticesLength={mesh.m_Vertices?.Length ?? 0} " +
+                $"SubMeshCount={mesh.m_SubMeshes?.Count ?? 0} " +
+                $"IndexCount={mesh.m_Indices?.Count ?? 0} " +
+                $"ByteSize={item.FullSize}");
         }
 
         public static bool ExportTexture2D(AssetItem item, string exportPath)
@@ -5138,14 +5167,21 @@ namespace AnimeStudio.CLI
         {
             var m_Mesh = (Mesh)item.Asset;
             if (m_Mesh.m_VertexCount <= 0)
+            {
+                LogMeshNoOutput(item, m_Mesh);
                 return false;
+            }
             if (!TryExportFile(exportPath, item, ".obj", out var exportFullPath))
+            {
+                LogMeshNoOutput(item, m_Mesh, "output_path_unavailable");
                 return false;
+            }
             var sb = new StringBuilder();
             sb.AppendLine("g " + m_Mesh.m_Name);
             #region Vertices
             if (m_Mesh.m_Vertices == null || m_Mesh.m_Vertices.Length == 0)
             {
+                LogMeshNoOutput(item, m_Mesh);
                 return false;
             }
             int c = 3;
