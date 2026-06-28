@@ -880,6 +880,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeAnimationEventHandlerData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeEnemySimpleComponentData(
                 header,
                 rawData,
@@ -1325,6 +1335,57 @@ namespace AnimeStudio.CLI
                 };
                 paramRid = reader.ReadInt64("shaderParamRid");
                 data["shaderParam"] = BuildManagedReferenceRidValue(paramRid, recoveredByRid, paramRidOffset);
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeAnimationEventHandlerData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length != 4
+                || offset + length > rawData.Length
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(header.ClassName, "FastAnimationEventHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "CharPerformHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "FootStepHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "PostAudioHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "WeaponVisibleHandler", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "layout", $"Beyond.Gameplay.View.Animation.{header.ClassName}" },
+                    { "baseLayout", "Beyond.Gameplay.View.Animation.FastAnimationEventHandler" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "_weightThreshold", reader.ReadFloat("_weightThreshold") },
+                };
                 reader.EnsureComplete();
                 return true;
             }
