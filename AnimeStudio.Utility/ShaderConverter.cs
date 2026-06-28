@@ -15,6 +15,13 @@ namespace AnimeStudio
 {
     public static class ShaderConverter
     {
+        internal const int EndfieldShaderSubProgramVersion = 0x0C11FFE2;
+        internal const int EndfieldD3D11ProgramType = 33;
+
+        internal static bool IsEndfieldD3D11ProgramType(ShaderGpuProgramType programType)
+        {
+            return (int)programType == EndfieldD3D11ProgramType;
+        }
         public static string Convert(this Shader shader)
         {
             if (shader.platformInfos != null)
@@ -293,45 +300,45 @@ namespace AnimeStudio
                 {
                     sb.Append(ConvertSerializedShaderState(m_Passe.m_State));
 
-                    if (m_Passe.progVertex.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progVertex))
                     {
                         sb.Append("Program \"vp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progVertex, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progFragment.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progFragment))
                     {
                         sb.Append("Program \"fp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progFragment, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progGeometry.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progGeometry))
                     {
                         sb.Append("Program \"gp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progGeometry, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progHull.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progHull))
                     {
                         sb.Append("Program \"hp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progHull, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progDomain.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progDomain))
                     {
                         sb.Append("Program \"dp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progDomain, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
 
-                    if (m_Passe.progRayTracing?.m_SubPrograms.Count > 0)
+                    if (HasSerializedProgramSubPrograms(m_Passe.progRayTracing))
                     {
                         sb.Append("Program \"rtp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progRayTracing, platforms, shaderPrograms, unavailableReason));
                         sb.Append("}\n");
                     }
                 }
@@ -340,6 +347,25 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
+        private static bool HasSerializedProgramSubPrograms(SerializedProgram program)
+        {
+            return program?.m_SubPrograms?.Count > 0
+                || program?.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true;
+        }
+
+        private static string ConvertSerializedProgram(SerializedProgram program, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        {
+            var sb = new StringBuilder();
+            if (program.m_SubPrograms?.Count > 0)
+            {
+                sb.Append(ConvertSerializedSubPrograms(program.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+            }
+            if (program.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true)
+            {
+                sb.Append(ConvertSerializedPlayerSubPrograms(program.m_PlayerSubPrograms, platforms, shaderPrograms, unavailableReason));
+            }
+            return sb.ToString();
+        }
         private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
         {
             var sb = new StringBuilder();
@@ -393,6 +419,51 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
+        private static string ConvertSerializedPlayerSubPrograms(List<List<SerializedPlayerSubProgram>> m_PlayerSubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        {
+            var sb = new StringBuilder();
+            var groups = m_PlayerSubPrograms.SelectMany(x => x).GroupBy(x => x.m_BlobIndex);
+            foreach (var group in groups)
+            {
+                var programs = group.GroupBy(x => x.m_GpuProgramType);
+                foreach (var program in programs)
+                {
+                    if (platforms == null || platforms.Length == 0)
+                    {
+                        foreach (var subProgram in program)
+                        {
+                            sb.Append("SubProgram \"unknown\" {\n");
+                            AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                            sb.Append("\n}\n");
+                        }
+                        continue;
+                    }
+
+                    for (int i = 0; i < platforms.Length; i++)
+                    {
+                        var platform = platforms[i];
+                        if (CheckGpuProgramUsable(platform, program.Key))
+                        {
+                            foreach (var subProgram in program)
+                            {
+                                sb.Append($"SubProgram \"{GetPlatformString(platform)} \" {{\n");
+                                if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
+                                {
+                                    sb.Append(parsedSubProgram.Export());
+                                }
+                                else
+                                {
+                                    AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                                }
+                                sb.Append("\n}\n");
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            return sb.ToString();
+        }
         private static bool TryGetShaderSubProgram(ShaderProgram[] shaderPrograms, int platformIndex, uint blobIndex, out ShaderSubProgram subProgram)
         {
             subProgram = null;
@@ -419,6 +490,15 @@ namespace AnimeStudio
         private static void AppendUnavailableSubProgram(StringBuilder sb, SerializedSubProgram subProgram, string reason)
         {
             sb.Append($"// AnimeStudio: shader bytecode unavailable for blob {subProgram.m_BlobIndex}, gpu {subProgram.m_GpuProgramType}, tier {subProgram.m_ShaderHardwareTier}.");
+            if (!string.IsNullOrEmpty(reason))
+            {
+                sb.Append($" {SanitizeComment(reason)}");
+            }
+            sb.Append("\n");
+        }
+        private static void AppendUnavailableSubProgram(StringBuilder sb, SerializedPlayerSubProgram subProgram, string reason)
+        {
+            sb.Append($"// AnimeStudio: shader bytecode unavailable for blob {subProgram.m_BlobIndex}, gpu {subProgram.m_GpuProgramType}.");
             if (!string.IsNullOrEmpty(reason))
             {
                 sb.Append($" {SanitizeComment(reason)}");
@@ -977,7 +1057,8 @@ namespace AnimeStudio
                         || programType == ShaderGpuProgramType.DX11GeometrySM40
                         || programType == ShaderGpuProgramType.DX11GeometrySM50
                         || programType == ShaderGpuProgramType.DX11HullSM50
-                        || programType == ShaderGpuProgramType.DX11DomainSM50;
+                        || programType == ShaderGpuProgramType.DX11DomainSM50
+                        || IsEndfieldD3D11ProgramType(programType);
                 case ShaderCompilerPlatform.GLES20:
                     return programType == ShaderGpuProgramType.GLES;
                 case ShaderCompilerPlatform.NaCl: //Obsolete
@@ -1120,7 +1201,7 @@ namespace AnimeStudio
                 if (entry.Segment == segment)
                 {
                     reader.BaseStream.Position = entry.Offset;
-                    m_SubPrograms[i] = new ShaderSubProgram(reader, hasUpdatedGpuProgram);
+                    m_SubPrograms[i] = new ShaderSubProgram(reader, hasUpdatedGpuProgram, entry.Length);
                 }
             }
         }
@@ -1145,7 +1226,7 @@ namespace AnimeStudio
         public string[] m_LocalKeywords;
         public byte[] m_ProgramCode;
 
-        public ShaderSubProgram(EndianBinaryReader reader, bool hasUpdatedGpuProgram)
+        public ShaderSubProgram(EndianBinaryReader reader, bool hasUpdatedGpuProgram, int entryLength = -1)
         {
             //LoadGpuProgramFromData
             //201509030 - Unity 5.3
@@ -1157,6 +1238,11 @@ namespace AnimeStudio
             //201806140 - Unity 2019.1~2021.1
             //202012090 - Unity 2021.2
             m_Version = reader.ReadInt32();
+            if (m_Version == ShaderConverter.EndfieldShaderSubProgramVersion && entryLength > 0)
+            {
+                ReadEndfieldSubProgram(reader, entryLength);
+                return;
+            }
             if (hasUpdatedGpuProgram && m_Version > 201806140)
             {
                 m_Version = 201806140;
@@ -1188,6 +1274,69 @@ namespace AnimeStudio
             //TODO
         }
 
+        private void ReadEndfieldSubProgram(EndianBinaryReader reader, int entryLength)
+        {
+            var recordEnd = reader.BaseStream.Position - sizeof(int) + entryLength;
+            if (recordEnd > reader.BaseStream.Length)
+            {
+                throw new IOException($"Endfield shader record end 0x{recordEnd:X} exceeds stream length 0x{reader.BaseStream.Length:X}");
+            }
+
+            m_ProgramType = (ShaderGpuProgramType)reader.ReadInt32();
+            m_Keywords = Array.Empty<string>();
+            m_LocalKeywords = Array.Empty<string>();
+            m_ProgramCode = Array.Empty<byte>();
+
+            reader.BaseStream.Position += 16;
+            if (!IsEndfieldNativeProgramType(m_ProgramType))
+            {
+                reader.BaseStream.Position = recordEnd;
+                return;
+            }
+
+            var keywordCount = ReadBoundedCount(reader, recordEnd, "shader keyword count");
+            if (keywordCount > 1024)
+            {
+                throw new IOException($"Endfield shader keyword count {keywordCount} is not plausible");
+            }
+            m_Keywords = new string[keywordCount];
+            for (int i = 0; i < keywordCount; i++)
+            {
+                m_Keywords[i] = reader.ReadAlignedString();
+                if (reader.BaseStream.Position > recordEnd)
+                {
+                    throw new IOException($"Endfield shader keyword {i} read past record end 0x{recordEnd:X}");
+                }
+            }
+
+            var programCodeLength = ReadBoundedCount(reader, recordEnd, "shader program code length");
+            if (programCodeLength > recordEnd - reader.BaseStream.Position)
+            {
+                throw new IOException($"Endfield shader program code length {programCodeLength} exceeds record remainder {recordEnd - reader.BaseStream.Position}");
+            }
+            m_ProgramCode = reader.ReadBytes(programCodeLength);
+            reader.BaseStream.Position = recordEnd;
+        }
+
+        private static int ReadBoundedCount(EndianBinaryReader reader, long recordEnd, string fieldName)
+        {
+            if (recordEnd - reader.BaseStream.Position < sizeof(int))
+            {
+                throw new IOException($"Endfield {fieldName} has no room for int32 at 0x{reader.BaseStream.Position:X}");
+            }
+
+            var value = reader.ReadInt32();
+            if (value < 0)
+            {
+                throw new IOException($"Endfield {fieldName} is negative: {value}");
+            }
+            return value;
+        }
+
+        private static bool IsEndfieldNativeProgramType(ShaderGpuProgramType programType)
+        {
+            return programType == ShaderGpuProgramType.SPIRV || ShaderConverter.IsEndfieldD3D11ProgramType(programType);
+        }
         public string Export()
         {
             var sb = new StringBuilder();
@@ -1296,6 +1445,23 @@ namespace AnimeStudio
                             }
                             break;
                         }
+                    case var _ when ShaderConverter.IsEndfieldD3D11ProgramType(m_ProgramType):
+                        {
+                            var snippets = EnumerateEndfieldD3D11Snippets(m_ProgramCode);
+                            if (snippets.Count == 0)
+                            {
+                                sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
+                                sb.Append("// Endfield D3D11 payload did not contain a DXBC snippet.\n");
+                            }
+                            for (int i = 0; i < snippets.Count; i++)
+                            {
+                                var (offset, size) = snippets[i];
+                                var snippet = m_ProgramCode.AsSpan(offset, size);
+                                sb.Append($"// Endfield DXBC snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
+                                AppendD3D11Disassembly(sb, snippet);
+                            }
+                            break;
+                        }
                     case ShaderGpuProgramType.MetalVS:
                     case ShaderGpuProgramType.MetalFS:
                         sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
@@ -1313,16 +1479,40 @@ namespace AnimeStudio
                         }
                         break;
                     case ShaderGpuProgramType.SPIRV:
-                        try
                         {
-                            sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
-                            sb.Append(SpirVShaderConverter.Convert(m_ProgramCode));
+                            var snippets = EnumerateEndfieldSpirVSnippets(m_ProgramCode);
+                            if (snippets.Count > 0)
+                            {
+                                for (int i = 0; i < snippets.Count; i++)
+                                {
+                                    var (offset, size) = snippets[i];
+                                    sb.Append($"// Endfield SMOL-V snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
+                                    try
+                                    {
+                                        var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
+                                        sb.Append($"// hash: {ComputeHash64(snippetProgram):x8}\n");
+                                        sb.Append(SpirVShaderConverter.Convert(snippetProgram));
+                                    }
+                                    catch (Exception e)
+                                    {
+                                        sb.Append($"// disassembly error {e.Message}\n");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
+                                    sb.Append(SpirVShaderConverter.Convert(m_ProgramCode));
+                                }
+                                catch (Exception e)
+                                {
+                                    sb.Append($"// disassembly error {e.Message}\n");
+                                }
+                            }
+                            break;
                         }
-                        catch (Exception e)
-                        {
-                            sb.Append($"// disassembly error {e.Message}\n");
-                        }
-                        break;
                     case ShaderGpuProgramType.ConsoleVS:
                     case ShaderGpuProgramType.ConsoleFS:
                     case ShaderGpuProgramType.ConsoleHS:
@@ -1339,6 +1529,115 @@ namespace AnimeStudio
             }
             sb.Append('"');
             return sb.ToString();
+        }
+        private static List<(int Offset, int Size)> EnumerateEndfieldD3D11Snippets(byte[] programCode)
+        {
+            var snippets = new List<(int Offset, int Size)>();
+            var minOffset = programCode.Length;
+            for (var offset = 4; offset + 8 <= programCode.Length && offset < minOffset; offset += 8)
+            {
+                var codeOffset = BitConverter.ToInt32(programCode, offset);
+                var codeSize = BitConverter.ToInt32(programCode, offset + 4);
+                if (codeOffset <= 0 || codeSize <= 0)
+                {
+                    break;
+                }
+                if (codeOffset < minOffset)
+                {
+                    minOffset = codeOffset;
+                }
+                if (codeOffset + codeSize <= programCode.Length && IsDxbc(programCode, codeOffset))
+                {
+                    snippets.Add((codeOffset, codeSize));
+                }
+            }
+
+            if (snippets.Count == 0)
+            {
+                for (var offset = 0; offset + 4 <= programCode.Length; offset++)
+                {
+                    if (!IsDxbc(programCode, offset))
+                    {
+                        continue;
+                    }
+
+                    var codeSize = offset + 28 <= programCode.Length ? BitConverter.ToInt32(programCode, offset + 24) : 0;
+                    if (codeSize > 0 && offset + codeSize <= programCode.Length)
+                    {
+                        snippets.Add((offset, codeSize));
+                    }
+                }
+            }
+
+            return snippets;
+        }
+
+        private static List<(int Offset, int Size)> EnumerateEndfieldSpirVSnippets(byte[] programCode)
+        {
+            var snippets = new List<(int Offset, int Size)>();
+            var minOffset = programCode.Length;
+            for (var offset = 4; offset + 8 <= programCode.Length && offset < minOffset; offset += 8)
+            {
+                var codeOffset = BitConverter.ToInt32(programCode, offset);
+                var codeSize = BitConverter.ToInt32(programCode, offset + 4);
+                if (codeOffset <= 0 || codeSize <= 0)
+                {
+                    break;
+                }
+                if (codeOffset < minOffset)
+                {
+                    minOffset = codeOffset;
+                }
+                if (codeOffset + codeSize <= programCode.Length && IsSmolv(programCode, codeOffset))
+                {
+                    snippets.Add((codeOffset, codeSize));
+                }
+            }
+            return snippets;
+        }
+
+        private static byte[] BuildSingleSpirVSnippetProgram(byte[] programCode, int offset, int size)
+        {
+            var output = new byte[12 + size];
+            Buffer.BlockCopy(programCode, 0, output, 0, sizeof(int));
+            BitConverter.GetBytes(12).CopyTo(output, 4);
+            BitConverter.GetBytes(size).CopyTo(output, 8);
+            Buffer.BlockCopy(programCode, offset, output, 12, size);
+            return output;
+        }
+
+        private static bool IsSmolv(byte[] data, int offset)
+        {
+            return offset + 4 <= data.Length
+                && data[offset] == (byte)'L'
+                && data[offset + 1] == (byte)'O'
+                && data[offset + 2] == (byte)'M'
+                && data[offset + 3] == (byte)'S';
+        }
+        private static bool IsDxbc(byte[] data, int offset)
+        {
+            return offset + 4 <= data.Length
+                && data[offset] == (byte)'D'
+                && data[offset + 1] == (byte)'X'
+                && data[offset + 2] == (byte)'B'
+                && data[offset + 3] == (byte)'C';
+        }
+
+        private void AppendD3D11Disassembly(StringBuilder sb, ReadOnlySpan<byte> byteCode)
+        {
+            var byteCodeArray = byteCode.ToArray();
+            var byteCodeSpan = byteCodeArray.AsSpan();
+            sb.Append($"// hash: {ComputeHash64(byteCodeSpan):x8}\n");
+            try
+            {
+                HLSLDecompiler.DecompileShader(byteCodeArray, byteCodeArray.Length, out var hlslText);
+                sb.Append(hlslText);
+            }
+            catch (Exception e)
+            {
+                sb.Append($"// HLSL decompile unavailable: {e.Message}\n");
+                sb.Append("// DXBC container was parsed and preserved by offset/size/hash above.\n");
+            }
         }
         public ulong ComputeHash64(Span<byte> data)
         {
