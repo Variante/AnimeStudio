@@ -932,6 +932,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeDialogShortAnimActionData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeDialogEmptyTailActionData(
                 header,
                 rawData,
@@ -3142,6 +3152,79 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeDialogShortAnimActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogAnimActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 240
+                || offset + length > rawData.Length
+                || !HasInt32Value(rawData, offset + 8, 54)
+                || !IsZeroFilled(rawData, offset + 12, 16)
+                || !TryReadBoundedInt32(rawData, offset + 28, 0, 1, out var selector0)
+                || !IsZeroFilled(rawData, offset + 32, 20)
+                || !HasInt32Value(rawData, offset + 52, 1)
+                || !HasInt32Value(rawData, offset + 56, 1045220557)
+                || !HasInt32Value(rawData, offset + 60, 1045220557)
+                || !IsZeroFilled(rawData, offset + 64, 8)
+                || !IsZeroFilled(rawData, offset + 76, 16)
+                || !HasInt32Value(rawData, offset + 92, 1)
+                || !IsZeroFilled(rawData, offset + 96, 16)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 112, out var value0)
+                || value0 < 0f
+                || value0 > 1f
+                || !IsZeroFilled(rawData, offset + 116, 16)
+                || !HasInt32Value(rawData, offset + 132, 1)
+                || !HasInt32Value(rawData, offset + 136, 1)
+                || !HasInt32Value(rawData, offset + 140, 0)
+                || !HasInt32Value(rawData, offset + 144, 1065353216)
+                || !IsZeroFilled(rawData, offset + 148, 32)
+                || !HasInt32Value(rawData, offset + 180, 1)
+                || !IsZeroFilled(rawData, offset + 184, 16)
+                || !HasInt32Value(rawData, offset + 200, 1045220557)
+                || !IsZeroFilled(rawData, offset + 204, 16)
+                || !HasInt32Value(rawData, offset + 220, 1)
+                || !HasInt32Value(rawData, offset + 224, 1)
+                || !HasInt32Value(rawData, offset + 228, 0)
+                || !HasInt32Value(rawData, offset + 232, 1065353216)
+                || !TryReadBoundedInt32(rawData, offset + 236, 0, 1, out var selector1)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            var opaqueValueLike = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(offset + 72, 4));
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogAnimActDataShortScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "selectorFieldsLike", new OrderedDictionary
+                    {
+                        { "selector0", BuildInferredIntField(offset + 28, selector0) },
+                        { "opaqueValue", BuildInferredIntField(offset + 72, opaqueValueLike) },
+                        { "selector1", BuildInferredIntField(offset + 236, selector1) },
+                    }
+                },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 56, offset + 60, offset + 112, offset + 144, offset + 200, offset + 232 },
+                    new[] { 0.2f, 0.2f, value0, 1.0f, 0.2f, 1.0f }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
         }
 
         private static bool TryDecodeDialogMoveToActionData(
