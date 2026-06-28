@@ -112,6 +112,31 @@ namespace AnimeStudio.CLI
                 $"ByteSize={item.FullSize}");
         }
 
+        private static void LogAnimatorNoOutput(AssetItem item, Animator animator, ModelConverter convert, string exportPath, string reason)
+        {
+            animator.m_GameObject.TryGet(out var gameObject);
+            Logger.Warning(
+                "Animator no output " +
+                $"reason={reason} " +
+                $"name={QuoteLogField(item.Text)} " +
+                $"PathID={item.m_PathID} " +
+                $"SourceFile={QuoteLogField(item.SourceFile?.fileName)} " +
+                $"SourceOriginalPath={QuoteLogField(item.SourceFile?.originalPath)} " +
+                $"SourceOffset={item.SourceFile?.offset ?? -1} " +
+                $"Container={QuoteLogField(item.Container)} " +
+                $"GameObjectName={QuoteLogField(gameObject?.m_Name)} " +
+                $"GameObjectPathID={gameObject?.m_PathID ?? 0} " +
+                $"GameObjectPointerPathID={animator.m_GameObject.m_PathID} " +
+                $"AvatarPathID={animator.m_Avatar.m_PathID} " +
+                $"ControllerPathID={animator.m_Controller.m_PathID} " +
+                $"HasTransformHierarchy={animator.m_HasTransformHierarchy} " +
+                $"MeshCount={convert.MeshList?.Count ?? 0} " +
+                $"MaterialCount={convert.MaterialList?.Count ?? 0} " +
+                $"TextureCount={convert.TextureList?.Count ?? 0} " +
+                $"AnimationCount={convert.AnimationList?.Count ?? 0} " +
+                $"ExportPath={QuoteLogField(exportPath)}");
+        }
+
         public static bool ExportTexture2D(AssetItem item, string exportPath)
         {
             var m_Texture2D = (Texture2D)item.Asset;
@@ -5407,6 +5432,17 @@ namespace AnimeStudio.CLI
             var convert = animationList != null
                 ? new ModelConverter(m_Animator, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
                 : new ModelConverter(m_Animator, options);
+            var fbxExportPath = exportFullPath + ".fbx";
+            if (File.Exists(fbxExportPath))
+            {
+                File.Delete(fbxExportPath);
+            }
+            if (convert.MeshList.Count == 0)
+            {
+                LogAnimatorNoOutput(item, m_Animator, convert, fbxExportPath, "no_mesh");
+                Directory.Delete(exportFullPath, true);
+                return false;
+            }
             if (options.exportMaterials)
             {
                 var materialExportPath = Path.Combine(Path.GetDirectoryName(exportFullPath), "Materials");
@@ -5417,7 +5453,7 @@ namespace AnimeStudio.CLI
                     ExportJSONFile(matItem, materialExportPath);
                 }
             }
-            ExportFbx(convert, exportFullPath);
+            ExportFbx(convert, fbxExportPath);
             return true;
         }
 
