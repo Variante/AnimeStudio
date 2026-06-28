@@ -830,6 +830,7 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -1271,6 +1272,7 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -1461,6 +1463,41 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPartsControllerComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.EnemyPartsControllerComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "partsData", ReadPayloadObjectList(reader, "partsData", 64, itemReader => ReadEnemyPartsControllerData(itemReader, recoveredByRid)) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NavMeshObstacleComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.NavMeshObstacleComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "configList", ReadPayloadObjectList(reader, "configList", 64, itemReader => ReadNavMeshObstacleConfigData(itemReader, recoveredByRid)) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "MeshAdjustComponentData", StringComparison.Ordinal)
@@ -1731,6 +1768,63 @@ namespace AnimeStudio.CLI
             }
             return values;
         }
+
+        private static OrderedDictionary ReadEnemyPartsControllerData(
+            ManagedReferencePayloadReader reader,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var item = new OrderedDictionary
+            {
+                { "partName", reader.ReadAlignedAsciiString("partsData.partName") },
+                { "unknownName", reader.ReadAlignedAsciiString("partsData.unknownName") },
+                { "unknownMode", reader.ReadInt32("partsData.unknownMode") },
+                { "rawFloat32", ReadPayloadFloatArray(reader, "partsData.rawFloat32", 6) },
+                { "componentRids", ReadPayloadRidLinkList(reader, "partsData.componentRids", 8, recoveredByRid) },
+            };
+            return item;
+        }
+
+        private static OrderedDictionary ReadNavMeshObstacleConfigData(
+            ManagedReferencePayloadReader reader,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var item = new OrderedDictionary
+            {
+                { "unknownName", reader.ReadAlignedAsciiString("configList.unknownName") },
+                { "name", reader.ReadAlignedAsciiString("configList.name") },
+                { "rawFloat32", ReadPayloadFloatArray(reader, "configList.rawFloat32", 10) },
+            };
+            var shapeRidOffset = reader.Position;
+            var shapeRid = reader.ReadInt64("configList.shapeRid");
+            item["shape"] = BuildManagedReferenceRidValue(shapeRid, recoveredByRid, shapeRidOffset);
+            return item;
+        }
+
+        private static List<OrderedDictionary> ReadPayloadRidLinkList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var links = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var ridOffset = reader.Position;
+                var rid = reader.ReadInt64($"{fieldName}[{i}]");
+                links.Add(BuildManagedReferenceRidValue(rid, recoveredByRid, ridOffset));
+            }
+            return links;
+        }
+
         private static OrderedDictionary BuildManagedReferenceRidValue(
             long rid,
             IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
