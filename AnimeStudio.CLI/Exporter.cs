@@ -3420,6 +3420,10 @@ namespace AnimeStudio.CLI
             {
                 return true;
             }
+            if (TryDecodeDialogCamLongActionData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
             if (TryDecodeDialogCamDofActionData(header, rawData, offset, length, out data))
             {
                 return true;
@@ -3542,6 +3546,146 @@ namespace AnimeStudio.CLI
             };
             AddDialogActionTimingPrefix(data, actionTimingPrefix);
             return true;
+        }
+
+        private static bool TryDecodeDialogCamLongActionData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "DialogCamActData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 560
+                || offset + length > rawData.Length
+                || !HasDialogCamLongFixedMarkers(rawData, offset)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 56, out var value0)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 60, out var value1)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 64, out var value2)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 68, out var value3)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 72, out var value4)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 76, out var value5)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 80, out var value6)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 88, out var value7)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 104, out var value8)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 108, out var value9)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 120, out var value10)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 124, out var value11)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 128, out var value12)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 132, out var value13)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 136, out var value14)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 148, out var value15)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 160, out var value16)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 164, out var value17)
+                || !TryReadFiniteTimelineFloat(rawData, offset + 172, out var value18)
+                || !TryReadBoundedInt32(rawData, offset + 340, -1, 0, out var selector1)
+                || !TryReadBoundedInt32(rawData, offset + 356, 0, 2, out var selector2)
+                || !TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$partialDecoded", true },
+                { "$inferred", true },
+                { "layout", "DialogCamActDataLongScalarBlock" },
+                { "offset", offset },
+                { "length", length },
+                { "selectorFieldsLike", new OrderedDictionary
+                    {
+                        { "selector0", BuildInferredIntField(offset + 32, 0) },
+                        { "variantMarker", BuildInferredIntField(offset + 92, 3) },
+                        { "tailSelector0", BuildInferredIntField(offset + 340, selector1) },
+                        { "tailSelector1", BuildInferredIntField(offset + 356, selector2) },
+                    }
+                },
+                { "primaryCameraValuesLike", BuildInferredFloatList(
+                    new[] { offset + 56, offset + 60, offset + 64, offset + 68, offset + 72, offset + 76, offset + 80, offset + 88 },
+                    new[] { value0, value1, value2, value3, value4, value5, value6, value7 }) },
+                { "parameterValuesLike", BuildInferredFloatList(
+                    new[] { offset + 104, offset + 108, offset + 120, offset + 124, offset + 128, offset + 132, offset + 136, offset + 144, offset + 148, offset + 152, offset + 156, offset + 160, offset + 164, offset + 172, offset + 332, offset + 556 },
+                    new[] { value8, value9, value10, value11, value12, value13, value14, 0.33333334f, value15, 1.0f, 1.0f, value16, value17, value18, 0.5f, 0.5f }) },
+            };
+            AddDialogActionTimingPrefix(data, actionTimingPrefix);
+            return true;
+        }
+
+        private static bool HasDialogCamLongFixedMarkers(byte[] rawData, int offset)
+        {
+            return HasInt32Value(rawData, offset + 8, 51)
+                && IsZeroFilled(rawData, offset + 12, 16)
+                && HasInt32Value(rawData, offset + 28, -1)
+                && HasInt32Value(rawData, offset + 32, 0)
+                && IsZeroFilled(rawData, offset + 36, 12)
+                && HasInt32Value(rawData, offset + 48, 2)
+                && HasInt32Value(rawData, offset + 52, 0)
+                && HasInt32Value(rawData, offset + 84, 0)
+                && HasInt32Value(rawData, offset + 92, 3)
+                && IsZeroFilled(rawData, offset + 96, 8)
+                && IsZeroFilled(rawData, offset + 112, 8)
+                && HasInt32Value(rawData, offset + 140, 0)
+                && HasInt32Value(rawData, offset + 144, 1051372203)
+                && HasInt32Value(rawData, offset + 152, 1065353216)
+                && HasInt32Value(rawData, offset + 156, 1065353216)
+                && HasInt32Value(rawData, offset + 168, 0)
+                && HasInt32Value(rawData, offset + 176, 0)
+                && HasInt32Value(rawData, offset + 180, 2)
+                && HasInt32Value(rawData, offset + 184, 2)
+                && HasInt32Value(rawData, offset + 188, 4)
+                && HasInt32Value(rawData, offset + 192, 1)
+                && IsZeroFilled(rawData, offset + 196, 36)
+                && HasInt32Value(rawData, offset + 232, 1)
+                && HasInt32Value(rawData, offset + 236, 0)
+                && HasInt32Value(rawData, offset + 240, 2)
+                && HasInt32Value(rawData, offset + 244, 2)
+                && HasInt32Value(rawData, offset + 248, 4)
+                && HasInt32Value(rawData, offset + 252, -1)
+                && HasInt32Value(rawData, offset + 256, -1)
+                && HasInt32Value(rawData, offset + 260, 0)
+                && HasInt32Value(rawData, offset + 264, -1)
+                && HasInt32Value(rawData, offset + 268, 0)
+                && HasInt32Value(rawData, offset + 272, -1082130432)
+                && HasInt32Value(rawData, offset + 276, 0)
+                && HasInt32Value(rawData, offset + 280, 0)
+                && HasInt32Value(rawData, offset + 284, 2)
+                && HasInt32Value(rawData, offset + 288, 2)
+                && HasInt32Value(rawData, offset + 292, 4)
+                && IsZeroFilled(rawData, offset + 296, 36)
+                && HasInt32Value(rawData, offset + 332, 1056964608)
+                && HasInt32Value(rawData, offset + 336, 0)
+                && IsZeroFilled(rawData, offset + 344, 12)
+                && IsZeroFilled(rawData, offset + 360, 40)
+                && HasInt32Value(rawData, offset + 400, 0)
+                && HasInt32Value(rawData, offset + 404, 2)
+                && HasInt32Value(rawData, offset + 408, 2)
+                && HasInt32Value(rawData, offset + 412, 4)
+                && HasInt32Value(rawData, offset + 416, 1)
+                && IsZeroFilled(rawData, offset + 420, 36)
+                && HasInt32Value(rawData, offset + 456, 1)
+                && HasInt32Value(rawData, offset + 460, 0)
+                && HasInt32Value(rawData, offset + 464, 2)
+                && HasInt32Value(rawData, offset + 468, 2)
+                && HasInt32Value(rawData, offset + 472, 4)
+                && HasInt32Value(rawData, offset + 476, -1)
+                && HasInt32Value(rawData, offset + 480, -1)
+                && HasInt32Value(rawData, offset + 484, 0)
+                && HasInt32Value(rawData, offset + 488, -1)
+                && HasInt32Value(rawData, offset + 492, 0)
+                && HasInt32Value(rawData, offset + 496, -1082130432)
+                && HasInt32Value(rawData, offset + 500, 0)
+                && HasInt32Value(rawData, offset + 504, 0)
+                && HasInt32Value(rawData, offset + 508, 2)
+                && HasInt32Value(rawData, offset + 512, 2)
+                && HasInt32Value(rawData, offset + 516, 4)
+                && IsZeroFilled(rawData, offset + 520, 36)
+                && HasInt32Value(rawData, offset + 556, 1056964608);
         }
 
         private static bool TryDecodeDialogCamDofActionData(
