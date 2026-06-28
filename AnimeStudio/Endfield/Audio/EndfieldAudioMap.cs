@@ -91,8 +91,7 @@ namespace AnimeStudio.Endfield
                     continue;
                 }
 
-                var fullPath = MakeVoicePath(path, language.Lowercase());
-                map.entries[PathToHash(path, language.Lowercase())] = fullPath;
+                map.entries[PathToHash(path, language.Lowercase())] = MakeOutputPath(path);
             }
 
             return map;
@@ -103,8 +102,47 @@ namespace AnimeStudio.Endfield
 
         public int Count => entries.Count;
 
+        // The canonical voice path the game hashed to the Wwise media id. Used only
+        // for hashing (PathToHash); it must keep the language segment and the leading
+        // v<major>d<minor> batch folder so the hash matches.
         public static string MakeVoicePath(string path, string language) =>
             $"voice/{language}/{path}".Replace('\\', '/').ToLowerInvariant();
+
+        // The on-disk output layout. Drops the redundant language segment (already in
+        // the output root) and the leading v<major>d<minor> batch folder (v1d0..v1d3),
+        // merging the batches into a single voice/ tree.
+        public static string MakeOutputPath(string path)
+        {
+            var normalized = path.Replace('\\', '/').ToLowerInvariant();
+            var slash = normalized.IndexOf('/');
+            if (slash > 0 && IsBatchFolder(normalized[..slash]))
+            {
+                normalized = normalized[(slash + 1)..];
+            }
+            return $"voice/{normalized}";
+        }
+
+        private static bool IsBatchFolder(string segment)
+        {
+            // Matches batch folders like v1d0, v1d3, v2d10: 'v', digits, 'd', digits.
+            if (segment.Length < 4 || segment[0] != 'v')
+            {
+                return false;
+            }
+            var d = segment.IndexOf('d');
+            if (d <= 1 || d >= segment.Length - 1)
+            {
+                return false;
+            }
+            for (var i = 1; i < segment.Length; i++)
+            {
+                if (i != d && !char.IsDigit(segment[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         public static string PathToHash(string path, string language)
         {

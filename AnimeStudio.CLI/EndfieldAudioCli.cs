@@ -92,10 +92,15 @@ namespace AnimeStudio.CLI
                             else
                             {
                                 Interlocked.Increment(ref unmappedCount);
+                                // The language is already encoded in the output root
+                                // (Audio/<LANG> or Audio/shared); unmapped media are
+                                // grouped by their source bank instead of a redundant
+                                // language subfolder. A Wwise event-category subfolder
+                                // is added later by the Python indexer where resolvable.
                                 outputPath = Path.Combine(
                                     options.Output,
                                     "unmapped",
-                                    language.Lowercase(),
+                                    UnmappedBankFolder(pckName),
                                     $"{entry.Id}.{options.Format.Extension()}"
                                 );
                             }
@@ -189,6 +194,30 @@ namespace AnimeStudio.CLI
             {
                 converter.ConvertBytes(wemData, outputPath);
             }
+        }
+
+        // Maps a Wwise PCK file name to its source-bank folder, matching the Python
+        // indexer (build_audio.unmapped_bank_for_pck_name).
+        private static string UnmappedBankFolder(string pckName)
+        {
+            var name = Path.GetFileName(pckName ?? string.Empty).ToLowerInvariant();
+            if (name.Contains("external_source", StringComparison.Ordinal))
+            {
+                return "external";
+            }
+            if (name.StartsWith("init", StringComparison.Ordinal))
+            {
+                return "initial";
+            }
+            if (name.StartsWith("audit", StringComparison.Ordinal))
+            {
+                return "audit";
+            }
+            if (name.StartsWith("hotfix", StringComparison.Ordinal))
+            {
+                return "hotfix";
+            }
+            return "main";
         }
 
         private static bool HasMagic(byte[] data, string magic)
