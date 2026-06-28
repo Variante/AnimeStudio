@@ -2721,11 +2721,42 @@ namespace AnimeStudio.CLI
                 {
                     if (!TryReadManagedReferenceHeader(rawData, candidate, out var header)
                         || usedRids.Contains(header.Rid)
+                        || !IsStrongManagedReferenceHeader(header)
                         || (preferExpectedRid && !expectedRids.Contains(header.Rid)))
                     {
                         continue;
                     }
-                    if (CanParseRemainingManagedReferenceHeaders(rawData, candidate, remainingHeaderCount, usedRids))
+                    if (CanParseRemainingManagedReferenceHeaders(
+                        rawData,
+                        candidate,
+                        remainingHeaderCount,
+                        usedRids,
+                        requireStrongHeaders: true))
+                    {
+                        headerOffset = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            foreach (var preferExpectedRid in new[] { true, false })
+            {
+                var candidate = (start + 3) & ~3;
+                var lastCandidate = rawData.Length - (remainingHeaderCount * MinManagedReferenceHeaderBytes);
+                for (; candidate <= lastCandidate; candidate += 4)
+                {
+                    if (!TryReadManagedReferenceHeader(rawData, candidate, out var header)
+                        || usedRids.Contains(header.Rid)
+                        || (preferExpectedRid && !expectedRids.Contains(header.Rid)))
+                    {
+                        continue;
+                    }
+                    if (CanParseRemainingManagedReferenceHeaders(
+                        rawData,
+                        candidate,
+                        remainingHeaderCount,
+                        usedRids,
+                        requireStrongHeaders: false))
                     {
                         headerOffset = candidate;
                         return true;
@@ -2741,7 +2772,8 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             int start,
             int remainingHeaderCount,
-            IReadOnlySet<long> priorRids
+            IReadOnlySet<long> priorRids,
+            bool requireStrongHeaders
         )
         {
             var used = new HashSet<long>(priorRids);
@@ -2750,7 +2782,8 @@ namespace AnimeStudio.CLI
             for (var i = 0; i < remainingHeaderCount; i++)
             {
                 if (!TryReadManagedReferenceHeader(rawData, pos, out var header)
-                    || !used.Add(header.Rid))
+                    || !used.Add(header.Rid)
+                    || (requireStrongHeaders && !IsStrongManagedReferenceHeader(header)))
                 {
                     return false;
                 }
@@ -2766,7 +2799,8 @@ namespace AnimeStudio.CLI
                 for (; candidate <= lastCandidate; candidate += 4)
                 {
                     if (TryReadManagedReferenceHeader(rawData, candidate, out var nextHeader)
-                        && !used.Contains(nextHeader.Rid))
+                        && !used.Contains(nextHeader.Rid)
+                        && (!requireStrongHeaders || IsStrongManagedReferenceHeader(nextHeader)))
                     {
                         pos = candidate;
                         found = true;
@@ -2780,6 +2814,40 @@ namespace AnimeStudio.CLI
             }
 
             return true;
+        }
+
+        private static bool IsStrongManagedReferenceHeader(ManagedReferenceHeader header)
+        {
+            if (header == null || header.IsNullSentinel || header.Rid <= 0)
+            {
+                return false;
+            }
+
+            var fullName = string.IsNullOrEmpty(header.Namespace)
+                ? header.ClassName
+                : $"{header.Namespace}.{header.ClassName}";
+            if (Studio.assemblyLoader?.Loaded == true
+                && Studio.assemblyLoader.GetTypeDefinition(header.AssemblyName, fullName) != null)
+            {
+                return true;
+            }
+
+            return LooksLikeRuntimeAssemblyName(header.AssemblyName)
+                && LooksLikeRuntimeNamespace(header.Namespace);
+        }
+
+        private static bool LooksLikeRuntimeAssemblyName(string value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && value.Contains('.', StringComparison.Ordinal)
+                && LooksLikeManagedReferenceAssemblyName(value);
+        }
+
+        private static bool LooksLikeRuntimeNamespace(string value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && value.Contains('.', StringComparison.Ordinal)
+                && LooksLikeManagedReferenceNamespace(value);
         }
 
         private static bool TryReadManagedReferenceHeader(byte[] rawData, int offset, out ManagedReferenceHeader header)
