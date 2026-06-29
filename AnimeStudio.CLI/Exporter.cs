@@ -1102,6 +1102,17 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeGuideManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeCoreGameplayManagedReferenceData(
                 header,
                 rawData,
@@ -1716,6 +1727,165 @@ namespace AnimeStudio.CLI
             return false;
         }
 
+        private static bool TryDecodeGuideManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            var isRootGuideCondition = string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal);
+            var isGuideCondition = string.Equals(header.Namespace, "Beyond.Gameplay.Conditions", StringComparison.Ordinal);
+            if (!isRootGuideCondition && !isGuideCondition)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (IsKnownGuideConditionBaseOnlyManagedReferenceData(header))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", $"{header.Namespace}.{header.ClassName}" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CombineCondition", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CombineCondition" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "conditionEvalString", reader.ReadAlignedAsciiString("conditionEvalString") },
+                        { "subConditions", ReadPayloadRidLinkList(reader, "subConditions", 32, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckMissionState", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckMissionState" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "missionId", ReadGuideStringParam(reader, "missionId") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "targetMissionState", ReadGuideIntParam(reader, "targetMissionState") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckGuideGroupComplete", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckGuideGroupComplete" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "guideGroupId", ReadGuideStringParam(reader, "guideGroupId") },
+                        { "completeType", ReadGuideIntParam(reader, "completeType") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnPlayerActionTriggerOnly", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnPlayerActionTriggerOnly" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "actionId", ReadGuideStringParam(reader, "actionId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnUIPanelOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnUIPanelOpen" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "panelId", ReadGuideStringParam(reader, "panelId") },
+                        { "needWaitAnimation", ReadGuideBoolParam(reader, "needWaitAnimation") },
+                        { "topPhaseId", ReadGuideStringParam(reader, "topPhaseId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool IsKnownGuideConditionBaseOnlyManagedReferenceData(ManagedReferenceHeader header)
+        {
+            if (header == null || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "InMainHud", StringComparison.Ordinal))
+                || (string.Equals(header.Namespace, "Beyond.Gameplay.Conditions", StringComparison.Ordinal)
+                    && (string.Equals(header.ClassName, "OnCastUltimateSkill", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnCastNormalSkill", StringComparison.Ordinal)));
+        }
         private static bool TryDecodeCoreGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
@@ -5212,6 +5382,109 @@ namespace AnimeStudio.CLI
                 { "values", values },
                 { "entries", entries },
             };
+        }
+
+        private static OrderedDictionary ReadGuideConditionBase(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "id", reader.ReadAlignedAsciiString($"{fieldName}.id") },
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideStringParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideIntParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.value")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideBoolParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", reader.ReadBool32($"{fieldName}.value") },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static string ReadGuideParamStringValue(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            if (!NextLooksLikeAlignedAsciiString(reader, 256))
+            {
+                throw new InvalidDataException($"expected aligned string in {fieldName}");
+            }
+            return reader.ReadAlignedAsciiString(fieldName);
+        }
+
+        private static bool NextLooksLikeAlignedAsciiString(
+            ManagedReferencePayloadReader reader,
+            int maxLength
+        )
+        {
+            if (reader == null || reader.Remaining < 4)
+            {
+                return false;
+            }
+
+            var pos = reader.Position;
+            var length = BinaryPrimitives.ReadInt32LittleEndian(reader.RawData.AsSpan(pos, 4));
+            if (length < 0 || length > maxLength)
+            {
+                return false;
+            }
+
+            var dataStart = pos + 4;
+            var dataEnd = dataStart + length;
+            var alignedEnd = (dataEnd + 3) & ~3;
+            if (alignedEnd > reader.End)
+            {
+                return false;
+            }
+
+            for (var i = dataStart; i < dataEnd; i++)
+            {
+                if (reader.RawData[i] < 0x20 || reader.RawData[i] > 0x7E)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static OrderedDictionary ReadPayloadBlackboardDouble(
