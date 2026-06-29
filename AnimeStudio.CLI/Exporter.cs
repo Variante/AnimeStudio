@@ -6138,6 +6138,16 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeWikiModelSpawnManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
             if (length == 0 && IsKnownEmptyGeneralGameplayManagedReferenceData(header))
             {
                 data = BuildEmptyManagedReferenceData(header, offset, length);
@@ -6285,6 +6295,49 @@ namespace AnimeStudio.CLI
                 data["hitMountPoint"] = BuildPayloadHash32(reader.ReadInt32("hitMountPoint"));
                 data["skillDataBundle"] = ReadProjectileSkillDataBundle(reader);
                 data["layoutNote"] = "Installed IL2CPP metadata supplies GameDataWithId/BaseTemplateData/EntityTemplateData/ProjectileTemplateData field order; current payloads use a single int32 bornTag, bool32 fields, and an empty comboSkillConditions list and an empty defaultCmdMapping with zero key/value counts.";
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeWikiModelSpawnManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WikiModelSpawnData", StringComparison.Ordinal)
+                || length < 44)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WikiModelSpawnData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "position", ReadPayloadVector3(reader, "position") },
+                    { "rotation", ReadPayloadVector3(reader, "rotation") },
+                    { "scale", ReadPayloadVector3(reader, "scale") },
+                    { "cameraDistance", reader.ReadFloat("cameraDistance") },
+                    { "effects", ReadWikiModelEffectList(reader) },
+                    { "layoutNote", "Installed IL2CPP metadata and serialized TypeTree expose position, rotation, scale, cameraDistance, and effects; each observed effect contains name, mountPoint, follow flags, offset, rotation, and scale." },
+                };
                 reader.EnsureComplete();
                 return true;
             }
@@ -8353,6 +8406,37 @@ namespace AnimeStudio.CLI
             {
                 return false;
             }
+        }
+
+        private static List<OrderedDictionary> ReadWikiModelEffectList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("effects.count");
+            if (count < 0 || count > 16 || count > reader.Remaining / 52)
+            {
+                throw new InvalidDataException($"invalid count {count} for effects");
+            }
+
+            var effects = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                effects.Add(ReadWikiModelEffectData(reader, i));
+            }
+            return effects;
+        }
+
+        private static OrderedDictionary ReadWikiModelEffectData(ManagedReferencePayloadReader reader, int index)
+        {
+            var fieldName = $"effects[{index}]";
+            return new OrderedDictionary
+            {
+                { "name", reader.ReadAlignedAsciiString($"{fieldName}.name") },
+                { "mountPoint", reader.ReadAlignedAsciiString($"{fieldName}.mountPoint") },
+                { "followScale", reader.ReadBool32($"{fieldName}.followScale") },
+                { "followRotation", reader.ReadBool32($"{fieldName}.followRotation") },
+                { "offset", ReadPayloadVector3(reader, $"{fieldName}.offset") },
+                { "rotation", ReadPayloadVector3(reader, $"{fieldName}.rotation") },
+                { "scale", ReadPayloadVector3(reader, $"{fieldName}.scale") },
+            };
         }
 
         private static OrderedDictionary ReadProjectileSkillDataBundle(ManagedReferencePayloadReader reader)
