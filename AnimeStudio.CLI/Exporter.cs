@@ -10465,10 +10465,10 @@ namespace AnimeStudio.CLI
                 tail["modelKey"] = local.ReadAlignedAsciiString("modeConfig.modes.modelKey");
                 tail["mountPointDefIndex"] = local.ReadInt32("modeConfig.modes.mountPointDefIndex");
                 tail["overrideCmdMapping"] = local.ReadBool32("modeConfig.modes.overrideCmdMapping");
-                tail["cmdMappingRawWords"] = ReadPayloadRawInt32Words(
+                tail["cmdMapping"] = ReadAbilitySystemModeCmdMapping(
                     local,
-                    "modeConfig.modes.cmdMappingRawWords",
-                    4
+                    "modeConfig.modes.cmdMapping",
+                    8
                 );
                 foreach (DictionaryEntry entry in tail)
                 {
@@ -10481,6 +10481,50 @@ namespace AnimeStudio.CLI
             {
                 return false;
             }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemModeCmdMapping(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxMappedValues
+        )
+        {
+            var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 4);
+            var data = new OrderedDictionary
+            {
+                { "headerRawWords", headerWords },
+            };
+
+            if (PayloadRawWordsEqual(headerWords, 0, 0, 0, 0))
+            {
+                return data;
+            }
+
+            if (!PayloadRawWordsEqual(headerWords, 0, 1, 1, 0))
+            {
+                data["layoutNote"] = "unrecognized cmdMapping header; no value list consumed";
+                return data;
+            }
+
+            data["values"] = ReadPayloadStringList(reader, $"{fieldName}.values", maxMappedValues);
+            return data;
+        }
+
+        private static bool PayloadRawWordsEqual(List<OrderedDictionary> words, params int[] expected)
+        {
+            if (words == null || words.Count != expected.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < expected.Length; i++)
+            {
+                if (!words[i].Contains("value") || words[i]["value"] is not int value || value != expected[i])
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static OrderedDictionary ReadWeaponDecoData(ManagedReferencePayloadReader reader, string fieldName)
