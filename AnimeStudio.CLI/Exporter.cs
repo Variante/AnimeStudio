@@ -1895,11 +1895,10 @@ namespace AnimeStudio.CLI
                 return false;
             }
 
-            if (IsKnownGuideActionSingleRawWord(header.ClassName))
+            if (IsKnownGuideActionNoField(header.ClassName))
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["trailingWord"] = BuildPayloadHash32(reader.ReadInt32("trailingWord"));
                 reader.EnsureComplete();
                 return true;
             }
@@ -1909,7 +1908,7 @@ namespace AnimeStudio.CLI
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data[boolFieldName] = ReadGuideActionBoolParam(reader, boolFieldName);
+                data[boolFieldName] = ReadGuideActionParamBool(reader, boolFieldName);
                 reader.EnsureComplete();
                 return true;
             }
@@ -1918,7 +1917,7 @@ namespace AnimeStudio.CLI
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["atbValue"] = ReadGuideActionFloatParam(reader, "atbValue");
+                data["atbValue"] = ReadGuideActionParamFloat(reader, "atbValue");
                 reader.EnsureComplete();
                 return true;
             }
@@ -1927,7 +1926,7 @@ namespace AnimeStudio.CLI
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["handle"] = ReadGuideActionStringParam(reader, "handle", 0);
+                data["handle"] = ReadGuideActionParamOutputInt(reader, "handle");
                 reader.EnsureComplete();
                 return true;
             }
@@ -1936,7 +1935,7 @@ namespace AnimeStudio.CLI
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["handle"] = ReadGuideActionStringParam(reader, "handle", 2);
+                data["handle"] = ReadGuideActionParamInt(reader, "handle");
                 reader.EnsureComplete();
                 return true;
             }
@@ -1945,7 +1944,51 @@ namespace AnimeStudio.CLI
             {
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["effectSaveId"] = ReadGuideActionStringParam(reader, "effectSaveId", 2);
+                data["effectSaveId"] = ReadGuideActionParamPathRawWords(reader, "effectSaveId", 2);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "BlendOutFromCamera", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["blendTime"] = ReadGuideActionParamFloat(reader, "blendTime");
+                data["overrideBlend"] = ReadGuideActionParamBool(reader, "overrideBlend");
+                data["blendStyle"] = ReadGuideActionParamInt(reader, "blendStyle");
+                data["useBlackScreen"] = ReadGuideActionParamBool(reader, "useBlackScreen");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "BlendIntoCameraNoReturn", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["camPoseId"] = ReadGuideActionParamInt(reader, "camPoseId");
+                data["blendTime"] = ReadGuideActionParamFloat(reader, "blendTime");
+                data["duration"] = ReadGuideActionParamFloat(reader, "duration");
+                data["needInterruptMainHudAction"] = ReadGuideActionParamBool(reader, "needInterruptMainHudAction");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "BlendToCameraTransformWithoutBack", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["pos"] = ReadGuideActionParamVector3(reader, "pos");
+                data["rot"] = ReadGuideActionParamVector3(reader, "rot");
+                data["fov"] = ReadGuideActionParamFloat(reader, "fov");
+                data["duration"] = ReadGuideActionParamFloat(reader, "duration");
+                data["needInterruptMainHudAction"] = ReadGuideActionParamBool(reader, "needInterruptMainHudAction");
+                data["useBlackScreen"] = ReadGuideActionParamBool(reader, "useBlackScreen");
+                data["tweenTime"] = ReadGuideActionParamFloat(reader, "tweenTime");
+                data["overrideBlend"] = ReadGuideActionParamBool(reader, "overrideBlend");
+                data["blendStyle"] = ReadGuideActionParamInt(reader, "blendStyle");
+                data["useYawCheck"] = ReadGuideActionParamBool(reader, "useYawCheck");
+                data["advancedMode"] = ReadGuideActionParamBool(reader, "advancedMode");
+                data["ignoreProtect"] = ReadGuideActionParamBool(reader, "ignoreProtect");
                 reader.EnsureComplete();
                 return true;
             }
@@ -1969,7 +2012,7 @@ namespace AnimeStudio.CLI
             };
         }
 
-        private static bool IsKnownGuideActionSingleRawWord(string className)
+        private static bool IsKnownGuideActionNoField(string className)
         {
             return string.Equals(className, "RecoverMainHud", StringComparison.Ordinal)
                 || string.Equals(className, "ExitFacBuildMode", StringComparison.Ordinal);
@@ -5542,65 +5585,97 @@ namespace AnimeStudio.CLI
         {
             return new OrderedDictionary
             {
-                { "index", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.index")) },
-                { "id", reader.ReadAlignedAsciiString($"{fieldName}.id") },
+                { "actionId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.actionId")) },
+                { "key", reader.ReadAlignedAsciiString($"{fieldName}.key") },
                 { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
                 { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
                 { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
-                { "mode", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.mode")) },
-                { "enabled", reader.ReadBool32($"{fieldName}.enabled") },
+                { "triggerActiveDuringRaw", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.triggerActiveDuringRaw")) },
+                { "validate", reader.ReadBool32($"{fieldName}.validate") },
+                { "nextId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.nextId")) },
             };
         }
 
-        private static OrderedDictionary ReadGuideActionBoolParam(
+        private static OrderedDictionary ReadGuideActionParamBool(
             ManagedReferencePayloadReader reader,
             string fieldName
         )
         {
             return new OrderedDictionary
             {
-                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
-                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
-                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
                 { "value", reader.ReadBool32($"{fieldName}.value") },
-                { "unknown3", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown3")) },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
             };
         }
 
-        private static OrderedDictionary ReadGuideActionFloatParam(
+        private static OrderedDictionary ReadGuideActionParamFloat(
             ManagedReferencePayloadReader reader,
             string fieldName
         )
         {
             return new OrderedDictionary
             {
-                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
-                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
-                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
                 { "value", reader.ReadFloat($"{fieldName}.value") },
-                { "unknown3", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown3")) },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
             };
         }
 
-        private static OrderedDictionary ReadGuideActionStringParam(
+        private static OrderedDictionary ReadGuideActionParamInt(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "value", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.value")) },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionParamVector3(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "value", ReadPayloadVector3(reader, $"{fieldName}.value") },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionParamOutputInt(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "paramTarget", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramTarget")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionParamPathRawWords(
             ManagedReferencePayloadReader reader,
             string fieldName,
-            int trailingWordCount
+            int rawWordCount
         )
         {
-            var data = new OrderedDictionary
+            return new OrderedDictionary
             {
-                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
-                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
-                { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", rawWordCount) },
             };
-
-            if (trailingWordCount > 0)
-            {
-                data["trailingWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.trailingWords", trailingWordCount);
-            }
-
-            return data;
         }
 
         private static OrderedDictionary ReadGuideStringParam(
