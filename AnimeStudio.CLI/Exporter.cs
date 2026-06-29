@@ -6431,6 +6431,182 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && (string.Equals(header.ClassName, "GeneralAbilityForbidParams", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "GeneralAbilityForbidUseParams", StringComparison.Ordinal)))
+                {
+                    if (length < 8)
+                    {
+                        return false;
+                    }
+                    data = ReadGeneralAbilityForbidParamsPayload(
+                        reader,
+                        string.Equals(header.ClassName, "GeneralAbilityForbidUseParams", StringComparison.Ordinal)
+                            ? "Beyond.Gameplay.GeneralAbilityForbidUseParams"
+                            : "Beyond.Gameplay.GeneralAbilityForbidParams",
+                        offset,
+                        length,
+                        "generalAbilityForbidParams");
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ForbidParamsWithRadioReason", StringComparison.Ordinal))
+                {
+                    if (length < 4)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.ForbidParamsWithRadioReason" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "radioId", reader.ReadAlignedUtf8String("forbidParamsWithRadioReason.radioId") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes ForbidParamsWithRadioReason.radioId as an aligned string." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "LongTimeNoIdentity", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.LongTimeNoIdentity" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "outTime", ReadPayloadFloatRange(reader, "longTimeNoIdentity.outTime", 0f, 3600f) },
+                        { "multiplier", ReadPayloadFloatRange(reader, "longTimeNoIdentity.multiplier", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes LongTimeNoIdentity.outTime and multiplier as floats." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ResilienceEmpty", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.ResilienceEmpty" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("resilienceEmpty.revertResult") },
+                        { "priority", ReadPayloadFloatRange(reader, "resilienceEmpty.priority", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes ResilienceEmpty.priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "TargetDistance", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.TargetDistance" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "disType", ReadPayloadNamedEnum32(reader, "targetDistance.disType", new[] { "All", "MainChar" }) },
+                        { "factor", ReadPayloadFloatRange(reader, "targetDistance.factor", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes TargetDistance.disType and factor." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyRankType", StringComparison.Ordinal))
+                {
+                    if (length != 12)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyRankType" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("enemyRankType.revertResult") },
+                        { "enemyRank", BuildPayloadHash32(reader.ReadInt32("enemyRankType.enemyRank")) },
+                        { "priority", ReadPayloadFloatRange(reader, "enemyRankType.priority", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes enemyRank and priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemySubRankType", StringComparison.Ordinal))
+                {
+                    if (length != 12)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemySubRankType" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("enemySubRankType.revertResult") },
+                        { "enemySubRank", BuildPayloadHash32(reader.ReadInt32("enemySubRankType.enemySubRank")) },
+                        { "priority", ReadPayloadFloatRange(reader, "enemySubRankType.priority", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes enemySubRank and priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "TargetInsideMaxSlotRange", StringComparison.Ordinal))
+                {
+                    if (length != 12)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.TargetInsideMaxSlotRange" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("targetInsideMaxSlotRange.revertResult") },
+                        { "offsetValue", ReadPayloadFloatRange(reader, "targetInsideMaxSlotRange.offset", -1000f, 1000f) },
+                        { "priority", ReadPayloadFloatRange(reader, "targetInsideMaxSlotRange.priority", -1000f, 1000f) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes offset and priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "CharacterAIComponentData", StringComparison.Ordinal))
                 {
@@ -6583,6 +6759,32 @@ namespace AnimeStudio.CLI
             return false;
         }
 
+        private static OrderedDictionary ReadGeneralAbilityForbidParamsPayload(
+            ManagedReferencePayloadReader reader,
+            string layout,
+            int offset,
+            int length,
+            string fieldPrefix
+        )
+        {
+            var forbidStyle = reader.ReadInt32($"{fieldPrefix}.forbidStyle");
+            if (forbidStyle < 0 || forbidStyle > 256)
+            {
+                throw new InvalidDataException($"invalid {fieldPrefix}.forbidStyle {forbidStyle}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "offset", offset },
+                { "length", length },
+                { "forbidStyle", BuildPayloadHash32(forbidStyle) },
+                { "toastTextId", reader.ReadAlignedUtf8String($"{fieldPrefix}.toastTextId") },
+                { "layoutNote", "Installed IL2CPP metadata exposes GeneralAbilityForbidParams.forbidStyle and toastTextId; derived use-param records serialize the same base payload." },
+            };
+        }
         private static bool TryDecodeWeaponDataManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
