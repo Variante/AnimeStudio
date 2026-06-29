@@ -2365,6 +2365,288 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnDungeonCommonEntryPanelOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnDungeonCommonEntryPanelOpen" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "dungeonSeriesId", ReadGuideStringParam(reader, "dungeonSeriesId") },
+                        { "needWaitAnimation", ReadGuideBoolParam(reader, "needWaitAnimation") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnFacConveyorOperated", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnFacConveyorOperated" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isEndPoint", ReadGuideBoolParam(reader, "isEndPoint") },
+                        { "position", ReadGuideIntPairParam(reader, "position") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckAdventureLevel", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckAdventureLevel" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "_", BuildPayloadHash32(reader.ReadInt32("_")) },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsSquadInFight", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckIsSquadInFight" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isInFight", ReadGuideBoolParam(reader, "isInFight") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsInFacTopView", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsInFacTopView" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isInTopView", ReadGuideBoolParam(reader, "isInTopView") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckSelectGeneralAbility", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckSelectGeneralAbility" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "type", ReadGuideIntParam(reader, "type") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsItemInQuickBar", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsItemInQuickBar" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckMapMissionTrackingState", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckMapMissionTrackingState" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "targetLevelId", ReadGuideStringParam(reader, "targetLevelId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnUILevelMapEnterLevel", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnUILevelMapEnterLevel" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckBuildingConnectedSpecify", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckBuildingConnectedSpecify" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "instKeyA", ReadGuideStringParam(reader, "instKeyA") },
+                        { "instKeyB", ReadGuideStringParam(reader, "instKeyB") },
+                        { "connected", ReadGuideBoolParam(reader, "connected") },
+                        { "conveyorType", ReadGuideIntParam(reader, "conveyorType") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsOpenDomainMain", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsOpenDomainMain" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "domainId", ReadGuideStringParam(reader, "domainId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckBlackboxComplete", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckBlackboxComplete" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "blackboxId", ReadGuideStringParam(reader, "blackboxId") },
+                        { "completeState", ReadGuideIntParam(reader, "completeState") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnOtherPlayerSocialBuildingPanelOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnOtherPlayerSocialBuildingPanelOpen" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "buildingId", ReadGuideStringParam(reader, "buildingId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnMainHudActionFinished", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnMainHudActionFinished" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isInterrupt", ReadGuideBoolParam(reader, "isInterrupt") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckSimulationTrainingHandCardCount", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckSimulationTrainingHandCardCount" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "count", ReadGuideIntParam(reader, "count") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckSpaceshipRoomLevel", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckSpaceshipRoomLevel" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "roomType", ReadGuideIntParam(reader, "roomType") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
                 if (isGuideAction
                     && TryDecodeGuideActionManagedReferenceData(header, reader, offset, length, out data))
                 {
@@ -2520,6 +2802,105 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            var intFieldName = GetGuideActionIntFieldName(header.ClassName);
+            if (!string.IsNullOrEmpty(intFieldName))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data[intFieldName] = ReadGuideActionParamInt(reader, intFieldName);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            var stringFieldName = GetGuideActionStringFieldName(header.ClassName);
+            if (!string.IsNullOrEmpty(stringFieldName))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data[stringFieldName] = ReadGuideActionParamString(reader, stringFieldName);
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.ClassName, "ToggleSideMenuItemForceValid", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["itemName"] = ReadGuideActionParamString(reader, "itemName");
+                data["forceValid"] = ReadGuideActionParamBool(reader, "forceValid");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacOverrideCullingSetting", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["overrideSetting"] = ReadGuideActionParamBool(reader, "overrideSetting");
+                data["sqrUI"] = ReadGuideActionParamFloat(reader, "sqrUI");
+                data["sqrCullDis"] = ReadGuideActionParamFloat(reader, "sqrCullDis");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "BlackScreenFadeOut", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["duration"] = ReadGuideActionParamFloat(reader, "duration");
+                data["blockInput"] = ReadGuideActionParamBool(reader, "blockInput");
+                data["black"] = ReadGuideActionParamBool(reader, "black");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacHighlightBuildingInArea", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["buildingId"] = ReadGuideActionParamString(reader, "buildingId");
+                data["worldPos"] = ReadGuideActionParamVector3(reader, "worldPos");
+                data["range"] = ReadGuideActionParamFloat(reader, "range");
+                data["active"] = ReadGuideActionParamBool(reader, "active");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "UIScrollRectScrollTo", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["rectPath"] = ReadGuideActionParamString(reader, "rectPath");
+                data["targetGameObjectPath"] = ReadGuideActionParamString(reader, "targetGameObjectPath");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "BlendToCameraTransform", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["pos"] = ReadGuideActionParamVector3(reader, "pos");
+                data["rot"] = ReadGuideActionParamVector3(reader, "rot");
+                data["fov"] = ReadGuideActionParamFloat(reader, "fov");
+                data["duration"] = ReadGuideActionParamFloat(reader, "duration");
+                data["useBlackScreen"] = ReadGuideActionParamBool(reader, "useBlackScreen");
+                data["tweenTime"] = ReadGuideActionParamFloat(reader, "tweenTime");
+                data["overrideBlend"] = ReadGuideActionParamBool(reader, "overrideBlend");
+                data["blendStyle"] = ReadGuideActionParamInt(reader, "blendStyle");
+                data["useYawCheck"] = ReadGuideActionParamBool(reader, "useYawCheck");
+                data["needInterruptMainHudAction"] = ReadGuideActionParamBool(reader, "needInterruptMainHudAction");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "Split", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["idList"] = ReadGuideRawInt32List(reader, "idList", 64);
+                reader.EnsureComplete();
+                return true;
+            }
             if (string.Equals(header.ClassName, "SetAtbValue", StringComparison.Ordinal))
             {
                 data = CreateGuideActionData(header, offset, length);
@@ -2741,7 +3122,13 @@ namespace AnimeStudio.CLI
         private static bool IsKnownGuideActionNoField(string className)
         {
             return string.Equals(className, "RecoverMainHud", StringComparison.Ordinal)
-                || string.Equals(className, "ExitFacBuildMode", StringComparison.Ordinal);
+                || string.Equals(className, "ExitFacBuildMode", StringComparison.Ordinal)
+                || string.Equals(className, "EnterFacBeltBuildMode", StringComparison.Ordinal)
+                || string.Equals(className, "FacMainHudCloseMobileBox", StringComparison.Ordinal)
+                || string.Equals(className, "HideItemTips", StringComparison.Ordinal)
+                || string.Equals(className, "FacMainHudRightStopFocus", StringComparison.Ordinal)
+                || string.Equals(className, "ZoomToFullTechTree", StringComparison.Ordinal)
+                || string.Equals(className, "ExitCharInfoTalentExpandNode", StringComparison.Ordinal);
         }
 
         private static string GetGuideActionBoolFieldName(string className)
@@ -2750,6 +3137,12 @@ namespace AnimeStudio.CLI
             {
                 case "DisableHudFade":
                     return "showHud";
+                case "FacToggleCanDeactiveQuickBar":
+                    return "isLock";
+                case "FacSetEnableExitFactoryMode":
+                    return "enable";
+                case "ToggleItemTipsAutoClose":
+                    return "active";
                 case "FacLockBuildPos":
                     return "lockBuildPos";
                 case "FacSetEnableConfirmBuild":
@@ -2779,6 +3172,39 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static string GetGuideActionIntFieldName(string className)
+        {
+            switch (className)
+            {
+                case "ClearFacPin":
+                    return "pinType";
+                default:
+                    return null;
+            }
+        }
+
+        private static string GetGuideActionStringFieldName(string className)
+        {
+            switch (className)
+            {
+                case "EquipProduceScrollToItem":
+                    return "itemId";
+                case "SelectAdventureBookTab":
+                    return "tabId";
+                case "SelectMapMark":
+                    return "markInstId";
+                case "FacOpenBuildingPanel":
+                    return "buildingId";
+                case "CharInfoSwitchChar":
+                    return "charId";
+                case "CharInfoWeaponScrollToTop":
+                    return "itemId";
+                case "ClickUI":
+                    return "uiPath";
+                default:
+                    return null;
+            }
+        }
         private static bool IsKnownGuideConditionBaseOnlyManagedReferenceData(ManagedReferenceHeader header)
         {
             if (header == null || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal))
@@ -2787,12 +3213,27 @@ namespace AnimeStudio.CLI
             }
 
             return (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
-                    && string.Equals(header.ClassName, "InMainHud", StringComparison.Ordinal))
+                    && (string.Equals(header.ClassName, "InMainHud", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "CheckPlayerOnGround", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "CheckInWeaponUpgradePanel", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "CheckInCharInfoUpgradePanel", StringComparison.Ordinal)))
                 || (string.Equals(header.Namespace, "Beyond.Gameplay.Conditions", StringComparison.Ordinal)
                     && (string.Equals(header.ClassName, "OnCastUltimateSkill", StringComparison.Ordinal)
-                        || string.Equals(header.ClassName, "OnCastNormalSkill", StringComparison.Ordinal)));
-        }
-        private static bool TryDecodeCoreGameplayManagedReferenceData(
+                        || string.Equals(header.ClassName, "OnCastNormalSkill", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnCharInfoModelInitFinish", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnSTTAllOpenProgressFinished", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnCastComboSkill", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnOpenFacHubPanelWithoutNotify", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "CheckIsPhaseCharInfoDefaultChar", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnNormalFriendPanelOpen", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnEnterMainHud", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnFacReachFastTravel", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnComboSkillReady", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnMixPoolSelectFinish", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnGeneralAbilityUse", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnLiquidInteractInDumpMode", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnFacPendingSlotChanged", StringComparison.Ordinal)));
+        }        private static bool TryDecodeCoreGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
             int offset,
@@ -6502,6 +6943,35 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadGuideIntPairParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.value0")) },
+                { "value1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.value1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadGuideRawInt32List(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            return ReadPayloadRawInt32Words(reader, fieldName, count);
+        }
         private static OrderedDictionary ReadGuideStringParamWithExtraRawWord(
             ManagedReferencePayloadReader reader,
             string fieldName
