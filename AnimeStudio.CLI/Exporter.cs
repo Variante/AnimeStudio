@@ -1893,6 +1893,18 @@ namespace AnimeStudio.CLI
                 return value;
             }
 
+            public double ReadDouble(string fieldName)
+            {
+                EnsureAvailable(8, fieldName);
+                var value = BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(Position, 8)));
+                Position += 8;
+                if (double.IsNaN(value) || double.IsInfinity(value))
+                {
+                    throw new InvalidDataException($"invalid double in {fieldName}");
+                }
+                return value;
+            }
+
             public bool ReadBool32(string fieldName)
             {
                 var value = ReadInt32(fieldName);
@@ -8910,6 +8922,14 @@ namespace AnimeStudio.CLI
                                         {
                                             data[entry.Key] = entry.Value;
                                         }
+
+                                        if (TryReadAbilitySystemEntityBlackboardSection(reader, out var entityBlackboardSection))
+                                        {
+                                            foreach (DictionaryEntry entry in entityBlackboardSection)
+                                            {
+                                                data[entry.Key] = entry.Value;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -11031,6 +11051,72 @@ namespace AnimeStudio.CLI
                 "HeadStatus",
                 "DmgTxtSpawnPoint",
             });
+        }
+
+        private static bool TryReadAbilitySystemEntityBlackboardSection(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "entityBlackboard", ReadAbilitySystemEntityBlackboard(local, "entityBlackboard", 64) },
+                    { "bakedMeshPoints", ReadPayloadEmptyCountObject(local, "bakedMeshPoints") },
+                    { "bakedMeshPointBonePathList", ReadPayloadEmptyCountList(local, "bakedMeshPointBonePathList") },
+                    { "extraShapesData", ReadPayloadEmptyCountObject(local, "extraShapesData") },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemEntityBlackboard(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadAbilitySystemBlackboardDataPair(reader, $"{fieldName}[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBlackboardDataPair(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.DataPair" },
+                { "key", reader.ReadAlignedAsciiString($"{fieldName}.key") },
+                { "valueDouble", reader.ReadDouble($"{fieldName}.valueDouble") },
+                { "valueStr", reader.ReadAlignedAsciiString($"{fieldName}.valueStr") },
+                { "isDynamic", reader.ReadBool32($"{fieldName}.isDynamic") },
+            };
         }
 
         private static bool TryReadAbilitySystemSkillDataBundle(
