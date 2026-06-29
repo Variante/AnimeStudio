@@ -1396,7 +1396,9 @@ namespace AnimeStudio.CLI
                     || string.Equals(header.ClassName, "CheckTargetsEqual/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckBuffStackNum/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal)
-                    || string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal);
+                    || string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckTagMatch/Data", StringComparison.Ordinal);
             }
 
             return false;
@@ -1476,6 +1478,22 @@ namespace AnimeStudio.CLI
                     diagnostic["compareTypeCandidate"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNum.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
                     diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNum.value", 128);
                     diagnostic["tailNote"] = "Metadata leaves the buffId field type unresolved locally; current bytes look like one aligned string plus compareType and BlackboardDouble.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["hpOwner"] = ReadDiagnosticTargetSettings(reader, "checkHp.hpOwner", offset, recoveredByRid);
+                    diagnostic["compareCandidate"] = ReadPayloadNamedEnum32(reader, "checkHp.compare", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                    diagnostic["isRatioCandidate"] = reader.ReadBool32("checkHp.isRatio");
+                    diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkHp.value", 128);
+                    diagnostic["tailNote"] = "Installed IL2CPP/MemoryPack metadata exposes hpOwner, compare, isRatio, and BlackboardDouble value. hpOwner remains partial because TargetSettings selector/suffix semantics are unresolved.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckTagMatch/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkTagMatch.checkTarget", offset, recoveredByRid);
+                    diagnostic["queryCandidate"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkTagMatch.query", 16, 256);
+                    diagnostic["tailNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget and GameplayTagQuery. checkTarget remains partial because TargetSettings selector/suffix semantics are unresolved.";
                 }
                 else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal))
@@ -4199,6 +4217,43 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal))
+            {
+                if (length < 136 || length > 192 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["hpOwner"] = ReadDiagnosticTargetSettings(reader, "checkHp.hpOwner", offset, recoveredByRid);
+                data["compare"] = ReadPayloadNamedEnum32(reader, "checkHp.compare", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                data["isRatio"] = reader.ReadBool32("checkHp.isRatio");
+                data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkHp.value", 128);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes hpOwner, compare, isRatio, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but hpOwner is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckTagMatch/Data", StringComparison.Ordinal))
+            {
+                if (length < 120 || length > 512 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkTagMatch.checkTarget", offset, recoveredByRid);
+                data["query"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkTagMatch.query", 16, 256);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget and GameplayTagQuery after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
                 && (string.Equals(header.ClassName, "CheckSpellInflictionType/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckPhysicalInflictionType/Data", StringComparison.Ordinal)))
