@@ -6133,6 +6133,26 @@ namespace AnimeStudio.CLI
                 return false;
             }
 
+            if (TryDecodeWeaponDataManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
+            if (TryDecodeStaticWeaponDataManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
             if (TryDecodeWeaponDataWrapperManagedReferenceData(
                 header,
                 rawData,
@@ -6202,6 +6222,111 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeWeaponDataManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WeaponData", StringComparison.Ordinal)
+                || length < 44)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WeaponData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "weaponIndex", reader.ReadInt32("weaponData.weaponIndex") },
+                    { "vfxKey", reader.ReadAlignedAsciiString("weaponData.vfxKey") },
+                };
+                if (reader.Remaining != 36)
+                {
+                    throw new InvalidDataException("WeaponData payload must end with scale, visibility fields, and overrideController");
+                }
+
+                data["weaponScale"] = reader.ReadFloat("weaponData.weaponScale");
+                data["showWhenIdle"] = reader.ReadBool32("weaponData.showWhenIdle");
+                data["idleMountPoint"] = reader.ReadInt32("weaponData.idleMountPoint");
+                data["showWhenFight"] = reader.ReadBool32("weaponData.showWhenFight");
+                data["fightMountPoint"] = reader.ReadInt32("weaponData.fightMountPoint");
+                data["overrideAnimation"] = reader.ReadBool32("weaponData.overrideAnimation");
+                data["overrideController"] = ReadPayloadPPtr(reader, "weaponData.overrideController");
+                data["layoutNote"] = "Installed IL2CPP metadata exposes WeaponDataBase weaponIndex/vfxKey/weaponScale/weaponPath plus WeaponData fields; observed standalone managed-reference payloads serialize the first three base fields, omit weaponPath, then serialize all WeaponData fields.";
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeStaticWeaponDataManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "StaticWeaponData", StringComparison.Ordinal)
+                || length < 48)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.StaticWeaponData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "weaponIndex", reader.ReadInt32("staticWeaponData.weaponIndex") },
+                    { "vfxKey", reader.ReadAlignedAsciiString("staticWeaponData.vfxKey") },
+                    { "weaponScale", reader.ReadFloat("staticWeaponData.weaponScale") },
+                    { "_weaponPath", reader.ReadAlignedAsciiString("staticWeaponData._weaponPath") },
+                };
+                if (reader.Remaining != 32)
+                {
+                    throw new InvalidDataException("StaticWeaponData payload must end with visibility fields and overrideController");
+                }
+
+                data["showWhenIdle"] = reader.ReadBool32("staticWeaponData.showWhenIdle");
+                data["idleMountPoint"] = reader.ReadInt32("staticWeaponData.idleMountPoint");
+                data["showWhenFight"] = reader.ReadBool32("staticWeaponData.showWhenFight");
+                data["fightMountPoint"] = reader.ReadInt32("staticWeaponData.fightMountPoint");
+                data["overrideAnimation"] = reader.ReadBool32("staticWeaponData.overrideAnimation");
+                data["overrideController"] = ReadPayloadPPtr(reader, "staticWeaponData.overrideController");
+                data["layoutNote"] = "Installed IL2CPP metadata exposes StaticWeaponDataBase._weaponPath plus StaticWeaponData visibility and override fields; observed standalone payloads also include WeaponDataBase weaponIndex/vfxKey/weaponScale before _weaponPath.";
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
         }
 
         private static bool TryDecodeWeaponDataWrapperManagedReferenceData(
