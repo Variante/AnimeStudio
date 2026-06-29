@@ -6015,6 +6015,22 @@ namespace AnimeStudio.CLI
                 }
 
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "WeaponComponentData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.WeaponComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "weaponCfg", ReadPayloadRidLinkList(reader, "weaponCfg", 16, recoveredByRid) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes WeaponComponentData.weaponCfg; observed payloads serialize it as a managed-reference RID list." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
                 if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationParamChangePack", StringComparison.Ordinal))
                 {
                     data = new OrderedDictionary
@@ -6117,6 +6133,17 @@ namespace AnimeStudio.CLI
                 return false;
             }
 
+            if (TryDecodeWeaponDataWrapperManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                out data))
+            {
+                return true;
+            }
+
             if (TryDecodeSoundGameplayManagedReferenceData(
                 header,
                 rawData,
@@ -6177,6 +6204,45 @@ namespace AnimeStudio.CLI
             return false;
         }
 
+        private static bool TryDecodeWeaponDataWrapperManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WeaponDataWrapper", StringComparison.Ordinal)
+                || length < 4)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WeaponDataWrapper" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "dataList", ReadPayloadRidLinkList(reader, "dataList", 16, recoveredByRid) },
+                    { "layoutNote", "Installed IL2CPP metadata exposes WeaponDataWrapper.dataList; observed payloads serialize it as a managed-reference RID list." },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
         private static bool TryDecodeSoundGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
