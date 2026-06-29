@@ -1487,6 +1487,17 @@ namespace AnimeStudio.CLI
                     diagnostic["tailNote"] = "Tag query bytes are structured, but generic/list metadata remains unresolved locally; this remains a candidate semantic layout.";
                 }
                 else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["buffsCandidate"] = ReadDiagnosticCreateBuffActionBuffs(reader, "createBuffAction.buffs");
+                    diagnostic["countCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "createBuffAction.count", 128);
+                    diagnostic["targetSettings"] = ReadDiagnosticTargetSettings(reader, "createBuffAction.targetSettings", offset, recoveredByRid);
+                    diagnostic["buffSourceCandidate"] = BuildPayloadHash32(reader.ReadInt32("createBuffAction.buffSource"));
+                    diagnostic["contextKeyCandidate"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "createBuffAction.contextKey", 128);
+                    diagnostic["tailWords"] = ReadDiagnosticRawWords(reader, "createBuffAction.tailWords", reader.Remaining / 4);
+                    diagnostic["tailNote"] = "The leading buffs/count/TargetSettings/context bytes are structurally stable in current payloads. Tail words are preserved raw because inheritSkillIdList and buffIconDurationSourceSetting semantics are not fully proven.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal))
                 {
                     diagnostic["key"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "modifyDynamicBlackboard.key", 128);
@@ -1518,6 +1529,36 @@ namespace AnimeStudio.CLI
                 diagnostic = null;
                 return false;
             }
+        }
+
+        private static OrderedDictionary ReadDiagnosticCreateBuffActionBuffs(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > 8)
+            {
+                throw new InvalidDataException($"invalid buff count {count} in {fieldName}");
+            }
+
+            var items = new List<string>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}[{i}]", 128));
+            }
+
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "count", count },
+                { "items", items },
+                { "reservedZeroWords", ReadDiagnosticZeroWords(reader, $"{fieldName}.reservedZeroWords", 4) },
+            };
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "Current bytes show a count-prefixed aligned buff-id string list followed by four reserved zero words; the exact generic field type remains unresolved locally.";
+            return data;
         }
 
         private static OrderedDictionary ReadDiagnosticAbilityActionDataPrefix(ManagedReferencePayloadReader reader)
