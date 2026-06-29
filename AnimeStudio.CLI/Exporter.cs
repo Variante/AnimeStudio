@@ -43,13 +43,31 @@ namespace AnimeStudio.CLI
             "LPT9",
         };
 
-        private static string Texture2DNoOutputReason(Texture2D texture)
+        private static string Texture2DNoOutputReason(AssetItem item, Texture2D texture)
         {
+            if (IsFontPlaceholderZeroSizeTexture(item, texture))
+                return "font_placeholder_zero_size_texture";
             if (texture.m_Width <= 0 || texture.m_Height <= 0)
                 return "zero_size_texture";
             if ((texture.image_data?.Size ?? 0) == 0)
                 return "empty_image_payload";
             return "decode_failed";
+        }
+
+        private static bool IsFontPlaceholderZeroSizeTexture(AssetItem item, Texture2D texture)
+        {
+            var streamData = texture.m_StreamData;
+            return string.Equals(item.Text, "Font Texture", StringComparison.Ordinal)
+                && texture.m_Width == 0
+                && texture.m_Height == 0
+                && (texture.image_data?.Size ?? 0) == 0
+                && (streamData?.size ?? 0) == 0
+                && string.IsNullOrEmpty(streamData?.path);
+        }
+
+        private static string Texture2DMarkerExtension(ImageFormat type)
+        {
+            return "." + type.ToString().ToLowerInvariant() + ".empty.json";
         }
 
         private static string MeshNoOutputReason(Mesh mesh)
@@ -78,7 +96,7 @@ namespace AnimeStudio.CLI
             var streamData = texture.m_StreamData;
             Logger.Warning(
                 "Texture2D no output " +
-                $"reason={Texture2DNoOutputReason(texture)} " +
+                $"reason={Texture2DNoOutputReason(item, texture)} " +
                 $"name={QuoteLogField(item.Text)} " +
                 $"PathID={item.m_PathID} " +
                 $"SourceFile={QuoteLogField(item.SourceFile?.fileName)} " +
@@ -110,6 +128,70 @@ namespace AnimeStudio.CLI
                 $"SubMeshCount={mesh.m_SubMeshes?.Count ?? 0} " +
                 $"IndexCount={mesh.m_Indices?.Count ?? 0} " +
                 $"ByteSize={item.FullSize}");
+        }
+
+        private static bool ExportEmptyTexture2DMarker(AssetItem item, Texture2D texture, string exportPath, ImageFormat type)
+        {
+            if (!TryExportFile(exportPath, item, Texture2DMarkerExtension(type), out var exportFullPath))
+            {
+                LogTexture2DNoOutput(item, texture);
+                return false;
+            }
+
+            var streamData = texture.m_StreamData;
+            var marker = new
+            {
+                animeStudio = new
+                {
+                    kind = "empty_texture2d_marker",
+                    reason = Texture2DNoOutputReason(item, texture),
+                    note = "Unity parsed this Texture2D, but it has zero dimensions and no image or stream payload. No PNG pixels exist to emit."
+                },
+                type = item.TypeString,
+                name = item.Text,
+                pathId = item.m_PathID,
+                sourceFile = item.SourceFile?.fileName,
+                sourceOriginalPath = item.SourceFile?.originalPath,
+                sourceOffset = item.SourceFile?.offset ?? -1,
+                container = item.Container,
+                width = texture.m_Width,
+                height = texture.m_Height,
+                format = texture.m_TextureFormat.ToString(),
+                imageSize = texture.image_data?.Size ?? 0,
+                streamSize = streamData?.size ?? 0,
+                streamOffset = streamData?.offset ?? 0,
+                streamPath = streamData?.path ?? string.Empty,
+                byteSize = item.FullSize
+            };
+            File.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
+            return true;
+        }
+
+        private static bool ExportEmptyMesh(AssetItem item, Mesh mesh, string exportPath, string reason)
+        {
+            if (!TryExportFile(exportPath, item, ".obj", out var exportFullPath))
+            {
+                LogMeshNoOutput(item, mesh, "output_path_unavailable");
+                return false;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("# AnimeStudio empty Mesh");
+            sb.AppendLine("# The Unity Mesh was parsed but has no vertices, so no OBJ faces can be emitted.");
+            sb.AppendLine($"# reason: {reason}");
+            sb.AppendLine($"# name: {mesh.m_Name}");
+            sb.AppendLine($"# path_id: {item.m_PathID}");
+            sb.AppendLine($"# source_file: {item.SourceFile?.fileName}");
+            sb.AppendLine($"# source_offset: {item.SourceFile?.offset ?? -1}");
+            sb.AppendLine($"# container: {item.Container}");
+            sb.AppendLine($"# vertex_count: {mesh.m_VertexCount}");
+            sb.AppendLine($"# vertices_length: {mesh.m_Vertices?.Length ?? 0}");
+            sb.AppendLine($"# submesh_count: {mesh.m_SubMeshes?.Count ?? 0}");
+            sb.AppendLine($"# index_count: {mesh.m_Indices?.Count ?? 0}");
+            sb.AppendLine($"# byte_size: {item.FullSize}");
+            sb.AppendLine("g " + mesh.m_Name);
+            File.WriteAllText(exportFullPath, sb.ToString());
+            return true;
         }
 
         private static void LogAnimatorNoOutput(AssetItem item, Animator animator, ModelConverter convert, string exportPath, string reason)
@@ -148,6 +230,10 @@ namespace AnimeStudio.CLI
                 var image = m_Texture2D.ConvertToImage(true);
                 if (image == null)
                 {
+                    if (IsFontPlaceholderZeroSizeTexture(item, m_Texture2D))
+                    {
+                        return ExportEmptyTexture2DMarker(item, m_Texture2D, exportPath, type);
+                    }
                     LogTexture2DNoOutput(item, m_Texture2D);
                     return false;
                 }
@@ -5193,8 +5279,7 @@ namespace AnimeStudio.CLI
             var m_Mesh = (Mesh)item.Asset;
             if (m_Mesh.m_VertexCount <= 0)
             {
-                LogMeshNoOutput(item, m_Mesh);
-                return false;
+                return ExportEmptyMesh(item, m_Mesh, exportPath, MeshNoOutputReason(m_Mesh));
             }
             if (!TryExportFile(exportPath, item, ".obj", out var exportFullPath))
             {
