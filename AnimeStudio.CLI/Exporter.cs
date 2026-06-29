@@ -10452,10 +10452,9 @@ namespace AnimeStudio.CLI
                 tail["overrideStateClip"] = overrideStateClip;
                 if (overrideStateClip)
                 {
-                    tail["overrideClipMappingRawWords"] = ReadAbilitySystemRawWordList(
+                    tail["overrideClipMapping"] = ReadAbilitySystemModeOverrideClipMapping(
                         local,
-                        "modeConfig.modes.overrideClipMappingRawWords",
-                        64
+                        "modeConfig.modes.overrideClipMapping"
                     );
                 }
 
@@ -10464,11 +10463,13 @@ namespace AnimeStudio.CLI
                 tail["overrideModelKey"] = local.ReadBool32("modeConfig.modes.overrideModelKey");
                 tail["modelKey"] = local.ReadAlignedAsciiString("modeConfig.modes.modelKey");
                 tail["mountPointDefIndex"] = local.ReadInt32("modeConfig.modes.mountPointDefIndex");
-                tail["overrideCmdMapping"] = local.ReadBool32("modeConfig.modes.overrideCmdMapping");
+                var overrideCmdMapping = local.ReadBool32("modeConfig.modes.overrideCmdMapping");
+                tail["overrideCmdMapping"] = overrideCmdMapping;
                 tail["cmdMapping"] = ReadAbilitySystemModeCmdMapping(
                     local,
                     "modeConfig.modes.cmdMapping",
-                    8
+                    8,
+                    overrideCmdMapping
                 );
                 foreach (DictionaryEntry entry in tail)
                 {
@@ -10483,12 +10484,35 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static OrderedDictionary ReadAbilitySystemModeOverrideClipMapping(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 2);
+            if (!PayloadRawWordsEqual(headerWords, 0, 0))
+            {
+                throw new InvalidDataException($"unsupported non-empty {fieldName} header");
+            }
+
+            return new OrderedDictionary
+            {
+                { "headerRawWords", headerWords },
+            };
+        }
+
         private static OrderedDictionary ReadAbilitySystemModeCmdMapping(
             ManagedReferencePayloadReader reader,
             string fieldName,
-            int maxMappedValues
+            int maxMappedValues,
+            bool overrideCmdMapping
         )
         {
+            if (overrideCmdMapping)
+            {
+                return ReadAbilitySystemBattleCommandStringDictionary(reader, fieldName, maxMappedValues);
+            }
+
             var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 4);
             var data = new OrderedDictionary
             {
@@ -10508,6 +10532,78 @@ namespace AnimeStudio.CLI
 
             data["values"] = ReadPayloadStringList(reader, $"{fieldName}.values", maxMappedValues);
             return data;
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBattleCommandStringDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > maxCount)
+            {
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(BuildAbilitySystemBattleCommandType(reader.ReadInt32($"{fieldName}.keys[{i}]")));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"key/value count mismatch for {fieldName}");
+            }
+
+            var values = new List<string>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = reader.ReadAlignedAsciiString($"{fieldName}.values[{i}]");
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { "command", keys[i] },
+                    { "skillId", value },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", keys },
+                { "values", values },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary BuildAbilitySystemBattleCommandType(int value)
+        {
+            var item = BuildPayloadHash32(value);
+            switch (value)
+            {
+                case 0:
+                    item["name"] = "Attack";
+                    break;
+                case 1:
+                    item["name"] = "Dash";
+                    break;
+                case 2:
+                    item["name"] = "Jump";
+                    break;
+                case 3:
+                    item["name"] = "NormalSkill";
+                    break;
+                case 4:
+                    item["name"] = "ComboSkill";
+                    break;
+                case 5:
+                    item["name"] = "Count";
+                    break;
+            }
+            return item;
         }
 
         private static bool PayloadRawWordsEqual(List<OrderedDictionary> words, params int[] expected)
