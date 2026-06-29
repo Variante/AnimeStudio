@@ -6133,6 +6133,16 @@ namespace AnimeStudio.CLI
                 return false;
             }
 
+            if (TryDecodeSmallGameplayComponentManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
             if (TryDecodeWeaponDataManagedReferenceData(
                 header,
                 rawData,
@@ -6221,6 +6231,355 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            return false;
+        }
+
+        private static bool TryDecodeSmallGameplayComponentManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CGData", StringComparison.Ordinal))
+                {
+                    var nameLengthOffset = reader.Position;
+                    var nameLength = reader.ReadInt32("cgData.name.length");
+                    if (nameLength < 0 || nameLength > 1024)
+                    {
+                        throw new InvalidDataException($"invalid CGData name length {nameLength}");
+                    }
+                    reader.SetPosition(nameLengthOffset);
+                    var name = reader.ReadAlignedUtf8String("cgData.name");
+                    var namePayloadEnd = nameLengthOffset + 4 + nameLength;
+                    var alignedNamePayloadEnd = (namePayloadEnd + 3) & ~3;
+                    for (var padOffset = namePayloadEnd; padOffset < alignedNamePayloadEnd; padOffset++)
+                    {
+                        if (reader.RawData[padOffset] != 0)
+                        {
+                            throw new InvalidDataException($"non-zero CGData name padding byte at {padOffset}");
+                        }
+                    }
+
+                    if (reader.Remaining != 8)
+                    {
+                        throw new InvalidDataException("CGData payload must end with skipType and noSafeZone");
+                    }
+                    var skipType = reader.ReadInt32("cgData.skipType");
+                    if (skipType < 0 || skipType > 2)
+                    {
+                        throw new InvalidDataException($"invalid CGData skipType {skipType}");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CGData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "name", name },
+                        { "skipType", BuildPayloadHash32(skipType) },
+                        { "noSafeZone", reader.ReadBool32("cgData.noSafeZone") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes CGData.name, skipType, and noSafeZone; decoder verifies UTF-8 string padding and observed enum bounds." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ForceSet", StringComparison.Ordinal))
+                {
+                    if (length != 4)
+                    {
+                        return false;
+                    }
+                    var count = reader.ReadInt32("forceSet.count");
+                    if (count < 0 || count > 64)
+                    {
+                        throw new InvalidDataException($"invalid ForceSet count {count}");
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.ForceSet" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "count", count },
+                        { "layoutNote", "Installed IL2CPP metadata exposes ForceSet.count; observed payloads serialize exactly one int32." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "RandomAdd", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.RandomAdd" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "range", ReadPayloadVector2(reader, "randomAdd.range") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes RandomAdd.range as a Vector2." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "TargetHasTags", StringComparison.Ordinal))
+                {
+                    if (length != 16)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.TargetHasTags" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("targetHasTags.revertResult") },
+                        { "tagEntityType", ReadPayloadNamedEnum32(reader, "targetHasTags.tagEntityType", new[] { "Self", "Target" }) },
+                        { "tag", BuildPayloadHash32(reader.ReadInt32("targetHasTags.tag")) },
+                        { "priority", reader.ReadFloat("targetHasTags.priority") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes TargetHasTags tag fields plus priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "HasAttackRangeType", StringComparison.Ordinal))
+                {
+                    if (length != 12)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.HasAttackRangeType" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("hasAttackRangeType.revertResult") },
+                        { "attackRangeType", ReadPayloadNamedEnum32(reader, "hasAttackRangeType.attackRangeType", new[] { "Melee", "Ranged" }) },
+                        { "priority", reader.ReadFloat("hasAttackRangeType.priority") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes attackRangeType plus priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "HasFinishToken", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.HasFinishToken" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revertResult", reader.ReadBool32("hasFinishToken.revertResult") },
+                        { "priority", reader.ReadFloat("hasFinishToken.priority") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes priority; IdentityFilter contributes revertResult." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "PhaseForbidParams", StringComparison.Ordinal))
+                {
+                    if (length < 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PhaseForbidParams" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "phaseForbidStyle", ReadPayloadNamedEnum32(reader, "phaseForbidParams.phaseForbidStyle", new[] { "None", "HideEntrance", "ShowToast" }) },
+                        { "toastTextId", reader.ReadAlignedAsciiString("phaseForbidParams.toastTextId") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes PhaseForbidParams.phaseForbidStyle and toastTextId; observed current payloads use empty toast strings." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterAIComponentData", StringComparison.Ordinal))
+                {
+                    if (length != 12)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterAIComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "aiCfg", ReadPayloadPPtr(reader, "characterAIComponentData.aiCfg") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes CharacterAIComponentData.aiCfg; observed payloads serialize it as a PPtr." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharHurtAnimComponentData", StringComparison.Ordinal))
+                {
+                    if (length != 8)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.CharHurtAnimComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "fullbodyHeavyHurtTime", reader.ReadFloat("charHurtAnimComponentData.fullbodyHeavyHurtTime") },
+                        { "fullbodyWhackHurtTime", reader.ReadFloat("charHurtAnimComponentData.fullbodyWhackHurtTime") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes two serialized hurt-animation timing floats." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ObservedComponentData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.ObservedComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "checkTagList", ReadPayloadGameplayTagList(reader, "observedComponentData.checkTagList", 16) },
+                        { "shapeType", BuildPayloadHash32(reader.ReadInt32("observedComponentData.shapeType")) },
+                        { "center", ReadPayloadVector3(reader, "observedComponentData.center") },
+                        { "size", ReadPayloadVector3(reader, "observedComponentData.size") },
+                        { "radius", reader.ReadFloat("observedComponentData.radius") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes checkTagList, shapeType, center, size, and radius." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "SkeletalMorphComponentData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.SkeletalMorphComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "avatarTag", ReadPayloadGameplayTag(reader, "skeletalMorphComponentData.avatarTag") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes SkeletalMorphComponentData._avatarTag; observed payloads serialize it as a gameplay-tag path plus hash." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterPivotComponentData", StringComparison.Ordinal))
+                {
+                    if (length < 120 || ((length - 120) % 28) != 0)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.Animation.CharacterPivotComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "isOverride", reader.ReadBool32("characterPivotComponentData.isOverride") },
+                        { "minPivotAngle", ReadPayloadFloatRange(reader, "characterPivotComponentData.minPivotAngle", -360f, 360f) },
+                        { "pivotRotationCurve", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.pivotRotationCurve") },
+                        { "pivotPositionXCurve", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.pivotPositionXCurve") },
+                        { "pivotPositionZCurve", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.pivotPositionZCurve") },
+                        { "minTurnStartAngleWalk", ReadPayloadFloatRange(reader, "characterPivotComponentData.minTurnStartAngleWalk", -360f, 360f) },
+                        { "minTurnStartAngleWalkStrict", ReadPayloadFloatRange(reader, "characterPivotComponentData.minTurnStartAngleWalkStrict", -360f, 360f) },
+                        { "minTurnStartAngleRun", ReadPayloadFloatRange(reader, "characterPivotComponentData.minTurnStartAngleRun", -360f, 360f) },
+                        { "minTurnStartAngleSprint", ReadPayloadFloatRange(reader, "characterPivotComponentData.minTurnStartAngleSprint", -360f, 360f) },
+                        { "turnStartRotationCurveWalk", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.turnStartRotationCurveWalk") },
+                        { "turnStartRotationCurveRun", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.turnStartRotationCurveRun") },
+                        { "turnStartRotationCurveSprint", ReadPayloadAnimationCurveFloat(reader, "characterPivotComponentData.turnStartRotationCurveSprint") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes CharacterPivotComponentData fields; curves use Unity AnimationCurve<float> records with guarded keyframe counts." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Water", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "WaterSensorComponentData", StringComparison.Ordinal))
+                {
+                    if (length != 36)
+                    {
+                        return false;
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Water.WaterSensorComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "enableWater", reader.ReadBool32("waterSensorComponentData.enableWater") },
+                        { "enableRain", reader.ReadBool32("waterSensorComponentData.enableRain") },
+                        { "enableGameplayWetness", reader.ReadBool32("waterSensorComponentData.enableGameplayWetness") },
+                        { "enableWaterRaycast", reader.ReadBool32("waterSensorComponentData.enableWaterRaycast") },
+                        { "enableRainRaycast", reader.ReadBool32("waterSensorComponentData.enableRainRaycast") },
+                        { "overrideDryDrenchedAfterSeconds", reader.ReadBool32("waterSensorComponentData.overrideDryDrenchedAfterSeconds") },
+                        { "dryDrenchedAfterSeconds", reader.ReadFloat("waterSensorComponentData.dryDrenchedAfterSeconds") },
+                        { "overrideDryDrenchedSmoothTime", reader.ReadBool32("waterSensorComponentData.overrideDryDrenchedSmoothTime") },
+                        { "dryDrenchedSmoothTime", reader.ReadFloat("waterSensorComponentData.dryDrenchedSmoothTime") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes five enable flags, two override flags, and two timing floats." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            data = null;
             return false;
         }
 
@@ -9333,6 +9692,75 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadPayloadAnimationCurveFloat(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var count = reader.ReadInt32($"{fieldName}.keyframes.count");
+            if (count < 0 || count > 512 || reader.Remaining < 12 || count > (reader.Remaining - 12) / 28)
+            {
+                throw new InvalidDataException($"invalid AnimationCurve keyframe count {count} in {fieldName}");
+            }
+
+            var keyframes = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                keyframes.Add(new OrderedDictionary
+                {
+                    { "time", reader.ReadFloat($"{fieldName}.keyframes[{i}].time") },
+                    { "value", reader.ReadFloat($"{fieldName}.keyframes[{i}].value") },
+                    { "inSlope", reader.ReadFloat($"{fieldName}.keyframes[{i}].inSlope") },
+                    { "outSlope", reader.ReadFloat($"{fieldName}.keyframes[{i}].outSlope") },
+                    { "weightedMode", ReadPayloadNamedEnum32(reader, $"{fieldName}.keyframes[{i}].weightedMode", new[] { "None", "In", "Out", "Both" }) },
+                    { "inWeight", reader.ReadFloat($"{fieldName}.keyframes[{i}].inWeight") },
+                    { "outWeight", reader.ReadFloat($"{fieldName}.keyframes[{i}].outWeight") },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keyframes", keyframes },
+                { "preInfinity", ReadPayloadAnimationCurveWrapMode(reader, $"{fieldName}.preInfinity") },
+                { "postInfinity", ReadPayloadAnimationCurveWrapMode(reader, $"{fieldName}.postInfinity") },
+                { "rotationOrder", ReadPayloadRotationOrder(reader, $"{fieldName}.rotationOrder") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadAnimationCurveWrapMode(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value != 0 && value != 1 && value != 2 && value != 4 && value != 8)
+            {
+                throw new InvalidDataException($"invalid AnimationCurve wrap mode {value} in {fieldName}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "value", value },
+                { "name", value switch
+                    {
+                        0 => "Default",
+                        1 => "Once",
+                        2 => "Loop",
+                        4 => "PingPong",
+                        8 => "ClampForever",
+                        _ => "",
+                    }
+                },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadRotationOrder(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value < 0 || value > 5)
+            {
+                throw new InvalidDataException($"invalid rotation order {value} in {fieldName}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "value", value },
+            };
+        }
         private static OrderedDictionary BuildCharacterHeightEnum(int value)
         {
             return new OrderedDictionary
