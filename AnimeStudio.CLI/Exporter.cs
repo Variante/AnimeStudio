@@ -1362,7 +1362,7 @@ namespace AnimeStudio.CLI
 
             if (ShouldEmitFullManagedReferencePayloadTrace(header))
             {
-                data["diagnosticNote"] = "Full raw payload trace for unresolved TargetSettings/buff-action layout recovery; this entry is intentionally still marked $unparsed.";
+                data["diagnosticNote"] = "Full raw payload trace for unresolved managed-reference layout recovery; this entry is intentionally still marked $unparsed.";
                 data["diagnosticFullPayloadHex"] = BuildPayloadHex(rawData, offset, length);
                 data["diagnosticRawWordTrace"] = CollectDiagnosticRawWordTrace(rawData, offset, length);
                 if (TryBuildTargetSettingsStructuredDiagnostic(header, rawData, offset, length, recoveredByRid, out var structuredLayout))
@@ -1383,7 +1383,8 @@ namespace AnimeStudio.CLI
 
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal))
             {
-                return string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal)
+                return string.Equals(header.ClassName, "CharacterRootComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal);
             }
@@ -8486,6 +8487,35 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterRootComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var locatorIds = ReadPayloadInt32List(reader, "locatorIds", 128);
+                    var locatorNameCount = reader.ReadInt32("locatorNames.count");
+                    if (locatorNameCount != locatorIds.Count)
+                    {
+                        throw new InvalidDataException("CharacterRootComponentData id/name count mismatch");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.CharacterRootComponentData" },
+                        { "layoutNote", "Byte-proven current corpus shape mirrors EnemyRootComponentData: locator id/name lists, an unknown int32, transform records, and a word-aligned tail preserved verbatim because its semantic fields are not fully named." },
+                        { "offset", offset },
+                        { "length", length },
+                        { "locatorIds", locatorIds },
+                        { "locatorNames", ReadPayloadStringListFixed(reader, "locatorNames", locatorNameCount) },
+                        { "unknown0", reader.ReadInt32("unknown0") },
+                        { "transformRecords", ReadPayloadObjectList(reader, "transformRecords", 16, ReadEnemyRootTransformRecord) },
+                        { "trailingWords", ReadRemainingPayloadRawInt32Words(reader, "trailingWords", 8192) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyRootComponentData", StringComparison.Ordinal))
