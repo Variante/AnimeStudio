@@ -3696,6 +3696,20 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ProjectileRootComponentData", StringComparison.Ordinal)
+                    && length == 32)
+                {
+                    data = BuildReservedZeroWordsManagedReferenceData(
+                        header,
+                        rawData,
+                        offset,
+                        length,
+                        8,
+                        "Current installed data serializes this managed-reference payload as eight reserved zero int32 words; no nonzero field bytes are present to decode.");
+                    return true;
+                }
+
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                 if (string.Equals(header.ClassName, "ShowSquadTipsAction/Data", StringComparison.Ordinal))
                 {
@@ -7085,6 +7099,38 @@ namespace AnimeStudio.CLI
                 { "layoutNote", "Serialized managed-reference payload length is zero; the type identity is the complete exported data for this entry." },
                 { "offset", offset },
                 { "length", length },
+            };
+        }
+
+        private static OrderedDictionary BuildReservedZeroWordsManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            int wordCount,
+            string layoutNote
+        )
+        {
+            var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+            var words = new List<OrderedDictionary>(wordCount);
+            for (var i = 0; i < wordCount; i++)
+            {
+                var value = reader.ReadInt32($"reservedZeroWords[{i}]");
+                if (value != 0)
+                {
+                    throw new InvalidDataException($"nonzero reserved word {value} at index {i}");
+                }
+                words.Add(BuildPayloadHash32(value));
+            }
+            reader.EnsureComplete();
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", string.IsNullOrEmpty(header.Namespace) ? header.ClassName : $"{header.Namespace}.{header.ClassName}" },
+                { "layoutNote", layoutNote },
+                { "offset", offset },
+                { "length", length },
+                { "reservedZeroWords", words },
             };
         }
 
