@@ -4365,6 +4365,46 @@ namespace AnimeStudio.CLI
             }
 
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal))
+            {
+                if (length < 120 || length > 256 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["key"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "modifyDynamicBlackboard.key", 128);
+                data["operation"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.operation", new[] { "Assign", "Add", "Multiply", "Divide" });
+                data["directValue"] = reader.ReadBool32("modifyDynamicBlackboard.directValue");
+                data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "modifyDynamicBlackboard.value", 128);
+                data["calculationTarget"] = ReadDiagnosticTargetSettings(reader, "modifyDynamicBlackboard.calculationTarget", offset, recoveredByRid);
+                data["calculateType"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.calculateType", new[] { "HpRatio" });
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes key, operation, directValue, BlackboardDouble value, calculationTarget, and calculateType after the inherited AbilityActionData prefix. The payload is consumed completely, but calculationTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal))
+            {
+                if (length < 144 || length > 320 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["useCurrentBuff"] = reader.ReadBool32("storeBuffCount.useCurrentBuff");
+                data["buffOwners"] = ReadDiagnosticTargetSettings(reader, "storeBuffCount.buffOwners", offset, recoveredByRid);
+                data["buffId"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.buffId", 128);
+                data["blackboardKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.blackboardKey", 128);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes useCurrentBuff, buffOwners, buffId, and blackboardKey after the inherited AbilityActionData prefix. The payload is consumed completely, but buffOwners is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CompareFloat/Data", StringComparison.Ordinal))
             {
                 if (length != 68)
