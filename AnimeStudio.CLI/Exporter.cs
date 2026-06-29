@@ -6031,6 +6031,56 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterAnimationComponentData", StringComparison.Ordinal))
+                {
+                    if (length < 40 || (length % 4) != 0)
+                    {
+                        return false;
+                    }
+                    var animationConfigPath = ReadPayloadAlignedUtf8StringWithZeroPadding(
+                        reader,
+                        "characterAnimationComponentData.animationConfigPath",
+                        256);
+                    if (!animationConfigPath.StartsWith("Data/Json/AnimationConfig/", StringComparison.Ordinal)
+                        || !animationConfigPath.EndsWith(".json", StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException($"unexpected animation config path '{animationConfigPath}'");
+                    }
+                    var minPivotAngle = ReadPayloadFloatRange(reader, "characterAnimationComponentData._minPivotAngle", -360f, 360f);
+                    var relaxTriggerTime = ReadPayloadFloatRange(reader, "characterAnimationComponentData._relaxTriggerTime", 0f, 3600f);
+                    var idleTriggerTime = ReadPayloadFloatRange(reader, "characterAnimationComponentData._idleTriggerTime", 0f, 3600f);
+                    var idleAnimCount = reader.ReadInt32("characterAnimationComponentData._idleAnimCount");
+                    if (idleAnimCount < 0 || idleAnimCount > 32)
+                    {
+                        throw new InvalidDataException($"invalid idle animation count {idleAnimCount}");
+                    }
+                    var fightIdleTimeout = ReadPayloadFloatRange(reader, "characterAnimationComponentData._fightIdleTimeout", 0f, 3600f);
+                    var memberFightIdleTimeout = ReadPayloadFloatRange(reader, "characterAnimationComponentData._memberFightIdleTimeout", 0f, 3600f);
+                    var footStepCfgId = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "characterAnimationComponentData._footStepCfgId", 128);
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.CharacterAnimationComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "animationConfigPath", animationConfigPath },
+                        { "_minPivotAngle", minPivotAngle },
+                        { "_relaxTriggerTime", relaxTriggerTime },
+                        { "_idleTriggerTime", idleTriggerTime },
+                        { "_idleAnimCount", idleAnimCount },
+                        { "_fightIdleTimeout", fightIdleTimeout },
+                        { "_memberFightIdleTimeout", memberFightIdleTimeout },
+                        { "_footStepCfgId", footStepCfgId },
+                        { "layoutNote", "Installed IL2CPP metadata exposes the timing/count/footstep fields; the leading animation config path is byte-proven in current character payloads and guarded by prefix/suffix." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationParamChangePack", StringComparison.Ordinal))
                 {
                     data = new OrderedDictionary
@@ -9696,6 +9746,38 @@ namespace AnimeStudio.CLI
                 { "value", value },
                 { "hex", $"0x{unchecked((uint)value):x8}" },
             };
+        }
+
+        private static string ReadPayloadAlignedUtf8StringWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxLength
+        )
+        {
+            var lengthOffset = reader.Position;
+            var byteLength = reader.ReadInt32($"{fieldName}.length");
+            if (byteLength < 0 || byteLength > maxLength)
+            {
+                throw new InvalidDataException($"invalid string length {byteLength} in {fieldName}");
+            }
+
+            reader.SetPosition(lengthOffset);
+            var value = reader.ReadAlignedUtf8String(fieldName);
+            var payloadEnd = lengthOffset + 4 + byteLength;
+            var alignedEnd = (payloadEnd + 3) & ~3;
+            if (alignedEnd > reader.End)
+            {
+                throw new InvalidDataException($"aligned string {fieldName} passes payload end");
+            }
+            for (var padOffset = payloadEnd; padOffset < alignedEnd; padOffset++)
+            {
+                if (reader.RawData[padOffset] != 0)
+                {
+                    throw new InvalidDataException($"non-zero padding byte at {padOffset} in {fieldName}");
+                }
+            }
+
+            return value;
         }
 
         private static OrderedDictionary BuildPayloadHash64(long value)
