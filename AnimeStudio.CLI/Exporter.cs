@@ -1386,7 +1386,8 @@ namespace AnimeStudio.CLI
                 return string.Equals(header.ClassName, "CharacterRootComponentData", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal)
-                    || string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal);
+                    || string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal);
             }
 
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal))
@@ -1396,7 +1397,6 @@ namespace AnimeStudio.CLI
                     || string.Equals(header.ClassName, "CheckTargetsEqual/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckBuffStackNum/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal)
-                    || string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal)
                     || string.Equals(header.ClassName, "CheckTagMatch/Data", StringComparison.Ordinal);
             }
@@ -1506,6 +1506,17 @@ namespace AnimeStudio.CLI
                     diagnostic["tailNote"] = "Tag query bytes are structured, but generic/list metadata remains unresolved locally; this remains a candidate semantic layout.";
                 }
                 else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumAdvanced.checkTarget", offset, recoveredByRid);
+                    diagnostic["buffSettingsCandidate"] = ReadDiagnosticBuffFindSettingsCandidate(reader, "checkBuffStackNumAdvanced.buffSettings");
+                    diagnostic["buffStackNumTypeCandidate"] = ReadPayloadEnum32(reader, "checkBuffStackNumAdvanced.buffStackNumType", 0, 16);
+                    diagnostic["compareTypeCandidate"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumAdvanced.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                    diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumAdvanced.value", 128);
+                    diagnostic["limitSkillCastIdCandidate"] = reader.ReadBool32("checkBuffStackNumAdvanced.limitSkillCastId");
+                    diagnostic["tailNote"] = "Installed IL2CPP metadata names checkTarget, buffSettings, buffStackNumType, compareType, value, and limitSkillCastId. This diagnostic consumes the observed BuffFindSettings byte shape as checkType plus bounded buff-id list and GameplayTagQuery, but the parent remains $unparsed until BuffFindSettings variants are proven across broader samples.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal))
                 {
                     diagnostic["buffsCandidate"] = ReadDiagnosticCreateBuffActionBuffs(reader, "createBuffAction.buffs");
@@ -1577,6 +1588,24 @@ namespace AnimeStudio.CLI
             };
             data["length"] = reader.Position - start;
             data["layoutNote"] = "Current bytes show a count-prefixed aligned buff-id string list followed by four reserved zero words; the exact generic field type remains unresolved locally.";
+            return data;
+        }
+
+        private static OrderedDictionary ReadDiagnosticBuffFindSettingsCandidate(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "checkType", ReadPayloadNamedEnum32(reader, $"{fieldName}.checkType", new[] { "Id", "Tag", "Environment", "Context" }) },
+                { "buffIdList", ReadPayloadStringListWithZeroPadding(reader, $"{fieldName}.buffIdList", 8, 128) },
+                { "tagQuery", ReadPayloadGameplayTagQueryWithZeroPadding(reader, $"{fieldName}.tagQuery", 8, 256) },
+            };
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "Candidate BuffFindSettings layout observed in current Advanced buff-stack payloads: checkType, a bounded buff-id string list, and a bounded GameplayTagQuery. The owning payload remains $unparsed until the generic type and all checkType variants are proven.";
             return data;
         }
 
