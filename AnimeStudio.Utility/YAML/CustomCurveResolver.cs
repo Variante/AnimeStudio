@@ -208,6 +208,14 @@ namespace AnimeStudio
                         {
                             return "m_ColorTemperature";
                         }
+                        if (attribute == CRC.CalculateDigestAscii("m_InnerSpotAngle"))
+                        {
+                            return "m_InnerSpotAngle";
+                        }
+                        if (attribute == CRC.CalculateDigestAscii("m_BounceIntensity"))
+                        {
+                            return "m_BounceIntensity";
+                        }
                     }
                     return UnknownCustomAttributeName(type, attribute);
 
