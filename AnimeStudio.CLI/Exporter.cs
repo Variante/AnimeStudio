@@ -1514,7 +1514,7 @@ namespace AnimeStudio.CLI
                     diagnostic["compareTypeCandidate"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumAdvanced.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
                     diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumAdvanced.value", 128);
                     diagnostic["limitSkillCastIdCandidate"] = reader.ReadBool32("checkBuffStackNumAdvanced.limitSkillCastId");
-                    diagnostic["tailNote"] = "Installed IL2CPP metadata names checkTarget, buffSettings, buffStackNumType, compareType, value, and limitSkillCastId. This diagnostic consumes the observed BuffFindSettings byte shape as checkType plus bounded buff-id list and GameplayTagQuery, but the parent remains $unparsed until BuffFindSettings variants are proven across broader samples.";
+                    diagnostic["tailNote"] = "Installed IL2CPP metadata names checkTarget, buffSettings, buffStackNumType, compareType, value, and limitSkillCastId. BuffFindSettings is still emitted as partial because Environment/Context variants and generic list type names are not fully proven locally.";
                 }
                 else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal))
@@ -1633,7 +1633,7 @@ namespace AnimeStudio.CLI
                 { "tagQuery", ReadPayloadGameplayTagQueryWithZeroPadding(reader, $"{fieldName}.tagQuery", 8, 256) },
             };
             data["length"] = reader.Position - start;
-            data["layoutNote"] = "Candidate BuffFindSettings layout observed in current Advanced buff-stack payloads: checkType, a bounded buff-id string list, and a bounded GameplayTagQuery. The owning payload remains $unparsed until the generic type and all checkType variants are proven.";
+            data["layoutNote"] = "Installed IL2CPP metadata exposes BuffFindSettings as checkType, buffIdList, and tagQuery. The bytes are consumed in that order, but this remains partial until the generic list type name and unobserved Environment/Context variants are proven across broader samples.";
             return data;
         }
 
@@ -4363,6 +4363,27 @@ namespace AnimeStudio.CLI
                 data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumByTag.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
                 data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumByTag.value", 128);
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget, tagQuery, buffStackNumType, compareType, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal))
+            {
+                if (length < 180 || length > 512 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumAdvanced.checkTarget", offset, recoveredByRid);
+                data["buffSettings"] = ReadDiagnosticBuffFindSettingsCandidate(reader, "checkBuffStackNumAdvanced.buffSettings");
+                data["buffStackNumType"] = ReadPayloadEnum32(reader, "checkBuffStackNumAdvanced.buffStackNumType", 0, 16);
+                data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumAdvanced.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumAdvanced.value", 128);
+                data["limitSkillCastId"] = reader.ReadBool32("checkBuffStackNumAdvanced.limitSkillCastId");
+                data["layoutNote"] = "Installed IL2CPP metadata exposes checkTarget, buffSettings, buffStackNumType, compareType, BlackboardDouble value, and limitSkillCastId after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget and buffSettings remain partial diagnostics because TargetSettings selector suffixes, BuffFindSettings generic type names, and unobserved Environment/Context variants are not fully proven.";
                 reader.EnsureComplete();
                 return true;
             }
