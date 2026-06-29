@@ -1102,11 +1102,22 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeCoreGameplayManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeAIBehaviorManagedReferenceData(
                 header,
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -1117,6 +1128,7 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -1703,11 +1715,65 @@ namespace AnimeStudio.CLI
 
             return false;
         }
+
+        private static bool TryDecodeCoreGameplayManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.ClassName, "ShowSquadTipsAction/Data", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.ShowSquadTipsAction/Data" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "isEnable", reader.ReadBool32("isEnable") },
+                        { "priorityLevel", reader.ReadInt32("priorityLevel") },
+                        { "priorityOffset", reader.ReadInt32("priorityOffset") },
+                        { "serverActionIndex", reader.ReadInt32("serverActionIndex") },
+                        { "textId", reader.ReadAlignedAsciiString("textId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
         private static bool TryDecodeAIBehaviorManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -3626,6 +3692,70 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckTag/EnemyCheckTagData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckTag/EnemyCheckTagData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "targetType", ReadPayloadNamedEnum32(reader, "targetType", new[] { "Self", "Source" }) },
+                        { "checkTagType", ReadPayloadNamedEnum32(reader, "checkTagType", new[] { "And", "Or" }) },
+                        { "tagInfo", ReadEnemyCheckTagInfoList(reader, "tagInfo", 16) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFarmingBehavior/CharacterFarmingBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFarmingBehavior/CharacterFarmingBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "stopDistance", reader.ReadFloat("stopDistance") },
+                        { "walkDis", reader.ReadFloat("walkDis") },
+                        { "walkRunDis", reader.ReadFloat("walkRunDis") },
+                        { "runSprintDis", reader.ReadFloat("runSprintDis") },
+                        { "relaxExTime", ReadPayloadVector2(reader, "relaxExTime") },
+                        { "moveTimeOut", reader.ReadFloat("moveTimeOut") },
+                        { "farmTimeOut", reader.ReadFloat("farmTimeOut") },
+                        { "farmInfo", ReadPayloadIntStringDictionary(reader, "farmInfo", "farmType", "performId", 16) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcDailyGraph/NpcDailyGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcDailyGraph/NpcDailyGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "patrolTag", ReadPayloadGameplayTag(reader, "patrolTag") },
+                        { "attractPointTag", ReadPayloadGameplayTag(reader, "attractPointTag") },
+                        { "passiveAttractPointTag", ReadPayloadGameplayTag(reader, "passiveAttractPointTag") },
+                        { "idleShowTag", ReadPayloadGameplayTag(reader, "idleShowTag") },
+                        { "npcSR", ReadNpcStimulusResponseList(reader, "npcSR.cfg", 16, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -3697,6 +3827,7 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -3767,6 +3898,23 @@ namespace AnimeStudio.CLI
                         { "effectName", reader.ReadAlignedAsciiString("effectName") },
                         { "restartIfExist", reader.ReadBool32("restartIfExist") },
                         { "mountPoint", BuildPayloadHash32(reader.ReadInt32("mountPoint")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "WeaponAnimatorMono/StateActionEntry", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.Animation.WeaponAnimatorMono/StateActionEntry" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "actionsOnEnter", ReadPayloadRidLinkList(reader, "actionsOnEnter", 32, recoveredByRid) },
+                        { "actionsOnExit", ReadPayloadRidLinkList(reader, "actionsOnExit", 32, recoveredByRid) },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -4875,6 +5023,123 @@ namespace AnimeStudio.CLI
                 { "values", values },
                 { "entries", entries },
             };
+        }
+
+        private static OrderedDictionary ReadPayloadIntStringDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string keyName,
+            string valueName,
+            int maxCount
+        )
+        {
+            var keys = ReadPayloadInt32List(reader, $"{fieldName}.keys", maxCount);
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keys.Count)
+            {
+                throw new InvalidDataException($"key/value count mismatch for {fieldName}");
+            }
+
+            var values = new List<string>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = reader.ReadAlignedAsciiString($"{fieldName}.values[{i}]");
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { keyName, BuildPayloadHash32(keys[i]) },
+                    { valueName, value },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", keys },
+                { "values", values },
+                { "entries", entries },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadEnemyCheckTagInfoList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "invert", reader.ReadBool32($"{fieldName}[{i}].invert") },
+                    { "query", ReadPredefinedQuery(reader, $"{fieldName}[{i}].query") },
+                });
+            }
+            return items;
+        }
+
+        private static OrderedDictionary ReadPredefinedQuery(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value < 0 || value > 1024)
+            {
+                throw new InvalidDataException($"invalid PredefinedQuery {value} in {fieldName}");
+            }
+
+            var item = BuildPayloadHash32(value);
+            if (value == 7)
+            {
+                item["name"] = "InImmobilized";
+            }
+            return item;
+        }
+
+        private static List<OrderedDictionary> ReadNpcStimulusResponseList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "finishCount", reader.ReadInt32($"{fieldName}[{i}].finishCount") },
+                    { "stimulusCfg", ReadPayloadRidLink(reader, $"{fieldName}[{i}].stimulusCfg", recoveredByRid) },
+                    { "stimulusConditionCfg", ReadPayloadRidLinkList(reader, $"{fieldName}[{i}].stimulusConditionCfg", 16, recoveredByRid) },
+                    { "responseCfg", ReadPayloadRidLink(reader, $"{fieldName}[{i}].responseCfg", recoveredByRid) },
+                });
+            }
+            return items;
+        }
+
+        private static OrderedDictionary ReadPayloadRidLink(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var ridOffset = reader.Position;
+            var rid = reader.ReadInt64(fieldName);
+            return BuildManagedReferenceRidValue(rid, recoveredByRid, ridOffset);
         }
 
         private static List<OrderedDictionary> ReadLuaCustomUIStyleInfoList(
