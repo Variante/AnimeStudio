@@ -1524,8 +1524,8 @@ namespace AnimeStudio.CLI
                     diagnostic["targetSettings"] = ReadDiagnosticTargetSettings(reader, "createBuffAction.targetSettings", offset, recoveredByRid);
                     diagnostic["buffSourceCandidate"] = BuildPayloadHash32(reader.ReadInt32("createBuffAction.buffSource"));
                     diagnostic["contextKeyCandidate"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "createBuffAction.contextKey", 128);
-                    diagnostic["tailWords"] = ReadDiagnosticRawWords(reader, "createBuffAction.tailWords", reader.Remaining / 4);
-                    diagnostic["tailNote"] = "The leading buffs/count/TargetSettings/context bytes are structurally stable in current payloads. Tail words are preserved raw because inheritSkillIdList and buffIconDurationSourceSetting semantics are not fully proven.";
+                    diagnostic["postContextTailCandidate"] = ReadDiagnosticCreateBuffActionPostContextTail(reader, "createBuffAction.postContextTail");
+                    diagnostic["tailNote"] = "IL2CPP metadata names the fields after contextKey, but the current bytes do not yet prove how inheritSkillIdList and BuffIconDurationSourceSetting divide the raw tail.";
                 }
                 else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal))
@@ -1588,6 +1588,34 @@ namespace AnimeStudio.CLI
             };
             data["length"] = reader.Position - start;
             data["layoutNote"] = "Current bytes show a count-prefixed aligned buff-id string list followed by four reserved zero words; the exact generic field type remains unresolved locally.";
+            return data;
+        }
+
+        private static OrderedDictionary ReadDiagnosticCreateBuffActionPostContextTail(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "metadataFieldOrder", new[]
+                    {
+                        "autoFinishByAction",
+                        "inheritSkillIdList",
+                        "asChildBuff",
+                        "inheritSourceSkillCastId",
+                        "inheritSourceSkillCastInfo",
+                        "isExtra",
+                        "overrideBuffIconDuration",
+                        "buffIconDurationSource",
+                    }
+                },
+                { "rawWords", ReadDiagnosticRawWords(reader, $"{fieldName}.rawWords", reader.Remaining / 4) },
+            };
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "Installed IL2CPP metadata names the post-context fields, but current samples only prove the combined raw tail. Keep this as a field-order diagnostic until inheritSkillIdList and BuffIconDurationSourceSetting byte boundaries are proven.";
             return data;
         }
 
@@ -4393,6 +4421,27 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal))
+            {
+                if (length < 200 || length > 512 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["buffs"] = ReadDiagnosticCreateBuffActionBuffs(reader, "createBuffAction.buffs");
+                data["count"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "createBuffAction.count", 128);
+                data["targetSettings"] = ReadDiagnosticTargetSettings(reader, "createBuffAction.targetSettings", offset, recoveredByRid);
+                data["buffSource"] = BuildPayloadHash32(reader.ReadInt32("createBuffAction.buffSource"));
+                data["contextKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "createBuffAction.contextKey", 128);
+                data["postContextTail"] = ReadDiagnosticCreateBuffActionPostContextTail(reader, "createBuffAction.postContextTail");
+                data["layoutNote"] = "Installed IL2CPP metadata exposes buffs, count, targetSettings, buffSource, contextKey, and the post-context field order after the inherited AbilityActionData prefix. The payload is consumed completely, but targetSettings and the post-context tail remain partial diagnostics because selector suffixes, inheritSkillIdList, and BuffIconDurationSourceSetting byte boundaries are not fully proven.";
+                reader.EnsureComplete();
+                return true;
+            }
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal))
             {
