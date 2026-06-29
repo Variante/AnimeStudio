@@ -2647,6 +2647,387 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckRepairBuilding", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckRepairBuilding" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "repairId", ReadGuideStringParam(reader, "repairId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "FacBuildingProducingCountInScene", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.FacBuildingProducingCountInScene" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "facBuildingId", ReadGuideStringParam(reader, "facBuildingId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnGetItem", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnGetItem" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "HasItemCount", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.HasItemCount" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnTechTreeNodeUnlock", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnTechTreeNodeUnlock" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "techId", ReadGuideStringParam(reader, "techId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckWorldLevel", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckWorldLevel" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "compareOperator", ReadGuideIntParam(reader, "compareOperator") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckItemBagCanPutInServer", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckItemBagCanPutInServer" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                        { "count", ReadGuideIntParam(reader, "count") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckWireLinkAvailable", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckWireLinkAvailable" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isAvailable", ReadGuideBoolParam(reader, "isAvailable") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckPlayerPin", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckPlayerPin" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "formulaId", ReadGuideStringParam(reader, "formulaId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckCharInMainTeam", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckCharInMainTeam" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "charId", ReadGuideStringParam(reader, "charId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsWeaponEquipped", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsWeaponEquipped" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "charId", ReadGuideStringParam(reader, "charId") },
+                        { "weaponId", ReadGuideStringParam(reader, "weaponId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckUnlockTechLayer", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckUnlockTechLayer" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "facLayerId", ReadGuideStringParam(reader, "facLayerId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckSpaceshipRoomStationCount", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckSpaceshipRoomStationCount" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "roomType", ReadGuideIntParam(reader, "roomType") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckDomainShopChannelLevel", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckDomainShopChannelLevel" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "channelId", ReadGuideStringParam(reader, "channelId") },
+                        { "level", ReadGuideIntParam(reader, "level") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "FacStatisticItemGenRate", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.FacStatisticItemGenRate" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "FacStatisticItemGen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.FacStatisticItemGen" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "FacProducePowerReach", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.FacProducePowerReach" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "power", ReadGuideIntParam(reader, "power") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "FacProducingFormulaCountInScene", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.FacProducingFormulaCountInScene" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "facFormulaId", ReadGuideStringParam(reader, "facFormulaId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckDomainShopPanelHasSoldOutGroup", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckDomainShopPanelHasSoldOutGroup" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "checkHasGroup", ReadGuideBoolParam(reader, "checkHasGroup") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckGachaWeaponTopCount", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckGachaWeaponTopCount" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "count", ReadGuideIntParam(reader, "count") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckSpaceshipRoomBuiltById", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckSpaceshipRoomBuiltById" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "roomId", ReadGuideStringParam(reader, "roomId") },
+                        { "isBuild", ReadGuideBoolParam(reader, "isBuild") },
+                        { "roomType", ReadGuideIntParam(reader, "roomType") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
                 if (isGuideAction
                     && TryDecodeGuideActionManagedReferenceData(header, reader, offset, length, out data))
                 {
@@ -2898,6 +3279,41 @@ namespace AnimeStudio.CLI
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
                 data["idList"] = ReadGuideRawInt32List(reader, "idList", 64);
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.ClassName, "SetEnablePlayerAction", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["advanced"] = ReadGuideActionParamBool(reader, "advanced");
+                data["enablePlayerInput"] = ReadGuideActionParamBool(reader, "enablePlayerInput");
+                data["actionMask"] = ReadGuideActionParamInt(reader, "actionMask");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "ShowLimitedGuide", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["textId"] = ReadGuideActionParamString(reader, "textId");
+                data["duration"] = ReadGuideActionParamFloat(reader, "duration");
+                data["type"] = ReadGuideActionParamInt(reader, "type");
+                data["iconType"] = ReadGuideActionParamInt(reader, "iconType");
+                data["needIgnoreWhenConflict"] = ReadGuideActionParamBool(reader, "needIgnoreWhenConflict");
+                data["mediaGuideGroupId"] = ReadGuideActionParamString(reader, "mediaGuideGroupId");
+                data["wikiId"] = ReadGuideActionParamString(reader, "wikiId");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "UIScrollListScrollTo", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["listPath"] = ReadGuideActionParamString(reader, "listPath");
+                data["cellGameObjectName"] = ReadGuideActionParamString(reader, "cellGameObjectName");
                 reader.EnsureComplete();
                 return true;
             }
@@ -3178,6 +3594,8 @@ namespace AnimeStudio.CLI
             {
                 case "ClearFacPin":
                     return "pinType";
+                case "NaviToMixPoolTargetItem":
+                    return "index";
                 default:
                     return null;
             }
@@ -3201,6 +3619,10 @@ namespace AnimeStudio.CLI
                     return "itemId";
                 case "ClickUI":
                     return "uiPath";
+                case "FocusTechTreeLayer":
+                    return "layerId";
+                case "FocusTechTreeCategory":
+                    return "categoryId";
                 default:
                     return null;
             }
@@ -3232,7 +3654,9 @@ namespace AnimeStudio.CLI
                         || string.Equals(header.ClassName, "OnMixPoolSelectFinish", StringComparison.Ordinal)
                         || string.Equals(header.ClassName, "OnGeneralAbilityUse", StringComparison.Ordinal)
                         || string.Equals(header.ClassName, "OnLiquidInteractInDumpMode", StringComparison.Ordinal)
-                        || string.Equals(header.ClassName, "OnFacPendingSlotChanged", StringComparison.Ordinal)));
+                        || string.Equals(header.ClassName, "OnFacPendingSlotChanged", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnFacMainPinHintShow", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "OnWeekRaidIntroCharFormationOpen", StringComparison.Ordinal)));
         }        private static bool TryDecodeCoreGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
