@@ -8897,6 +8897,21 @@ namespace AnimeStudio.CLI
                             if (TryReadAbilitySystemUIData(reader, out var uiData))
                             {
                                 data["uiData"] = uiData;
+                                if (TryReadAbilitySystemBuffInputLists(reader, out var buffInputLists))
+                                {
+                                    foreach (DictionaryEntry entry in buffInputLists)
+                                    {
+                                        data[entry.Key] = entry.Value;
+                                    }
+
+                                    if (TryReadAbilitySystemPostBuffFields(reader, out var postBuffFields))
+                                    {
+                                        foreach (DictionaryEntry entry in postBuffFields)
+                                        {
+                                            data[entry.Key] = entry.Value;
+                                        }
+                                    }
+                                }
                             }
                         }
                         data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
@@ -10839,6 +10854,183 @@ namespace AnimeStudio.CLI
                 { "immuneTxtSpawnAreaSize", ReadPayloadVector2(reader, $"{fieldName}.immuneTxtSpawnAreaSize") },
                 { "immuneTxtCooldown", reader.ReadFloat($"{fieldName}.immuneTxtCooldown") },
             };
+        }
+
+        private static bool TryReadAbilitySystemBuffInputLists(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "dashBuff", ReadAbilitySystemBuffInputList(local, "dashBuff", 8) },
+                    { "buffDuringPoiseExist", ReadAbilitySystemBuffInputList(local, "buffDuringPoiseExist", 8) },
+                    { "buffDuringZeroPoise", ReadAbilitySystemBuffInputList(local, "buffDuringZeroPoise", 8) },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBuffInputList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadAbilitySystemBuffInput(reader, $"{fieldName}[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBuffInput(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.BuffInput" },
+                { "buffId", reader.ReadAlignedAsciiString($"{fieldName}.buffId") },
+                { "assignBlackboard", reader.ReadBool32($"{fieldName}.assignBlackboard") },
+                { "assignItems", ReadAbilitySystemBuffAssignItemList(reader, $"{fieldName}.assignItems", 16) },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBuffAssignItemList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadAbilitySystemBuffAssignItem(reader, $"{fieldName}[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBuffAssignItem(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "targetKey", reader.ReadAlignedAsciiString($"{fieldName}.targetKey") },
+                { "inputValueKey", reader.ReadAlignedAsciiString($"{fieldName}.inputValueKey") },
+                { "useDirectValue", reader.ReadBool32($"{fieldName}.useDirectValue") },
+                { "directValueType", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.directValueType")) },
+                { "numericValue", reader.ReadFloat($"{fieldName}.numericValue") },
+                { "stringValue", reader.ReadAlignedAsciiString($"{fieldName}.stringValue") },
+            };
+        }
+
+        private static bool TryReadAbilitySystemPostBuffFields(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "plungingAttackData", ReadAbilitySystemPlungingAttackData(local) },
+                    { "battleRootData", ReadAbilitySystemBattleRootData(local) },
+                    { "poiseBrokenEndTime", local.ReadFloat("poiseBrokenEndTime") },
+                    { "poiseKnotBreakImmobilizeTime", local.ReadFloat("poiseKnotBreakImmobilizeTime") },
+                    { "playPoiseBrokenEffect", local.ReadBool32("playPoiseBrokenEffect") },
+                    { "unlockAfterOutScreen", local.ReadBool32("unlockAfterOutScreen") },
+                    { "overrideMarkTargetDistance", local.ReadBool32("overrideMarkTargetDistance") },
+                    { "customMarkTargetDistance", local.ReadFloat("customMarkTargetDistance") },
+                    { "overrideMarkTargetHeight", local.ReadBool32("overrideMarkTargetHeight") },
+                    { "customMarkTargetHeight", local.ReadFloat("customMarkTargetHeight") },
+                    { "accurateMarkTargetDistance", local.ReadBool32("accurateMarkTargetDistance") },
+                    { "defaultHitEffect", local.ReadAlignedAsciiString("defaultHitEffect") },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemPlungingAttackData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.AbilitySystemData.PlungingAttackData" },
+                { "startDuration", reader.ReadFloat("plungingAttackData.startDuration") },
+                { "endDuration", reader.ReadFloat("plungingAttackData.endDuration") },
+                { "enableOverridePlungingAttackDownSpeed", reader.ReadBool32("plungingAttackData.enableOverridePlungingAttackDownSpeed") },
+                { "overridePlungingAttackDownSpeed", reader.ReadFloat("plungingAttackData.overridePlungingAttackDownSpeed") },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBattleRootData(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.AbilitySystemData.BattleRootData" },
+                { "overrideBattleRoot", reader.ReadBool32("battleRootData.overrideBattleRoot") },
+                { "rootMountPoint", ReadAbilitySystemMountPoint(reader, "battleRootData.rootMountPoint") },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemMountPoint(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return ReadPayloadNamedEnum32(reader, fieldName, new[]
+            {
+                "None",
+                "HeadBar",
+                "FootBar",
+                "LockPoint",
+                "HeadStatus",
+                "DmgTxtSpawnPoint",
+            });
         }
 
         private static bool TryReadAbilitySystemSkillDataBundle(
