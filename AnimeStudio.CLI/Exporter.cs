@@ -10702,7 +10702,6 @@ namespace AnimeStudio.CLI
                 {
                     { "$partial", true },
                     { "layout", "Beyond.Gameplay.Core.SkillDataBundle" },
-                    { "layoutNote", "decoded through comboSkillSpecialNodeName; defaultCmdMapping and later AbilitySystemData fields remain in remainingRawWords" },
                     { "allNormalAttackId", ReadPayloadStringList(local, "skillDataBundle.allNormalAttackId", 256) },
                     { "allActiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allActiveSkillId", 256) },
                     { "allPassiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allPassiveSkillId", 256) },
@@ -10714,10 +10713,31 @@ namespace AnimeStudio.CLI
                     { "plungingAttackStartId", local.ReadAlignedAsciiString("skillDataBundle.plungingAttackStartId") },
                     { "plungingAttackEndId", local.ReadAlignedAsciiString("skillDataBundle.plungingAttackEndId") },
                     { "dodgeSkillId", local.ReadAlignedAsciiString("skillDataBundle.dodgeSkillId") },
-                    { "comboSkillConditionsRawWords", ReadAbilitySystemRawWordList(local, "skillDataBundle.comboSkillConditionsRawWords", 64) },
-                    { "comboSkillId", local.ReadAlignedAsciiString("skillDataBundle.comboSkillId") },
-                    { "comboSkillSpecialNodeName", local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName") },
                 };
+
+                var comboSkillConditionCount = local.ReadInt32("skillDataBundle.comboSkillConditions.count");
+                if (comboSkillConditionCount < 0 || comboSkillConditionCount > 64)
+                {
+                    throw new InvalidDataException($"invalid count {comboSkillConditionCount} for skillDataBundle.comboSkillConditions");
+                }
+
+                data["comboSkillConditions"] = new OrderedDictionary
+                {
+                    { "$partial", comboSkillConditionCount > 0 },
+                    { "count", comboSkillConditionCount },
+                };
+
+                if (comboSkillConditionCount == 0)
+                {
+                    data["comboSkillId"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillId");
+                    data["comboSkillSpecialNodeName"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName");
+                    data["layoutNote"] = "decoded through comboSkillSpecialNodeName; defaultCmdMapping and later AbilitySystemData fields remain in remainingRawWords";
+                }
+                else
+                {
+                    data["layoutNote"] = "decoded through comboSkillConditions.count; non-empty comboSkillConditions and later SkillDataBundle fields remain in remainingRawWords";
+                }
+
                 reader.SetPosition(local.Position);
                 return true;
             }
