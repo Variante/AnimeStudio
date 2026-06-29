@@ -4789,6 +4789,7 @@ namespace AnimeStudio.CLI
                     || ch == '<'
                     || ch == '>'
                     || ch == '+'
+                    || ch == '/'
                     || ch == '['
                     || ch == ']'
                     || ch == ','))
