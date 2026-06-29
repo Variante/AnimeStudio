@@ -6234,6 +6234,17 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeCharacterTemplateManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                out data))
+            {
+                return true;
+            }
+
             if (TryDecodeProjectileTemplateManagedReferenceData(
                 header,
                 rawData,
@@ -7062,6 +7073,113 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeCharacterTemplateManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "CharacterTemplateData", StringComparison.Ordinal)
+                || length < 300
+                || (length % 4) != 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var id = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "characterTemplateData.id", 128);
+                if (!id.StartsWith("chr_", StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException($"unexpected CharacterTemplateData id {id}");
+                }
+
+                var baseName = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "characterTemplateData.baseTemplate.name", 128);
+                var factionIndex = reader.ReadInt32("characterTemplateData.baseTemplate.factionIndex");
+                var bornTagPresent = reader.ReadBool32("characterTemplateData.entityTemplate.bornTag.present");
+                OrderedDictionary bornTag = null;
+                if (bornTagPresent)
+                {
+                    bornTag = ReadPayloadGameplayTagWithZeroPadding(reader, "characterTemplateData.entityTemplate.bornTag", 256);
+                }
+
+                var delayToRecycleTime = ReadPayloadFloatRange(reader, "characterTemplateData.entityTemplate.delayToRecycleTime", 0f, 3600f);
+                var delayRecyclePerformTime = ReadPayloadFloatRange(reader, "characterTemplateData.entityTemplate.delayRecyclePerformTime", 0f, 3600f);
+                var sendDieEvent = reader.ReadBool32("characterTemplateData.entityTemplate.sendDieEvent");
+                var enableBornFadeIn = reader.ReadBool32("characterTemplateData.entityTemplate.enableBornFadeIn");
+                var fadeInTime = ReadPayloadFloatRange(reader, "characterTemplateData.entityTemplate.fadeInTime", 0f, 3600f);
+                var componentList = ReadPayloadRidLinkList(reader, "characterTemplateData.entityTemplate.componentList", 32, recoveredByRid);
+                if (componentList.Count != 26)
+                {
+                    throw new InvalidDataException($"unexpected CharacterTemplateData component count {componentList.Count}");
+                }
+
+                var animConfigPath = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "characterTemplateData.animConfigPath", 256);
+                if (!animConfigPath.StartsWith("Assets/", StringComparison.Ordinal)
+                    || !animConfigPath.EndsWith(".asset", StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException($"unexpected CharacterTemplateData anim config path {animConfigPath}");
+                }
+
+                var bodyType = reader.ReadInt32("characterTemplateData.bodyType.bodyType");
+                var customName = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "characterTemplateData.bodyType.CustomName", 128);
+                var customId = reader.ReadInt32("characterTemplateData.bodyType.CustomId");
+                var entityTemplate = new OrderedDictionary
+                {
+                    { "bornTagPresent", bornTagPresent },
+                    { "delayToRecycleTime", delayToRecycleTime },
+                    { "delayRecyclePerformTime", delayRecyclePerformTime },
+                    { "sendDieEvent", sendDieEvent },
+                    { "enableBornFadeIn", enableBornFadeIn },
+                    { "fadeInTime", fadeInTime },
+                    { "componentList", componentList },
+                };
+                if (bornTag != null)
+                {
+                    entityTemplate["bornTag"] = bornTag;
+                }
+
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.CharacterTemplateData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "id", id },
+                    { "baseTemplate", new OrderedDictionary
+                        {
+                            { "name", baseName },
+                            { "factionIndex", BuildPayloadHash32(factionIndex) },
+                        }
+                    },
+                    { "entityTemplate", entityTemplate },
+                    { "animConfigPath", animConfigPath },
+                    { "bodyType", new OrderedDictionary
+                        {
+                            { "bodyType", BuildPayloadHash32(bodyType) },
+                            { "CustomName", customName },
+                            { "CustomId", BuildPayloadHash32(customId) },
+                        }
+                    },
+                    { "layoutNote", "Installed IL2CPP metadata supplies GameDataWithId/BaseTemplateData/EntityTemplateData/CharacterTemplateData/BodyTypeDef field order. Current payloads contain one optional born GameplayTag, exactly 26 component RID links, and an animation config asset path; bodyType and CustomId are retained as raw hash-style int32 values until their enum/domain is identified." },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
         }
 
         private static bool TryDecodeProjectileTemplateManagedReferenceData(
@@ -8344,6 +8462,19 @@ namespace AnimeStudio.CLI
             return new OrderedDictionary
             {
                 { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "tagId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.tagId")) },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadGameplayTagWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxPathLength
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "path", ReadPayloadAlignedUtf8StringWithZeroPadding(reader, $"{fieldName}.path", maxPathLength) },
                 { "tagId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.tagId")) },
             };
         }
