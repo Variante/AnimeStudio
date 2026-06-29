@@ -1150,6 +1150,7 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -6100,6 +6101,7 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -6120,6 +6122,17 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                out data))
+            {
+                return true;
+            }
+
+            if (TryDecodeProjectileTemplateManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
                 out data))
             {
                 return true;
@@ -6217,6 +6230,69 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeProjectileTemplateManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "ProjectileTemplateData", StringComparison.Ordinal)
+                || length < 160)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.ProjectileTemplateData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "id", reader.ReadAlignedAsciiString("id") },
+                    { "baseTemplate", new OrderedDictionary
+                        {
+                            { "name", reader.ReadAlignedAsciiString("baseTemplate.name") },
+                            { "factionIndex", BuildPayloadHash32(reader.ReadInt32("baseTemplate.factionIndex")) },
+                        }
+                    },
+                    { "entityTemplate", new OrderedDictionary
+                        {
+                            { "bornTag", BuildPayloadHash32(reader.ReadInt32("entityTemplate.bornTag")) },
+                            { "delayToRecycleTime", reader.ReadFloat("entityTemplate.delayToRecycleTime") },
+                            { "delayRecyclePerformTime", reader.ReadFloat("entityTemplate.delayRecyclePerformTime") },
+                            { "sendDieEvent", reader.ReadBool32("entityTemplate.sendDieEvent") },
+                            { "enableBornFadeIn", reader.ReadBool32("entityTemplate.enableBornFadeIn") },
+                            { "fadeInTime", reader.ReadFloat("entityTemplate.fadeInTime") },
+                            { "componentList", ReadPayloadRidLinkList(reader, "entityTemplate.componentList", 16, recoveredByRid) },
+                        }
+                    },
+                    { "useWeaponEmitMountPoint", reader.ReadBool32("useWeaponEmitMountPoint") },
+                };
+                data["emitMountPoint"] = BuildPayloadHash32(reader.ReadInt32("emitMountPoint"));
+                data["weaponIndex"] = reader.ReadInt32("weaponIndex");
+                data["weaponMountPoint"] = BuildPayloadHash32(reader.ReadInt32("weaponMountPoint"));
+                data["hitMountPoint"] = BuildPayloadHash32(reader.ReadInt32("hitMountPoint"));
+                data["skillDataBundle"] = ReadProjectileSkillDataBundle(reader);
+                data["layoutNote"] = "Installed IL2CPP metadata supplies GameDataWithId/BaseTemplateData/EntityTemplateData/ProjectileTemplateData field order; current payloads use a single int32 bornTag, bool32 fields, and an empty comboSkillConditions list and an empty defaultCmdMapping with zero key/value counts.";
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
         }
 
         private static bool TryDecodeUIManagedReferenceData(
@@ -8277,6 +8353,75 @@ namespace AnimeStudio.CLI
             {
                 return false;
             }
+        }
+
+        private static OrderedDictionary ReadProjectileSkillDataBundle(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", "Beyond.Gameplay.Core.SkillDataBundle" },
+                { "allNormalAttackId", ReadPayloadStringList(reader, "skillDataBundle.allNormalAttackId", 256) },
+                { "allActiveSkillId", ReadPayloadStringList(reader, "skillDataBundle.allActiveSkillId", 256) },
+                { "allPassiveSkillId", ReadPayloadStringList(reader, "skillDataBundle.allPassiveSkillId", 256) },
+                { "normalAttackList", ReadPayloadStringList(reader, "skillDataBundle.normalAttackList", 256) },
+                { "enabledBreakingNormalAttacks", ReadPayloadStringList(reader, "skillDataBundle.enabledBreakingNormalAttacks", 256) },
+                { "enabledPassiveSkills", ReadPayloadStringList(reader, "skillDataBundle.enabledPassiveSkills", 256) },
+                { "normalSkillId", reader.ReadAlignedAsciiString("skillDataBundle.normalSkillId") },
+                { "ultimateSkillId", reader.ReadAlignedAsciiString("skillDataBundle.ultimateSkillId") },
+                { "plungingAttackStartId", reader.ReadAlignedAsciiString("skillDataBundle.plungingAttackStartId") },
+                { "plungingAttackEndId", reader.ReadAlignedAsciiString("skillDataBundle.plungingAttackEndId") },
+                { "dodgeSkillId", reader.ReadAlignedAsciiString("skillDataBundle.dodgeSkillId") },
+                { "comboSkillConditions", ReadPayloadEmptyCountList(reader, "skillDataBundle.comboSkillConditions") },
+                { "comboSkillId", reader.ReadAlignedAsciiString("skillDataBundle.comboSkillId") },
+                { "comboSkillSpecialNodeName", reader.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName") },
+                { "defaultCmdMapping", ReadPayloadEmptyCountObject(reader, "skillDataBundle.defaultCmdMapping") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadEmptyCountList(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count != 0)
+            {
+                throw new InvalidDataException($"unsupported non-empty {fieldName} count {count}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", new List<OrderedDictionary>() },
+            };
+        }
+        private static OrderedDictionary ReadPayloadEmptyCountObject(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount != 0)
+            {
+                throw new InvalidDataException($"unsupported non-empty {fieldName} keys count {keyCount}");
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != 0)
+            {
+                throw new InvalidDataException($"unsupported non-empty {fieldName} values count {valueCount}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", new List<OrderedDictionary>() },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", new List<OrderedDictionary>() },
+                    }
+                },
+            };
         }
 
         private static bool TryReadAbilitySystemSkillDataBundle(
