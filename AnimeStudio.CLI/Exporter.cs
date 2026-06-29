@@ -2899,6 +2899,310 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterAttackResourceBehavior/CharacterAttackResourceBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterAttackResourceBehavior/CharacterAttackResourceBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "attackPQS", ReadPayloadPPtr(reader, "attackPQS") },
+                        { "timeout", reader.ReadFloat("timeout") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterBattleCommandBehavior/CharacterBattleCommandBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterBattleCommandBehavior/CharacterBattleCommandBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "safeAreaPQS", ReadPayloadPPtr(reader, "safeAreaPQS") },
+                        { "reactionDelay", ReadPayloadVector2(reader, "reactionDelay") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterBarkExploreBehavior/CharacterBarkExploreBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterBarkExploreBehavior/CharacterBarkExploreBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "gait", BuildPayloadHash32(reader.ReadInt32("gait")) },
+                        { "talkId", reader.ReadAlignedAsciiString("talkId") },
+                        { "helloTalkId", reader.ReadAlignedAsciiString("helloTalkId") },
+                        { "callDis", reader.ReadFloat("callDis") },
+                        { "callCD", ReadPayloadVector2(reader, "callCD") },
+                        { "startMoveDis", reader.ReadFloat("startMoveDis") },
+                        { "targetStartDis", reader.ReadFloat("targetStartDis") },
+                        { "targetStopDis", reader.ReadFloat("targetStopDis") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterCheckSpIdle/CharacterCheckSpIdleData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterCheckSpIdle/CharacterCheckSpIdleData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "revert", reader.ReadBool32("revert") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFocusImportantBehavior/CharacterFocusImportantBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFocusImportantBehavior/CharacterFocusImportantBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "walkDuration", reader.ReadFloat("walkDuration") },
+                        { "exitRadius", reader.ReadFloat("exitRadius") },
+                        { "returnWalkDuration", reader.ReadFloat("returnWalkDuration") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFarmGraph/CharacterFarmGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFarmGraph/CharacterFarmGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "farmTag", ReadPayloadGameplayTag(reader, "farmTag") },
+                        { "attackResourceTag", ReadPayloadGameplayTag(reader, "attackResourceTag") },
+                        { "followTag", ReadPayloadGameplayTag(reader, "followTag") },
+                        { "teleportTag", ReadPayloadGameplayTag(reader, "teleportTag") },
+                        { "forceTeleportTag", ReadPayloadGameplayTag(reader, "forceTeleportTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcBattleConfrontBehavior/NpcBattleConfrontBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcBattleConfrontBehavior/NpcBattleConfrontBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "animTag", ReadPayloadGameplayTag(reader, "animTag") },
+                        { "needRot", reader.ReadBool32("needRot") },
+                        { "randomDelay", ReadPayloadVector2(reader, "randomDelay") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcCleanPackAnimalBehavior/NpcCleanPackAnimalBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcCleanPackAnimalBehavior/NpcCleanPackAnimalBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "happyAnimTag", ReadPayloadGameplayTag(reader, "happyAnimTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcFecesPackAnimalBehavior/NpcFecesPackAnimalBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcFecesPackAnimalBehavior/NpcFecesPackAnimalBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "performId", reader.ReadAlignedAsciiString("performId") },
+                        { "performIdWhenCantFeces", reader.ReadAlignedAsciiString("performIdWhenCantFeces") },
+                        { "failedToast", reader.ReadAlignedAsciiString("failedToast") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcLeaveBattleBehavior/NpcLeaveBattleBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcLeaveBattleBehavior/NpcLeaveBattleBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "randomDelay", ReadPayloadVector2(reader, "randomDelay") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSlugBehavior/NpcSlugBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSlugBehavior/NpcSlugBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "lieAnimTag", ReadPayloadGameplayTag(reader, "lieAnimTag") },
+                        { "hitAnimTag", ReadPayloadGameplayTag(reader, "hitAnimTag") },
+                        { "duration", reader.ReadFloat("duration") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSlugLieBehavior/NpcSlugLieBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSlugLieBehavior/NpcSlugLieBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "lieAnimTag", ReadPayloadGameplayTag(reader, "lieAnimTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSlugGraph/NpcSlugGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSlugGraph/NpcSlugGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "patrolTag", ReadPayloadGameplayTag(reader, "patrolTag") },
+                        { "idleShowTag", ReadPayloadGameplayTag(reader, "idleShowTag") },
+                        { "slugTag", ReadPayloadGameplayTag(reader, "slugTag") },
+                        { "slugLieTag", ReadPayloadGameplayTag(reader, "slugLieTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSpaceShipGraph/NpcSpaceShipGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSpaceShipGraph/NpcSpaceShipGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "hallCommonTag", ReadPayloadGameplayTag(reader, "hallCommonTag") },
+                        { "hallSeatTag", ReadPayloadGameplayTag(reader, "hallSeatTag") },
+                        { "controlCenterTag", ReadPayloadGameplayTag(reader, "controlCenterTag") },
+                        { "manufacturingStationTag", ReadPayloadGameplayTag(reader, "manufacturingStationTag") },
+                        { "growCabinTag", ReadPayloadGameplayTag(reader, "growCabinTag") },
+                        { "guestRoomTag", ReadPayloadGameplayTag(reader, "guestRoomTag") },
+                        { "leaveTag", ReadPayloadGameplayTag(reader, "leaveTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSpaceShipLeaveBehavior/NpcSpaceShipLeaveBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSpaceShipLeaveBehavior/NpcSpaceShipLeaveBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "greetVirtualTag", ReadPayloadGameplayTag(reader, "greetVirtualTag") },
+                        { "greetCD", reader.ReadFloat("greetCD") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSpaceShipWaitBehavior/NpcSpaceShipWaitBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSpaceShipWaitBehavior/NpcSpaceShipWaitBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "waitTime", ReadPayloadVector2(reader, "waitTime") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -2934,6 +3238,13 @@ namespace AnimeStudio.CLI
                 || string.Equals(header.ClassName, "CharacterForceTeleportBehavior/CharacterForceTeleportBehaviorData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "CharacterJumpResponse/CharacterJumpResponseData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "CharacterSkillHoldBehavior/CharacterSkillHoldBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterCastSkillGraph/CharacterCastSkillGraphData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterEvadeBehavior/CharacterEvadeBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "NpcAttractBehavior/NpcAttractBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "NpcPassiveAttractBehavior/NpcPassiveAttractBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "NpcBattleConfrontResponse/NpcBattleConfrontResponseData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "NpcEnvConfrontResponse/NpcEnvConfrontResponseData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "NpcSettlementBehavior/NpcSettlementBehaviorData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "NpcIdleShowBehavior/NpcIdleShowBehaviorData", StringComparison.Ordinal);
         }
 
