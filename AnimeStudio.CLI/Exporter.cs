@@ -1758,6 +1758,29 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.ClassName, "AbilityActions.FinishGlobalBuffAction/Data", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.AbilityActions.FinishGlobalBuffAction/Data" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "isEnable", reader.ReadBool32("isEnable") },
+                        { "priorityLevel", reader.ReadInt32("priorityLevel") },
+                        { "priorityOffset", reader.ReadInt32("priorityOffset") },
+                        { "serverActionIndex", reader.ReadInt32("serverActionIndex") },
+                        { "finishParent", reader.ReadBool32("finishParent") },
+                        { "globalBuffIds", ReadPayloadStringList(reader, "globalBuffIds", 16) },
+                        { "finishAll", reader.ReadBool32("finishAll") },
+                        { "finishCount", ReadPayloadBlackboardDouble(reader, "finishCount") },
+                        { "isFinishedEarly", reader.ReadBool32("isFinishedEarly") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -3756,6 +3779,24 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NPCCommonAnimalRandomPlayMontageBehavior/NPCCommonAnimalRandomPlayMontageBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NPCCommonAnimalRandomPlayMontageBehavior/NPCCommonAnimalRandomPlayMontageBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "montageInfos", ReadPlayTimedMontageInfoList(reader, "montageInfos", 16) },
+                        { "playInterval", ReadPayloadVector2(reader, "playInterval") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -5023,6 +5064,46 @@ namespace AnimeStudio.CLI
                 { "values", values },
                 { "entries", entries },
             };
+        }
+
+        private static OrderedDictionary ReadPayloadBlackboardDouble(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "useBlackboardKey", reader.ReadBool32($"{fieldName}.useBlackboardKey") },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+                { "blackboardKey", reader.ReadAlignedAsciiString($"{fieldName}.blackboardKey") },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadPlayTimedMontageInfoList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "playMontageTag", ReadPayloadGameplayTag(reader, $"{fieldName}[{i}].playMontageTag") },
+                    { "overrideMontageStartState", reader.ReadBool32($"{fieldName}[{i}].overrideMontageStartState") },
+                    { "montageStartState", BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}].montageStartState")) },
+                    { "limitMaxDuration", reader.ReadBool32($"{fieldName}[{i}].limitMaxDuration") },
+                    { "duration", ReadPayloadVector2(reader, $"{fieldName}[{i}].duration") },
+                });
+            }
+            return items;
         }
 
         private static OrderedDictionary ReadPayloadIntStringDictionary(
