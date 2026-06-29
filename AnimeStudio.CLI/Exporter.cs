@@ -1727,7 +1727,7 @@ namespace AnimeStudio.CLI
             data = null;
             if (header == null
                 || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
-                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !header.Namespace.StartsWith("Beyond.Gameplay.Core", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
                 || length <= 0
@@ -1759,7 +1759,7 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
-                if (string.Equals(header.ClassName, "AbilityActions.FinishGlobalBuffAction/Data", StringComparison.Ordinal))
+                if (string.Equals(header.ClassName, "FinishGlobalBuffAction/Data", StringComparison.Ordinal))
                 {
                     data = new OrderedDictionary
                     {
@@ -4069,7 +4069,7 @@ namespace AnimeStudio.CLI
         {
             data = null;
             if (header == null
-                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !header.Namespace.StartsWith("Beyond.Gameplay.Core", StringComparison.Ordinal)
                 || !string.Equals(header.ClassName, "SkeletalMorphMappingData", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
@@ -4115,7 +4115,7 @@ namespace AnimeStudio.CLI
         {
             data = null;
             if (header == null
-                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !header.Namespace.StartsWith("Beyond.Gameplay.Core", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
                 || length <= 0
@@ -4182,7 +4182,7 @@ namespace AnimeStudio.CLI
         {
             data = null;
             if (header == null
-                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !header.Namespace.StartsWith("Beyond.Gameplay.Core", StringComparison.Ordinal)
                 || !string.Equals(header.ClassName, "SkeletalMorphShaderPropMappingData", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
