@@ -240,6 +240,26 @@ namespace AnimeStudio
 				}
 				throw new ArgumentException($"Unknown attribute {attribute} for {_this}");*/
 
+                case BindingCustomType.ParticleSystemForceField:
+                    {
+                        const string ParametersStartRange = "m_Parameters.m_StartRange";
+                        if (attribute == CRC.CalculateDigestAscii(ParametersStartRange))
+                        {
+                            return ParametersStartRange;
+                        }
+                        const string ParametersEndRange = "m_Parameters.m_EndRange";
+                        if (attribute == CRC.CalculateDigestAscii(ParametersEndRange))
+                        {
+                            return ParametersEndRange;
+                        }
+                        const string ParametersGravityFocus = "m_Parameters.m_GravityFocus";
+                        if (attribute == CRC.CalculateDigestAscii(ParametersGravityFocus))
+                        {
+                            return ParametersGravityFocus;
+                        }
+                    }
+                    return UnknownCustomAttributeName(type, attribute);
+
                 case BindingCustomType.RectTransform:
                     {
                         string LocalPositionZ = "m_LocalPosition.z";

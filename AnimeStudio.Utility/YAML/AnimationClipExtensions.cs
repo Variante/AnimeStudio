@@ -344,5 +344,6 @@ namespace AnimeStudio
         ParentConstraint = 35,
         LookAtConstraint = 36,
         Camera = 37,
+        ParticleSystemForceField = 39,
     }
 }
