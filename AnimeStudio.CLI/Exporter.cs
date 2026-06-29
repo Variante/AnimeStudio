@@ -219,6 +219,46 @@ namespace AnimeStudio.CLI
                 $"ExportPath={QuoteLogField(exportPath)}");
         }
 
+        private static bool ExportEmptyAnimatorMarker(AssetItem item, Animator animator, ModelConverter convert, string exportPath, string reason)
+        {
+            if (!TryExportFile(exportPath, item, ".fbx.empty.json", out var exportFullPath))
+            {
+                LogAnimatorNoOutput(item, animator, convert, exportFullPath, "output_path_unavailable");
+                return false;
+            }
+
+            animator.m_GameObject.TryGet(out var gameObject);
+            var marker = new
+            {
+                animeStudio = new
+                {
+                    kind = "empty_animator_marker",
+                    reason,
+                    note = "Unity parsed this Animator, but the resolved hierarchy has no Mesh objects, so no FBX geometry can be emitted."
+                },
+                type = item.TypeString,
+                name = item.Text,
+                pathId = item.m_PathID,
+                sourceFile = item.SourceFile?.fileName,
+                sourceOriginalPath = item.SourceFile?.originalPath,
+                sourceOffset = item.SourceFile?.offset ?? -1,
+                container = item.Container,
+                gameObjectName = gameObject?.m_Name,
+                gameObjectPathId = gameObject?.m_PathID ?? 0,
+                gameObjectPointerPathId = animator.m_GameObject.m_PathID,
+                avatarPathId = animator.m_Avatar.m_PathID,
+                controllerPathId = animator.m_Controller.m_PathID,
+                hasTransformHierarchy = animator.m_HasTransformHierarchy,
+                meshCount = convert.MeshList?.Count ?? 0,
+                materialCount = convert.MaterialList?.Count ?? 0,
+                textureCount = convert.TextureList?.Count ?? 0,
+                animationCount = convert.AnimationList?.Count ?? 0,
+                byteSize = item.FullSize
+            };
+            File.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
+            return true;
+        }
+
         public static bool ExportTexture2D(AssetItem item, string exportPath)
         {
             var m_Texture2D = (Texture2D)item.Asset;
@@ -5524,9 +5564,8 @@ namespace AnimeStudio.CLI
             }
             if (convert.MeshList.Count == 0)
             {
-                LogAnimatorNoOutput(item, m_Animator, convert, fbxExportPath, "no_mesh");
                 Directory.Delete(exportFullPath, true);
-                return false;
+                return ExportEmptyAnimatorMarker(item, m_Animator, convert, exportPath, "no_mesh");
             }
             if (options.exportMaterials)
             {
