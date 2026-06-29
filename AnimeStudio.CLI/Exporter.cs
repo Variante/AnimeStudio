@@ -1365,6 +1365,10 @@ namespace AnimeStudio.CLI
                 data["diagnosticNote"] = "Full raw payload trace for unresolved TargetSettings/buff-action layout recovery; this entry is intentionally still marked $unparsed.";
                 data["diagnosticFullPayloadHex"] = BuildPayloadHex(rawData, offset, length);
                 data["diagnosticRawWordTrace"] = CollectDiagnosticRawWordTrace(rawData, offset, length);
+                if (TryBuildTargetSettingsStructuredDiagnostic(header, rawData, offset, length, recoveredByRid, out var structuredLayout))
+                {
+                    data["diagnosticStructuredLayout"] = structuredLayout;
+                }
             }
 
             return data;
@@ -1410,6 +1414,217 @@ namespace AnimeStudio.CLI
                 builder.Append(rawData[offset + i].ToString("x2"));
             }
             return builder.ToString();
+        }
+
+        private static bool TryBuildTargetSettingsStructuredDiagnostic(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary diagnostic
+        )
+        {
+            diagnostic = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || (length % 4) != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                diagnostic = new OrderedDictionary
+                {
+                    { "$partial", true },
+                    { "status", "structured-diagnostic" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "layoutNote", "This structure is emitted for byte-level TargetSettings recovery only. The parent payload remains $unparsed because TargetSettings selector-data suffix fields are not fully named semantically." },
+                    { "abilityActionData", ReadDiagnosticAbilityActionDataPrefix(reader) },
+                };
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckMainCharacterCondition/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkMainCharacterCondition.checkTarget", offset, recoveredByRid);
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckObjectTypeMatch/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkObjectTypeMatch.checkTarget", offset, recoveredByRid);
+                    diagnostic["objectTypeMask"] = BuildPayloadHash32(reader.ReadInt32("checkObjectTypeMatch.objectTypeMask"));
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckTargetsEqual/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["source"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.source", offset, recoveredByRid);
+                    diagnostic["target"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.target", offset, recoveredByRid);
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckBuffStackNum/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNum.checkTarget", offset, recoveredByRid);
+                    diagnostic["buffIdCandidate"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "checkBuffStackNum.buffId", 128);
+                    diagnostic["compareTypeCandidate"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNum.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                    diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNum.value", 128);
+                    diagnostic["tailNote"] = "Metadata leaves the buffId field type unresolved locally; current bytes look like one aligned string plus compareType and BlackboardDouble.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumByTag.checkTarget", offset, recoveredByRid);
+                    diagnostic["tagQueryCandidate"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkBuffStackNumByTag.tagQuery", 8, 256);
+                    diagnostic["buffStackNumTypeCandidate"] = ReadPayloadEnum32(reader, "checkBuffStackNumByTag.buffStackNumType", 0, 16);
+                    diagnostic["compareTypeCandidate"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumByTag.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                    diagnostic["valueCandidate"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumByTag.value", 128);
+                    diagnostic["tailNote"] = "Tag query bytes are structured, but generic/list metadata remains unresolved locally; this remains a candidate semantic layout.";
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["key"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "modifyDynamicBlackboard.key", 128);
+                    diagnostic["operation"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.operation", new[] { "Assign", "Add", "Multiply", "Divide" });
+                    diagnostic["directValue"] = reader.ReadBool32("modifyDynamicBlackboard.directValue");
+                    diagnostic["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "modifyDynamicBlackboard.value", 128);
+                    diagnostic["calculationTarget"] = ReadDiagnosticTargetSettings(reader, "modifyDynamicBlackboard.calculationTarget", offset, recoveredByRid);
+                    diagnostic["calculateType"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.calculateType", new[] { "HpRatio" });
+                }
+                else if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal))
+                {
+                    diagnostic["useCurrentBuff"] = reader.ReadBool32("storeBuffCount.useCurrentBuff");
+                    diagnostic["buffOwners"] = ReadDiagnosticTargetSettings(reader, "storeBuffCount.buffOwners", offset, recoveredByRid);
+                    diagnostic["buffId"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.buffId", 128);
+                    diagnostic["blackboardKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.blackboardKey", 128);
+                }
+                else
+                {
+                    diagnostic = null;
+                    return false;
+                }
+
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                diagnostic = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadDiagnosticAbilityActionDataPrefix(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "isEnable", reader.ReadBool32("abilityActionData.isEnable") },
+                { "priorityLevel", reader.ReadInt32("abilityActionData.priorityLevel") },
+                { "priorityOffset", reader.ReadInt32("abilityActionData.priorityOffset") },
+                { "serverActionIndex", reader.ReadInt32("abilityActionData.serverActionIndex") },
+            };
+        }
+
+        private static OrderedDictionary ReadDiagnosticTargetSettings(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int payloadOffset,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.TargetSettings" },
+                { "relativeOffset", start - payloadOffset },
+                { "absoluteOffset", start },
+                { "targetSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.targetSource")) },
+                { "targetGroupKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.targetGroupKey", 128) },
+                { "selectorOwner", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.selectorOwner")) },
+                { "ownerContextKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.ownerContextKey", 128) },
+                { "centerType", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.centerType")) },
+                { "centerContextKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.centerContextKey", 128) },
+                { "centerToGround", reader.ReadBool32($"{fieldName}.centerToGround") },
+                { "selectorData", ReadDiagnosticSelectorData(reader, $"{fieldName}.selectorData", payloadOffset, recoveredByRid) },
+                { "suffixWords", ReadDiagnosticRawWords(reader, $"{fieldName}.suffixWords", 8) },
+            };
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "Field order up through selectorData is metadata-backed. The eight suffix words are preserved raw because their semantic names are not yet fully proven.";
+            return data;
+        }
+
+        private static OrderedDictionary ReadDiagnosticSelectorData(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int payloadOffset,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.Selector/SelectorData" },
+                { "relativeOffset", start - payloadOffset },
+                { "absoluteOffset", start },
+                { "selectorDataRid", ReadPayloadRidLink(reader, $"{fieldName}.selectorDataRid", recoveredByRid) },
+            };
+
+            var selectorCountOrFlag = reader.ReadInt32($"{fieldName}.selectorCountOrFlag");
+            data["selectorCountOrFlag"] = BuildPayloadHash32(selectorCountOrFlag);
+            if (selectorCountOrFlag == 1)
+            {
+                data["extraSelectorRid"] = ReadPayloadRidLink(reader, $"{fieldName}.extraSelectorRid", recoveredByRid);
+            }
+            else if (selectorCountOrFlag != 0)
+            {
+                throw new InvalidDataException($"unsupported selector count/flag {selectorCountOrFlag} in {fieldName}");
+            }
+
+            data["reservedZeroWords"] = ReadDiagnosticZeroWords(reader, $"{fieldName}.reservedZeroWords", 3);
+            data["lateRidA"] = ReadPayloadRidLink(reader, $"{fieldName}.lateRidA", recoveredByRid);
+            data["lateRidB"] = ReadPayloadRidLink(reader, $"{fieldName}.lateRidB", recoveredByRid);
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "RID slots are proven by byte offsets and recovered registry links; selectorCountOrFlag and late RID semantic names remain unresolved.";
+            return data;
+        }
+
+        private static List<OrderedDictionary> ReadDiagnosticRawWords(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count
+        )
+        {
+            var words = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                words.Add(BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}]")));
+            }
+            return words;
+        }
+
+        private static List<OrderedDictionary> ReadDiagnosticZeroWords(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count
+        )
+        {
+            var words = ReadDiagnosticRawWords(reader, fieldName, count);
+            for (var i = 0; i < words.Count; i++)
+            {
+                if ((int)words[i]["value"] != 0)
+                {
+                    throw new InvalidDataException($"non-zero reserved word in {fieldName}[{i}]");
+                }
+            }
+            return words;
         }
 
         private static List<OrderedDictionary> CollectDiagnosticRawWordTrace(byte[] rawData, int offset, int length)
