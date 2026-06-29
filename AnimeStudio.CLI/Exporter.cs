@@ -2501,6 +2501,404 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcCommonAnimalGraph/NpcCommonAnimalGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcCommonAnimalGraph/NpcCommonAnimalGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "bornTag", ReadPayloadGameplayTag(reader, "bornTag") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "escapeTriggerRadius", reader.ReadFloat("escapeTriggerRadius") },
+                        { "escapeEndRadius", reader.ReadFloat("escapeEndRadius") },
+                        { "escapeTag", ReadPayloadGameplayTag(reader, "escapeTag") },
+                        { "hideWhenEscaped", reader.ReadBool32("hideWhenEscaped") },
+                        { "detectRadiusOnEscapeEnd", reader.ReadBool32("detectRadiusOnEscapeEnd") },
+                        { "hideTag", ReadPayloadGameplayTag(reader, "hideTag") },
+                        { "bornWhenHidden", reader.ReadBool32("bornWhenHidden") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcBirdGraph/NpcBirdGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcBirdGraph/NpcBirdGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "bornTag", ReadPayloadGameplayTag(reader, "bornTag") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "flyTag", ReadPayloadGameplayTag(reader, "flyTag") },
+                        { "hideTag", ReadPayloadGameplayTag(reader, "hideTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSnailGraph/NpcSnailGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSnailGraph/NpcSnailGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "shrivelledTag", ReadPayloadGameplayTag(reader, "shrivelledTag") },
+                        { "freeWalkTag", ReadPayloadGameplayTag(reader, "freeWalkTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyDodgeResponse/EnemyDodgeResponseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyDodgeResponse/EnemyDodgeResponseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "nearDis", reader.ReadFloat("nearDis") },
+                        { "nearSkill", ReadPayloadStringList(reader, "nearSkill", 64) },
+                        { "farSkill", ReadPayloadStringList(reader, "farSkill", 64) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterPatrolBehavior/CharacterPatrolBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterPatrolBehavior/CharacterPatrolBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "reachDis", reader.ReadFloat("reachDis") },
+                        { "reachRunDis", reader.ReadFloat("reachRunDis") },
+                        { "reachTeleportDis", reader.ReadFloat("reachTeleportDis") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPlaySoundBehavior/EnemyPlaySoundBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyPlaySoundBehavior/EnemyPlaySoundBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "soundName", reader.ReadAlignedAsciiString("soundName") },
+                        { "radius", reader.ReadFloat("radius") },
+                        { "loop", reader.ReadBool32("loop") },
+                        { "interval", reader.ReadFloat("interval") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcBirdFlyBehavior/NpcBirdFlyBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcBirdFlyBehavior/NpcBirdFlyBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "xzAngle", reader.ReadFloat("xzAngle") },
+                        { "samplingNum", reader.ReadInt32("samplingNum") },
+                        { "bestSamplingNum", reader.ReadInt32("bestSamplingNum") },
+                        { "yAngle", reader.ReadFloat("yAngle") },
+                        { "yAngleVariance", reader.ReadFloat("yAngleVariance") },
+                        { "firstRayDis", reader.ReadFloat("firstRayDis") },
+                        { "raycastRadius", reader.ReadFloat("raycastRadius") },
+                        { "reboundCount", reader.ReadInt32("reboundCount") },
+                        { "duration", reader.ReadFloat("duration") },
+                        { "flyStartAnim", ReadPayloadGameplayTag(reader, "flyStartAnim") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcCommonStimulus/NpcCommonStimulusData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcCommonStimulus/NpcCommonStimulusData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "stimulusType", BuildPayloadHash32(reader.ReadInt32("stimulusType")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcCheckBehavior/NpcCheckBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcCheckBehavior/NpcCheckBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "checkBehaviorType", ReadPayloadNamedEnum32(reader, "checkBehaviorType", new[] { "And", "Or" }) },
+                        { "npcBehaviorTags", ReadPayloadInvertGameplayTagList(reader, "npcBehaviorTags", "behavior", 64) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NPCRabbitEscapeBehavior/NPCRabbitEscapeBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NPCRabbitEscapeBehavior/NPCRabbitEscapeBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "calcTargetInterval", reader.ReadFloat("calcTargetInterval") },
+                        { "angle", reader.ReadFloat("angle") },
+                        { "duration", ReadPayloadVector2(reader, "duration") },
+                        { "maxDistance", reader.ReadFloat("maxDistance") },
+                        { "stepDistance", reader.ReadFloat("stepDistance") },
+                        { "reachTolerance", reader.ReadFloat("reachTolerance") },
+                        { "escapeMontageTag", ReadPayloadGameplayTag(reader, "escapeMontageTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSlugToRigBodyBehavior/NpcSlugToRigBodyBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSlugToRigBodyBehavior/NpcSlugToRigBodyBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "rigBodyObject", reader.ReadAlignedAsciiString("rigBodyObject") },
+                        { "rigBodyInitVel", ReadPayloadVector3(reader, "rigBodyInitVel") },
+                        { "rigBodyInitAngVel", ReadPayloadVector3(reader, "rigBodyInitAngVel") },
+                        { "rigBodyMontageTag", ReadPayloadGameplayTag(reader, "rigBodyMontageTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcShrivelledBehavior/NpcShrivelledBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcShrivelledBehavior/NpcShrivelledBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "shrivelledAnim", ReadPayloadGameplayTag(reader, "shrivelledAnim") },
+                        { "dropItemTag", ReadPayloadGameplayTag(reader, "dropItemTag") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterBattleActionStimulus/CharacterBattleActionStimulusData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterBattleActionStimulus/CharacterBattleActionStimulusData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "eventType", BuildPayloadHash32(reader.ReadInt32("eventType")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterCheckDodge/CharacterCheckDodgeData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterCheckDodge/CharacterCheckDodgeData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "dodgeProp", BuildPayloadHash32(reader.ReadInt32("dodgeProp")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterCommonStimulus/CharacterCommonStimulusData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterCommonStimulus/CharacterCommonStimulusData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "stimulusType", BuildPayloadHash32(reader.ReadInt32("stimulusType")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterDodgeResponse/CharacterDodgeResponseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterDodgeResponse/CharacterDodgeResponseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "dodgeCD", reader.ReadFloat("dodgeCD") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterCloseToHealTargetBehavior/CharacterCloseToHealTargetBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterCloseToHealTargetBehavior/CharacterCloseToHealTargetBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "closeToHealTargetTimeout", reader.ReadFloat("closeToHealTargetTimeout") },
+                        { "closeToHealTargetStopDis", reader.ReadFloat("closeToHealTargetStopDis") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFarmingFollowBehavior/CharacterFarmingFollowBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFarmingFollowBehavior/CharacterFarmingFollowBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "duration", reader.ReadFloat("duration") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterNormalBattleBehavior/CharacterNormalBattleBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterNormalBattleBehavior/CharacterNormalBattleBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "escapeRadius", reader.ReadFloat("escapeRadius") },
+                        { "escapeEnemyCount", reader.ReadFloat("escapeEnemyCount") },
+                        { "escapeDis", reader.ReadFloat("escapeDis") },
+                        { "attackDodgeDis", reader.ReadFloat("attackDodgeDis") },
+                        { "attackDodgeAngle", reader.ReadFloat("attackDodgeAngle") },
+                        { "attackDodgeCd", reader.ReadFloat("attackDodgeCd") },
+                        { "rangeDodgeDis", reader.ReadFloat("rangeDodgeDis") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterSwitchBehaviorResponse/CharacterSwitchBehaviorResponseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterSwitchBehaviorResponse/CharacterSwitchBehaviorResponseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "behavior", ReadPayloadGameplayTag(reader, "behavior") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckStringParam/EnemyCheckStringParamData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckStringParam/EnemyCheckStringParamData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "stringValue", reader.ReadAlignedAsciiString("stringValue") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -2532,6 +2930,10 @@ namespace AnimeStudio.CLI
                 || string.Equals(header.ClassName, "EnemySimpleCastSequenceSkillBehavior/EnemySimpleCastSequenceSkillBehaviorData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "EnemyPauseBehavior/EnemyPauseBehaviorData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "EnemyCastSequenceSkillBehavior/EnemyCastSequenceSkillBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterBattleJumpBehavior/CharacterBattleJumpBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterForceTeleportBehavior/CharacterForceTeleportBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterJumpResponse/CharacterJumpResponseData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterSkillHoldBehavior/CharacterSkillHoldBehaviorData", StringComparison.Ordinal)
                 || string.Equals(header.ClassName, "NpcIdleShowBehavior/NpcIdleShowBehaviorData", StringComparison.Ordinal);
         }
 
@@ -2543,7 +2945,8 @@ namespace AnimeStudio.CLI
             }
 
             return string.Equals(header.ClassName, "CharacterCloseToHealTargetStimulus/CharacterCloseToHealTargetStimulusData", StringComparison.Ordinal)
-                || string.Equals(header.ClassName, "CharacterHealTargetStimulus/CharacterHealTargetStimulusData", StringComparison.Ordinal);
+                || string.Equals(header.ClassName, "CharacterHealTargetStimulus/CharacterHealTargetStimulusData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CharacterJumpStimulus/CharacterJumpStimulusData", StringComparison.Ordinal);
         }
 
         private static bool TryDecodeViewManagedReferenceData(
@@ -2557,7 +2960,8 @@ namespace AnimeStudio.CLI
             data = null;
             if (header == null
                 || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
-                || !string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                || (!string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && !string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal))
                 || rawData == null
                 || offset < 0
                 || length <= 0
@@ -2602,6 +3006,24 @@ namespace AnimeStudio.CLI
                         { "stateName", reader.ReadAlignedAsciiString("stateName") },
                         { "layer", reader.ReadInt32("layer") },
                         { "normalizedTime", reader.ReadFloat("normalizedTime") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "WeaponAnimatorMono/PlayFollowEffect", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.Animation.WeaponAnimatorMono/PlayFollowEffect" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "effectName", reader.ReadAlignedAsciiString("effectName") },
+                        { "restartIfExist", reader.ReadBool32("restartIfExist") },
+                        { "mountPoint", BuildPayloadHash32(reader.ReadInt32("mountPoint")) },
                     };
                     reader.EnsureComplete();
                     return true;
