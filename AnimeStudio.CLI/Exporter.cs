@@ -8872,32 +8872,59 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AbilitySystemData", StringComparison.Ordinal))
                 {
-                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
-                    data = new OrderedDictionary
+                    try
                     {
-                        { "$decoded", true },
-                        { "$inferred", true },
-                        { "$partial", true },
-                        { "layout", "Beyond.Gameplay.Core.AbilitySystemData" },
-                        { "offset", offset },
-                        { "length", length },
-                        { "shapeData", new OrderedDictionary
-                            {
-                                { "detectedRadius", reader.ReadFloat("shapeData.detectedRadius") },
-                                { "detectedHeight", reader.ReadFloat("shapeData.detectedHeight") },
-                            }
-                        },
-                        { "modeConfig", ReadAbilitySystemModeConfig(reader) },
-                    };
-                    if (TryReadAbilitySystemSkillDataBundle(reader, out var skillDataBundle))
-                    {
-                        data["skillDataBundle"] = skillDataBundle;
+                        var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                        data = new OrderedDictionary
+                        {
+                            { "$decoded", true },
+                            { "$inferred", true },
+                            { "$partial", true },
+                            { "layout", "Beyond.Gameplay.Core.AbilitySystemData" },
+                            { "offset", offset },
+                            { "length", length },
+                            { "shapeData", new OrderedDictionary
+                                {
+                                    { "detectedRadius", reader.ReadFloat("shapeData.detectedRadius") },
+                                    { "detectedHeight", reader.ReadFloat("shapeData.detectedHeight") },
+                                }
+                            },
+                            { "modeConfig", ReadAbilitySystemModeConfig(reader) },
+                        };
+                        if (TryReadAbilitySystemSkillDataBundle(reader, out var skillDataBundle))
+                        {
+                            data["skillDataBundle"] = skillDataBundle;
+                        }
+                        data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
+                        var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
+                        var remainingRidLinks = CollectHeuristicRidLinks(rawData, reader.Position, reader.Remaining, recoveredByRid, ref remainingRidLinkBudget);
+                        if (remainingRidLinks.Count > 0)
+                        {
+                            data["remainingRidLinks"] = remainingRidLinks;
+                        }
+                        data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
+                        reader.EnsureComplete();
+                        return true;
                     }
-                    data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
-                    data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
-                    reader.EnsureComplete();
-                    return true;
-                }                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    catch (InvalidDataException ex)
+                    {
+                        var fallback = BuildPartialAbilitySystemDataDiagnostic(
+                            rawData,
+                            offset,
+                            length,
+                            recoveredByRid,
+                            ex
+                        );
+                        if (fallback != null)
+                        {
+                            data = fallback;
+                            return true;
+                        }
+                        throw;
+                    }
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyAIComponentData", StringComparison.Ordinal))
                 {
@@ -10289,6 +10316,86 @@ namespace AnimeStudio.CLI
             }
 
             return ReadPayloadRawInt32Words(reader, fieldName, reader.Remaining / 4);
+        }
+
+        private static OrderedDictionary BuildPartialAbilitySystemDataDiagnostic(
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            InvalidDataException parseError
+        )
+        {
+            if (rawData == null || offset < 0 || length < 12 || offset + length > rawData.Length)
+            {
+                return null;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var shapeData = new OrderedDictionary
+                {
+                    { "detectedRadius", reader.ReadFloat("shapeData.detectedRadius") },
+                    { "detectedHeight", reader.ReadFloat("shapeData.detectedHeight") },
+                };
+                var modeCountOffset = reader.Position;
+                var modeCount = reader.ReadInt32("modeConfig.modes.count");
+                if (modeCount < 0 || modeCount > 128)
+                {
+                    return null;
+                }
+
+                var data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "$partial", true },
+                    { "$diagnostic", true },
+                    { "layout", "Beyond.Gameplay.Core.AbilitySystemData" },
+                    { "layoutNote", "decoded AbilitySystemData prefix; modeConfig parsing failed on an unhandled mode-tail variant, so the remaining bytes are preserved for recovery" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "parseFailure", parseError?.Message ?? "AbilitySystemData parser failed" },
+                    { "shapeData", shapeData },
+                    { "modeConfig", new OrderedDictionary
+                        {
+                            { "$partial", true },
+                            { "modeCount", modeCount },
+                            { "modeCountOffset", modeCountOffset },
+                            { "modePayloadOffset", reader.Position },
+                        }
+                    },
+                };
+
+                var remainingStringHintBudget = MaxHeuristicStringHintsPerReference;
+                var alignedHints = CollectAlignedStringHints(rawData, reader.Position, reader.Remaining, ref remainingStringHintBudget);
+                if (alignedHints.Count > 0)
+                {
+                    data["modeAndTailAlignedStringHints"] = alignedHints;
+                }
+
+                var hints = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
+                if (hints.Count > 0)
+                {
+                    data["modeAndTailStringHints"] = hints;
+                }
+
+                var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
+                var ridLinks = CollectHeuristicRidLinks(rawData, reader.Position, reader.Remaining, recoveredByRid, ref remainingRidLinkBudget);
+                if (ridLinks.Count > 0)
+                {
+                    data["modeAndTailRidLinks"] = ridLinks;
+                }
+
+                data["modeAndTailRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "modeAndTailRawWords", 8192);
+                reader.EnsureComplete();
+                return data;
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
         }
 
         private static OrderedDictionary ReadAbilitySystemModeConfig(ManagedReferencePayloadReader reader)
