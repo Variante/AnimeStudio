@@ -6158,6 +6158,16 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeWeaponDecoEffectManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
             if (length == 0 && IsKnownEmptyGeneralGameplayManagedReferenceData(header))
             {
                 data = BuildEmptyManagedReferenceData(header, offset, length);
@@ -6396,6 +6406,46 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static bool TryDecodeWeaponDecoEffectManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WeaponDecoEffectData", StringComparison.Ordinal)
+                || length <= 0
+                || length % 4 != 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WeaponDecoEffectData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "gemDeco", ReadWeaponDecoData(reader, "gemDeco") },
+                    { "gemMaxDeco", ReadWeaponDecoData(reader, "gemMaxDeco") },
+                    { "layoutNote", "Installed IL2CPP metadata exposes gemDeco and gemMaxDeco; each DecoData contains effects and vfxMaterials, and each EffectData contains name, mountPoint, and offset." },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
         private static bool TryDecodeUIManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
@@ -8456,6 +8506,40 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static OrderedDictionary ReadWeaponDecoData(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "effects", ReadWeaponDecoEffectList(reader, $"{fieldName}.effects") },
+                { "vfxMaterials", ReadPayloadStringList(reader, $"{fieldName}.vfxMaterials", 32) },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadWeaponDecoEffectList(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > 32 || count > reader.Remaining / 20)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var effects = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                effects.Add(ReadWeaponDecoEffectData(reader, $"{fieldName}[{i}]"));
+            }
+            return effects;
+        }
+
+        private static OrderedDictionary ReadWeaponDecoEffectData(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "name", reader.ReadAlignedAsciiString($"{fieldName}.name") },
+                { "mountPoint", reader.ReadAlignedAsciiString($"{fieldName}.mountPoint") },
+                { "offset", ReadPayloadVector3(reader, $"{fieldName}.offset") },
+            };
+        }
         private static OrderedDictionary ReadWikiModelSpawnData(ManagedReferencePayloadReader reader, string fieldName)
         {
             var prefix = string.IsNullOrEmpty(fieldName) ? string.Empty : fieldName + ".";
