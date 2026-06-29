@@ -1865,6 +1865,246 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckScriptTaskStateEqual", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckScriptTaskStateEqual" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "levelId", ReadGuideStringParam(reader, "levelId") },
+                        { "scriptId", ReadGuideIntParam(reader, "scriptId") },
+                        { "taskKey", ReadGuideStringParamWithExtraRawWord(reader, "taskKey") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "targetValue", ReadGuideIntParam(reader, "targetValue") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnBuildingPanelOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnBuildingPanelOpen" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "buildingId", ReadGuideStringParam(reader, "buildingId") },
+                        { "needWaitAnimation", ReadGuideBoolParam(reader, "needWaitAnimation") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnUIPanelClose", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnUIPanelClose" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "panelId", ReadGuideStringParam(reader, "panelId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "PlayerHasItemInItemBag", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlayerHasItemInItemBag" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "unknownString0", reader.ReadAlignedAsciiString("unknownString0") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                        { "compareOperator", ReadGuideIntParam(reader, "compareOperator") },
+                        { "targetItemCount", ReadGuideIntParam(reader, "targetItemCount") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckQuestState", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckQuestState" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "questId", ReadGuideStringParam(reader, "questId") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "targetQuestState", ReadGuideIntParam(reader, "targetQuestState") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "PlayerHasItem", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlayerHasItem" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "unknownString0", reader.ReadAlignedAsciiString("unknownString0") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                        { "comparer", ReadGuideIntParam(reader, "comparer") },
+                        { "progressToCompare", ReadGuideIntParam(reader, "progressToCompare") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsInFactoryMode", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsInFactoryMode" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isInFactoryMode", ReadGuideBoolParam(reader, "isInFactoryMode") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnFacPrepareBuildingEnterArea", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnFacPrepareBuildingEnterArea" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "buildingId", ReadGuideStringParam(reader, "buildingId") },
+                        { "worldPos", ReadGuideVector3Param(reader, "worldPos") },
+                        { "range", ReadGuideFloatParam(reader, "range") },
+                        { "angle", ReadGuideFloatParam(reader, "angle") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnFacPlaceBuilding", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnFacPlaceBuilding" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "buildingId", ReadGuideStringParam(reader, "buildingId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "DepotHasItem", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.DepotHasItem" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "itemId", ReadGuideStringParam(reader, "itemId") },
+                        { "compareOperator", ReadGuideIntParam(reader, "compareOperator") },
+                        { "targetItemCount", ReadGuideIntParam(reader, "targetItemCount") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckActivityStageInTimeOffset", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckActivityStageInTimeOffset" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "activityId", ReadGuideStringParam(reader, "activityId") },
+                        { "stageId", ReadGuideStringParam(reader, "stageId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsInGeneralAbilitySelectMode", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.CheckIsInGeneralAbilitySelectMode" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "isInSelectMode", ReadGuideBoolParam(reader, "isInSelectMode") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if ((isRootGuideCondition || isGuideCondition)
+                    && string.Equals(header.ClassName, "CheckCurrentMap", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", $"{header.Namespace}.{header.ClassName}" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "mapId", ReadGuideStringParam(reader, "mapId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (isGuideAction
                     && TryDecodeGuideActionManagedReferenceData(header, reader, offset, length, out data))
                 {
@@ -1989,6 +2229,125 @@ namespace AnimeStudio.CLI
                 data["useYawCheck"] = ReadGuideActionParamBool(reader, "useYawCheck");
                 data["advancedMode"] = ReadGuideActionParamBool(reader, "advancedMode");
                 data["ignoreProtect"] = ReadGuideActionParamBool(reader, "ignoreProtect");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "RemoveTrackingPoint", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["trackingPointId"] = ReadGuideActionParamString(reader, "trackingPointId");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacHighlightBuilding", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["instKey"] = ReadGuideActionParamString(reader, "instKey");
+                data["active"] = ReadGuideActionParamBool(reader, "active");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "AddTrackingPoint", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["trackingPointId"] = ReadGuideActionParamString(reader, "trackingPointId");
+                data["levelId"] = ReadGuideActionParamString(reader, "levelId");
+                data["guidingArea"] = ReadGuideActionParamInt(reader, "guidingArea");
+                data["styleType"] = ReadGuideActionParamInt(reader, "styleType");
+                data["trackingType"] = ReadGuideActionParamInt(reader, "trackingType");
+                data["buildingInstKey"] = ReadGuideActionParamString(reader, "buildingInstKey");
+                data["entityLogicId"] = ReadGuideActionParamInt64(reader, "entityLogicId");
+                data["pos"] = ReadGuideActionParamVector3(reader, "pos");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacGuideHintEnable", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["hintId"] = ReadGuideActionParamString(reader, "hintId");
+                data["enable"] = ReadGuideActionParamBool(reader, "enable");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "CreateEffectAtPosition", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["effectKey"] = ReadGuideActionParamString(reader, "effectKey");
+                data["position"] = ReadGuideActionParamVector3(reader, "position");
+                data["eulerAngles"] = ReadGuideActionParamVector3(reader, "eulerAngles");
+                data["scale"] = ReadGuideActionParamVector3(reader, "scale");
+                data["isUnique"] = ReadGuideActionParamBool(reader, "isUnique");
+                data["effectSaveId"] = ReadGuideActionParamOutputInt(reader, "effectSaveId");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacSetInteractLockedState", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["isLocked"] = ReadGuideActionParamBool(reader, "isLocked");
+                data["instKey"] = ReadGuideActionParamString(reader, "instKey");
+                data["radioId"] = ReadGuideActionParamString(reader, "radioId");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "ToggleScrollRect", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["scrollEnabled"] = ReadGuideActionParamBool(reader, "scrollEnabled");
+                data["scrollRectPath"] = ReadGuideActionParamString(reader, "scrollRectPath");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FacConveyorInteractRangeRestrict", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["active"] = ReadGuideActionParamBool(reader, "active");
+                data["x0"] = ReadGuideActionParamInt(reader, "x0");
+                data["y0"] = ReadGuideActionParamInt(reader, "y0");
+                data["width0"] = ReadGuideActionParamInt(reader, "width0");
+                data["height0"] = ReadGuideActionParamInt(reader, "height0");
+                data["x1"] = ReadGuideActionParamInt(reader, "x1");
+                data["y1"] = ReadGuideActionParamInt(reader, "y1");
+                data["width1"] = ReadGuideActionParamInt(reader, "width1");
+                data["height1"] = ReadGuideActionParamInt(reader, "height1");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "ScrollToItemBagTargetItem", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["listPath"] = ReadGuideActionParamString(reader, "listPath");
+                data["targetItemId"] = ReadGuideActionParamString(reader, "targetItemId");
+                data["needClamp"] = ReadGuideActionParamBool(reader, "needClamp");
+                data["clampMinIndex"] = ReadGuideActionParamInt(reader, "clampMinIndex");
+                data["clampMaxIndex"] = ReadGuideActionParamInt(reader, "clampMaxIndex");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FocusOnInteractOption", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["optionName"] = ReadGuideActionParamString(reader, "optionName");
                 reader.EnsureComplete();
                 return true;
             }
@@ -5638,6 +5997,34 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadGuideActionParamInt64(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "value", BuildPayloadHash64(reader.ReadInt64($"{fieldName}.value")) },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionParamString(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
+                { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
+            };
+        }
+
         private static OrderedDictionary ReadGuideActionParamVector3(
             ManagedReferencePayloadReader reader,
             string fieldName
@@ -5720,6 +6107,48 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadGuideFloatParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideVector3Param(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", ReadPayloadVector3(reader, $"{fieldName}.value") },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideStringParamWithExtraRawWord(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
+                { "unknown3", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown3")) },
+            };
+        }
         private static string ReadGuideParamStringValue(
             ManagedReferencePayloadReader reader,
             string fieldName
