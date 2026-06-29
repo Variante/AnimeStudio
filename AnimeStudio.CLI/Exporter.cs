@@ -1072,6 +1072,26 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeWeaponWallDisplayConfigData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeAIBehaviorManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeSkeletalMorphMappingData(
                 header,
                 rawData,
@@ -1249,7 +1269,39 @@ namespace AnimeStudio.CLI
                 data["heuristicRidLinks"] = ridLinks;
             }
 
+            var rawWordHints = CollectHeuristicRawWordHints(rawData, offset, length, maxCount: 64);
+            if (rawWordHints.Count > 0)
+            {
+                data["heuristicRawWordHints"] = rawWordHints;
+            }
+
             return data;
+        }
+
+        private static List<OrderedDictionary> CollectHeuristicRawWordHints(
+            byte[] rawData,
+            int offset,
+            int length,
+            int maxCount
+        )
+        {
+            var hints = new List<OrderedDictionary>();
+            if (rawData == null
+                || offset < 0
+                || length <= 0
+                || (length % 4) != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return hints;
+            }
+
+            var reader = new ManagedReferencePayloadReader(rawData, offset, Math.Min(length, maxCount * 4));
+            while (reader.Remaining >= 4)
+            {
+                hints.Add(BuildPayloadHash32(reader.ReadInt32("heuristicRawWordHints")));
+            }
+            return hints;
         }
 
         private sealed class ManagedReferencePayloadReader
@@ -1450,6 +1502,207 @@ namespace AnimeStudio.CLI
                 data = null;
                 return false;
             }
+        }
+
+        private static bool TryDecodeWeaponWallDisplayConfigData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WeaponWallDisplayConfig/WeaponDisplayConfig", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WeaponWallDisplayConfig/WeaponDisplayConfig" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "weaponAppearEffectNames", ReadPayloadStringListFixed(reader, "weaponAppearEffectNames", ReadPayloadFixedCount(reader, "weaponAppearEffectNames.count", 3)) },
+                    { "weaponDisappearEffectNames", ReadPayloadStringListFixed(reader, "weaponDisappearEffectNames", ReadPayloadFixedCount(reader, "weaponDisappearEffectNames.count", 3)) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeAIBehaviorManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyAttackBuildingGraph/EnemyAttackBuildingGraphDatta", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyAttackBuildingGraph/EnemyAttackBuildingGraphDatta" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "skillId", reader.ReadAlignedAsciiString("skillId") },
+                        { "skillRange", reader.ReadFloat("skillRange") },
+                        { "changeCooldown", reader.ReadBool32("changeCooldown") },
+                        { "cooldown", reader.ReadFloat("cooldown") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NPCCoilbstEscapeBehavior/NPCCoilbstEscapeBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NPCCoilbstEscapeBehavior/NPCCoilbstEscapeBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "maxEscapeTime", reader.ReadFloat("maxEscapeTime") },
+                        { "reachTolerance", reader.ReadFloat("reachTolerance") },
+                        { "useDeco", reader.ReadBool32("useDeco") },
+                        { "decoId", reader.ReadAlignedAsciiString("decoId") },
+                        { "decoOffset", ReadPayloadVector3(reader, "decoOffset") },
+                        { "decoMount", reader.ReadAlignedAsciiString("decoMount") },
+                        { "performId", reader.ReadAlignedAsciiString("performId") },
+                        { "hidePosKey", reader.ReadAlignedAsciiString("hidePosKey") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcRandomWalkBehavior/NpcRandomWalkBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcRandomWalkBehavior/NpcRandomWalkBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "radius", reader.ReadFloat("radius") },
+                        { "angle", reader.ReadFloat("angle") },
+                        { "idleTimeMin", reader.ReadFloat("idleTimeMin") },
+                        { "idleTimeMax", reader.ReadFloat("idleTimeMax") },
+                        { "distanceMin", reader.ReadFloat("distanceMin") },
+                        { "distanceMax", reader.ReadFloat("distanceMax") },
+                        { "tryCount", reader.ReadInt32("tryCount") },
+                        { "idleWait", reader.ReadFloat("idleWait") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcHideBehavior/NpcHideBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcHideBehavior/NpcHideBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "resetRadius", reader.ReadFloat("resetRadius") },
+                        { "fadeTime", reader.ReadFloat("fadeTime") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcBornBehavior/NpcBornBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcBornBehavior/NpcBornBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "bornAnim", reader.ReadAlignedAsciiString("bornAnim") },
+                        { "trailingWord", BuildPayloadHash32(reader.ReadInt32("trailingWord")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcRabbitGraph/NpcRabbitGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcRabbitGraph/NpcRabbitGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "bornTag", ReadPayloadGameplayTag(reader, "bornTag") },
+                        { "idleTag", ReadPayloadGameplayTag(reader, "idleTag") },
+                        { "escapeTag", ReadPayloadGameplayTag(reader, "escapeTag") },
+                        { "hideTag", ReadPayloadGameplayTag(reader, "hideTag") },
+                        { "escapeTriggerRadius", reader.ReadFloat("escapeTriggerRadius") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
         }
 
         private static bool TryDecodeSkeletalMorphMappingData(
@@ -2347,6 +2600,26 @@ namespace AnimeStudio.CLI
         }
 
         private const int EnemyPartAbilityScalarWordCount = 20;
+
+        private static int ReadPayloadFixedCount(ManagedReferencePayloadReader reader, string fieldName, int expected)
+        {
+            var count = reader.ReadInt32(fieldName);
+            if (count != expected)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}; expected {expected}");
+            }
+
+            return count;
+        }
+
+        private static OrderedDictionary ReadPayloadGameplayTag(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+                { "tagId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.tagId")) },
+            };
+        }
 
         private static List<int> ReadPayloadInt32List(
             ManagedReferencePayloadReader reader,
