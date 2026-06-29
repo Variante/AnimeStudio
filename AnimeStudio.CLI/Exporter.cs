@@ -4218,6 +4218,58 @@ namespace AnimeStudio.CLI
             }
 
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckMainCharacterCondition/Data", StringComparison.Ordinal))
+            {
+                if (length < 112 || length > 160 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkMainCharacterCondition.checkTarget", offset, recoveredByRid);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckObjectTypeMatch/Data", StringComparison.Ordinal))
+            {
+                if (length < 116 || length > 160 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["target"] = ReadDiagnosticTargetSettings(reader, "checkObjectTypeMatch.target", offset, recoveredByRid);
+                data["objectTypeMask"] = BuildPayloadHash32(reader.ReadInt32("checkObjectTypeMatch.objectTypeMask"));
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes target and objectTypeMask after the inherited AbilityActionData prefix. The payload is consumed completely, but target is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckTargetsEqual/Data", StringComparison.Ordinal))
+            {
+                if (length < 200 || length > 280 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["firstTargetSettings"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.firstTargetSettings", offset, recoveredByRid);
+                data["secondTargetSettings"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.secondTargetSettings", offset, recoveredByRid);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes firstTargetSettings and secondTargetSettings after the inherited AbilityActionData prefix. The payload is consumed completely, but both TargetSettings objects are emitted with partial diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal))
             {
                 if (length < 136 || length > 192 || (length % 4) != 0)
