@@ -8894,6 +8894,10 @@ namespace AnimeStudio.CLI
                         if (TryReadAbilitySystemSkillDataBundle(reader, recoveredByRid, out var skillDataBundle))
                         {
                             data["skillDataBundle"] = skillDataBundle;
+                            if (TryReadAbilitySystemUIData(reader, out var uiData))
+                            {
+                                data["uiData"] = uiData;
+                            }
                         }
                         data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
                         var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
@@ -10782,6 +10786,58 @@ namespace AnimeStudio.CLI
                         { "entries", new List<OrderedDictionary>() },
                     }
                 },
+            };
+        }
+
+        private static bool TryReadAbilitySystemUIData(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "layout", "Beyond.Gameplay.Core.AbilitySystemData.UIData" },
+                    { "showBigHeadBar", local.ReadBool32("uiData.showBigHeadBar") },
+                    { "useSpecificDamageTextParam", local.ReadBool32("uiData.useSpecificDamageTextParam") },
+                    { "damageTextRelated", ReadAbilitySystemDamageTextData(local, "uiData.damageTextRelated") },
+                    { "overrideHeadBarDeltaTowardCamera", local.ReadBool32("uiData.overrideHeadBarDeltaTowardCamera") },
+                    { "headBarDeltaTowardCamera", local.ReadFloat("uiData.headBarDeltaTowardCamera") },
+                    { "headBar2DOffset", ReadPayloadVector2(local, "uiData.headBar2DOffset") },
+                    { "useHeadBarGuideLine", local.ReadBool32("uiData.useHeadBarGuideLine") },
+                    { "heightInRangeNoFollow", local.ReadBool32("uiData.heightInRangeNoFollow") },
+                    { "heightRange", ReadPayloadVector2(local, "uiData.heightRange") },
+                    { "heightFollowMountPoint", BuildPayloadHash32(local.ReadInt32("uiData.heightFollowMountPoint")) },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemDamageTextData(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "mainChrDmgTxtSpawnOffset", ReadPayloadVector2(reader, $"{fieldName}.mainChrDmgTxtSpawnOffset") },
+                { "mainChrDmgTxtMoveSpawnOffset", ReadPayloadVector2(reader, $"{fieldName}.mainChrDmgTxtMoveSpawnOffset") },
+                { "mainChrDmgTxtMaxMoveNum", reader.ReadInt32($"{fieldName}.mainChrDmgTxtMaxMoveNum") },
+                { "mainChrDmgTxtMoveSpawnWaitTime", reader.ReadFloat($"{fieldName}.mainChrDmgTxtMoveSpawnWaitTime") },
+                { "guardDmgTxtSpawnOffset", ReadPayloadVector2(reader, $"{fieldName}.guardDmgTxtSpawnOffset") },
+                { "guardDmgTxtSpawnAreaSize", ReadPayloadVector2(reader, $"{fieldName}.guardDmgTxtSpawnAreaSize") },
+                { "immuneTxtSpawnOffset", ReadPayloadVector2(reader, $"{fieldName}.immuneTxtSpawnOffset") },
+                { "immuneTxtSpawnAreaSize", ReadPayloadVector2(reader, $"{fieldName}.immuneTxtSpawnAreaSize") },
+                { "immuneTxtCooldown", reader.ReadFloat($"{fieldName}.immuneTxtCooldown") },
             };
         }
 
