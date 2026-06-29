@@ -6108,16 +6108,115 @@ namespace AnimeStudio.CLI
                 || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
-                || length != 0
+                || length < 0
                 || offset > rawData.Length
-                || offset + length > rawData.Length
-                || !IsKnownEmptyGeneralGameplayManagedReferenceData(header))
+                || offset + length > rawData.Length)
             {
                 return false;
             }
 
-            data = BuildEmptyManagedReferenceData(header, offset, length);
-            return true;
+            if (TryDecodeSoundGameplayManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
+            if (length == 0 && IsKnownEmptyGeneralGameplayManagedReferenceData(header))
+            {
+                data = BuildEmptyManagedReferenceData(header, offset, length);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeSoundGameplayManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (string.Equals(header.ClassName, "PlaySingleSound", StringComparison.Ordinal))
+                {
+                    if (length != 28)
+                    {
+                        return false;
+                    }
+
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlaySingleSound" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "soundBase", new OrderedDictionary
+                            {
+                                { "soundSpawn", BuildPayloadHash32(reader.ReadInt32("soundBase.soundSpawn")) },
+                                { "soundFinish", BuildPayloadHash32(reader.ReadInt32("soundBase.soundFinish")) },
+                                { "shouldTick", reader.ReadBool32("soundBase.shouldTick") },
+                            }
+                        },
+                        { "isOverrideTrackingObj", reader.ReadBool32("isOverrideTrackingObj") },
+                        { "overridedTrackingObj", ReadPayloadPPtr(reader, "overridedTrackingObj") },
+                        { "layoutNote", "IL2CPP metadata exposes PlaySingleSoundBase soundSpawn/soundFinish/shouldTick plus PlaySingleSound override tracking fields; m_audioObj is a runtime cache and is not serialized in the observed 28-byte payload." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "PlaySoundByParticleCount", StringComparison.Ordinal))
+                {
+                    if (length < 20)
+                    {
+                        return false;
+                    }
+
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var soundName = reader.ReadAlignedAsciiString("soundName");
+                    if (reader.Remaining != 16)
+                    {
+                        throw new InvalidDataException("PlaySoundByParticleCount payload must end with particle PPtr plus threshold");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlaySoundByParticleCount" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "soundName", soundName },
+                        { "particle", ReadPayloadPPtr(reader, "particle") },
+                        { "threshold", reader.ReadInt32("threshold") },
+                        { "layoutNote", "Installed IL2CPP metadata exposes soundName, particle, threshold, and runtime-only m_lastCount; observed serialized payloads contain the first three fields." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
         }
 
         private static bool TryDecodeUIManagedReferenceData(
