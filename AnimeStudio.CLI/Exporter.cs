@@ -1750,7 +1750,8 @@ namespace AnimeStudio.CLI
 
             var isRootGuideCondition = string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal);
             var isGuideCondition = string.Equals(header.Namespace, "Beyond.Gameplay.Conditions", StringComparison.Ordinal);
-            if (!isRootGuideCondition && !isGuideCondition)
+            var isGuideAction = string.Equals(header.Namespace, "Beyond.Gameplay.Actions", StringComparison.Ordinal);
+            if (!isRootGuideCondition && !isGuideCondition && !isGuideAction)
             {
                 return false;
             }
@@ -1863,6 +1864,13 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (isGuideAction
+                    && TryDecodeGuideActionManagedReferenceData(header, reader, offset, length, out data))
+                {
+                    return true;
+                }
+
             }
             catch (InvalidDataException)
             {
@@ -1871,6 +1879,135 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeGuideActionManagedReferenceData(
+            ManagedReferenceHeader header,
+            ManagedReferencePayloadReader reader,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null || !string.Equals(header.Namespace, "Beyond.Gameplay.Actions", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (IsKnownGuideActionSingleRawWord(header.ClassName))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["trailingWord"] = BuildPayloadHash32(reader.ReadInt32("trailingWord"));
+                reader.EnsureComplete();
+                return true;
+            }
+
+            var boolFieldName = GetGuideActionBoolFieldName(header.ClassName);
+            if (!string.IsNullOrEmpty(boolFieldName))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data[boolFieldName] = ReadGuideActionBoolParam(reader, boolFieldName);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "SetAtbValue", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["atbValue"] = ReadGuideActionFloatParam(reader, "atbValue");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "GuideFreezeWorld", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["handle"] = ReadGuideActionStringParam(reader, "handle", 0);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "GuideUnFreezeWorld", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["handle"] = ReadGuideActionStringParam(reader, "handle", 2);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "FinishEffect", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["effectSaveId"] = ReadGuideActionStringParam(reader, "effectSaveId", 2);
+                reader.EnsureComplete();
+                return true;
+            }
+
+            return false;
+        }
+
+        private static OrderedDictionary CreateGuideActionData(
+            ManagedReferenceHeader header,
+            int offset,
+            int length
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", $"{header.Namespace}.{header.ClassName}" },
+                { "offset", offset },
+                { "length", length },
+            };
+        }
+
+        private static bool IsKnownGuideActionSingleRawWord(string className)
+        {
+            return string.Equals(className, "RecoverMainHud", StringComparison.Ordinal)
+                || string.Equals(className, "ExitFacBuildMode", StringComparison.Ordinal);
+        }
+
+        private static string GetGuideActionBoolFieldName(string className)
+        {
+            switch (className)
+            {
+                case "DisableHudFade":
+                    return "showHud";
+                case "FacLockBuildPos":
+                    return "lockBuildPos";
+                case "FacSetEnableConfirmBuild":
+                    return "enable";
+                case "FacSetEnableExitBuildMode":
+                    return "enable";
+                case "SetEnablePlayerMove":
+                    return "enable";
+                case "SetEnablePlayerMoveCamera":
+                    return "enable";
+                case "SetFacMode":
+                    return "toFacMode";
+                case "SetFacTopView":
+                    return "isInTopView";
+                case "SetGeneralAbilityReleaseClose":
+                    return "canReleaseClose";
+                case "ToggleClearScreen":
+                    return "isShow";
+                case "ToggleGeneralAbilityClick":
+                    return "clickEnabled";
+                case "ToggleGeneralAbilityLoneClick":
+                    return "clickEnabled";
+                case "ToggleQuickMenuReleaseClose":
+                    return "releaseCloseEnabled";
+                default:
+                    return null;
+            }
         }
 
         private static bool IsKnownGuideConditionBaseOnlyManagedReferenceData(ManagedReferenceHeader header)
@@ -5396,6 +5533,74 @@ namespace AnimeStudio.CLI
                 { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
                 { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
             };
+        }
+
+        private static OrderedDictionary ReadGuideActionBase(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "index", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.index")) },
+                { "id", reader.ReadAlignedAsciiString($"{fieldName}.id") },
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "mode", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.mode")) },
+                { "enabled", reader.ReadBool32($"{fieldName}.enabled") },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionBoolParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "value", reader.ReadBool32($"{fieldName}.value") },
+                { "unknown3", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown3")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionFloatParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "unknown2", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown2")) },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+                { "unknown3", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown3")) },
+            };
+        }
+
+        private static OrderedDictionary ReadGuideActionStringParam(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int trailingWordCount
+        )
+        {
+            var data = new OrderedDictionary
+            {
+                { "unknown0", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown0")) },
+                { "unknown1", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.unknown1")) },
+                { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
+            };
+
+            if (trailingWordCount > 0)
+            {
+                data["trailingWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.trailingWords", trailingWordCount);
+            }
+
+            return data;
         }
 
         private static OrderedDictionary ReadGuideStringParam(
