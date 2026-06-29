@@ -1118,6 +1118,7 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -3668,11 +3669,14 @@ namespace AnimeStudio.CLI
                         || string.Equals(header.ClassName, "OnFacPendingSlotChanged", StringComparison.Ordinal)
                         || string.Equals(header.ClassName, "OnFacMainPinHintShow", StringComparison.Ordinal)
                         || string.Equals(header.ClassName, "OnWeekRaidIntroCharFormationOpen", StringComparison.Ordinal)));
-        }        private static bool TryDecodeCoreGameplayManagedReferenceData(
+        }
+
+        private static bool TryDecodeCoreGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -3712,6 +3716,16 @@ namespace AnimeStudio.CLI
                 }
 
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (TryDecodeCoreActionConditionManagedReferenceData(
+                    header,
+                    reader,
+                    offset,
+                    length,
+                    recoveredByRid,
+                    out data))
+                {
+                    return true;
+                }
                 if (string.Equals(header.ClassName, "ShowSquadTipsAction/Data", StringComparison.Ordinal))
                 {
                     data = new OrderedDictionary
@@ -3761,6 +3775,254 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeCoreActionConditionManagedReferenceData(
+            ManagedReferenceHeader header,
+            ManagedReferencePayloadReader reader,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && (string.Equals(header.ClassName, "NotNextCheckAction/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "ReturnFalseAction/Data", StringComparison.Ordinal)))
+            {
+                if (length != 16)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["layoutNote"] = "Installed IL2CPP metadata and current payload bytes show only the inherited AbilityActionData prefix for this action; no class-local field bytes are present.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckDamageDecorateMask/Data", StringComparison.Ordinal))
+            {
+                if (length != 28)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkType"] = ReadPayloadNamedEnum32(reader, "checkDamageDecorateMask.checkType", new[] { "Exact", "HasAny", "HasAll", "ExceptAny", "ExceptAll" });
+                data["mask"] = BuildPayloadHash64(reader.ReadInt64("checkDamageDecorateMask.mask"));
+                data["layoutNote"] = "Installed IL2CPP metadata exposes checkType and mask after the inherited AbilityActionData prefix; all audited payloads are 28 bytes.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckBuffIdInContext/Data", StringComparison.Ordinal))
+            {
+                if (length < 40 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkType"] = ReadPayloadNamedEnum32(reader, "checkBuffIdInContext.checkType", new[] { "Id", "Tag" });
+                data["buffIdList"] = ReadPayloadStringListWithZeroPadding(reader, "checkBuffIdInContext.buffIdList", 16, 128);
+                data["query"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkBuffIdInContext.query", 16, 256);
+                data["blackboardKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "checkBuffIdInContext.blackboardKey", 128);
+                data["layoutNote"] = "Installed IL2CPP metadata exposes checkType, buffIdList, tag query, and blackboardKey after the inherited AbilityActionData prefix; current payloads use bounded string/tag lists and an empty blackboardKey.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && (string.Equals(header.ClassName, "CheckSpellInflictionType/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckPhysicalInflictionType/Data", StringComparison.Ordinal)))
+            {
+                if (length < 24 || length > 64 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["mask"] = ReadPayloadMask32(reader, "inflictionType.mask", 0x0f);
+                data["savedKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "inflictionType.savedKey", 128);
+                data["layoutNote"] = "Installed IL2CPP metadata exposes mask and savedKey after the inherited AbilityActionData prefix; audited payloads use a bounded int32 infliction mask and an aligned saved-key string.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CompareFloat/Data", StringComparison.Ordinal))
+            {
+                if (length != 68)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["valueA"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "compareFloat.valueA", 128);
+                data["compare"] = ReadPayloadEnum32(reader, "compareFloat.compare", 0, 4);
+                data["valueB"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "compareFloat.valueB", 128);
+                data["layoutNote"] = "Installed IL2CPP metadata exposes valueA, compare, and valueB; BlackboardDouble serializes bool32, float32, and an aligned key string; observed non-key values carry an empty key string.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "IfElseAction/IfElseActionData", StringComparison.Ordinal))
+            {
+                if (length != 80)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["conditionAction"] = ReadPayloadSequenceActionData(reader, "ifElseAction.conditionAction", recoveredByRid);
+                data["succeedActions"] = ReadPayloadSequenceActionData(reader, "ifElseAction.succeedActions", recoveredByRid);
+                data["failActions"] = ReadPayloadSequenceActionData(reader, "ifElseAction.failActions", recoveredByRid);
+                data["alwaysNext"] = reader.ReadBool32("ifElseAction.alwaysNext");
+                data["layoutNote"] = "Installed IL2CPP metadata exposes conditionAction, succeedActions, failActions, and alwaysNext after the inherited AbilityActionData prefix; each SequenceActionData contains an action-data marker, RID link, and two source-filter bools.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            return false;
+        }
+
+        private static OrderedDictionary CreateCoreManagedReferenceData(
+            ManagedReferenceHeader header,
+            int offset,
+            int length
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", $"{header.Namespace}.{header.ClassName}" },
+                { "offset", offset },
+                { "length", length },
+            };
+        }
+
+        private static void ReadPayloadAbilityActionDataPrefix(
+            OrderedDictionary data,
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            data["isEnable"] = reader.ReadBool32($"{fieldName}.isEnable");
+            data["priorityLevel"] = reader.ReadInt32($"{fieldName}.priorityLevel");
+            data["priorityOffset"] = reader.ReadInt32($"{fieldName}.priorityOffset");
+            data["serverActionIndex"] = reader.ReadInt32($"{fieldName}.serverActionIndex");
+        }
+
+        private static OrderedDictionary ReadPayloadBlackboardDoubleWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxKeyLength
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "useBlackboardKey", reader.ReadBool32($"{fieldName}.useBlackboardKey") },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+                { "blackboardKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.blackboardKey", maxKeyLength) },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadSequenceActionData(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var actionDataPresent = reader.ReadBool32($"{fieldName}.actionData.present");
+            return new OrderedDictionary
+            {
+                { "actionDataPresent", actionDataPresent },
+                { "actionData", ReadPayloadRidLink(reader, $"{fieldName}.actionData", recoveredByRid) },
+                { "onlyExecuteWhenSourceIsMainChar", reader.ReadBool32($"{fieldName}.onlyExecuteWhenSourceIsMainChar") },
+                { "onlyExecuteWhenSourceIsGuard", reader.ReadBool32($"{fieldName}.onlyExecuteWhenSourceIsGuard") },
+            };
+        }
+
+        private static OrderedDictionary ReadPayloadGameplayTagQueryWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxTagCount,
+            int maxPathLength
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "queryType", ReadPayloadNamedEnum32(reader, $"{fieldName}.queryType", new[] { "HasAny", "HasAll", "ExceptAny", "ExceptAll" }) },
+                { "tags", ReadPayloadGameplayTagListWithZeroPadding(reader, $"{fieldName}.tags", maxTagCount, maxPathLength) },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadPayloadGameplayTagListWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            int maxPathLength
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(ReadPayloadGameplayTagWithZeroPadding(reader, $"{fieldName}[{i}]", maxPathLength));
+            }
+            return items;
+        }
+
+        private static List<string> ReadPayloadStringListWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            int maxLength
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<string>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}[{i}]", maxLength));
+            }
+            return items;
+        }
+
+        private static OrderedDictionary ReadPayloadMask32(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxMask
+        )
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value < 0 || value > maxMask)
+            {
+                throw new InvalidDataException($"invalid mask32 {value} in {fieldName}");
+            }
+            return BuildPayloadHash32(value);
         }
 
         private static bool TryDecodeAIBehaviorManagedReferenceData(
@@ -9877,6 +10139,38 @@ namespace AnimeStudio.CLI
                 { "value", value },
                 { "hex", $"0x{unchecked((uint)value):x8}" },
             };
+        }
+
+        private static string ReadPayloadAlignedAsciiStringWithZeroPadding(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxLength
+        )
+        {
+            var lengthOffset = reader.Position;
+            var byteLength = reader.ReadInt32($"{fieldName}.length");
+            if (byteLength < 0 || byteLength > maxLength)
+            {
+                throw new InvalidDataException($"invalid string length {byteLength} in {fieldName}");
+            }
+
+            reader.SetPosition(lengthOffset);
+            var value = reader.ReadAlignedAsciiString(fieldName);
+            var payloadEnd = lengthOffset + 4 + byteLength;
+            var alignedEnd = (payloadEnd + 3) & ~3;
+            if (alignedEnd > reader.End)
+            {
+                throw new InvalidDataException($"aligned string {fieldName} passes payload end");
+            }
+            for (var padOffset = payloadEnd; padOffset < alignedEnd; padOffset++)
+            {
+                if (reader.RawData[padOffset] != 0)
+                {
+                    throw new InvalidDataException($"non-zero padding byte at {padOffset} in {fieldName}");
+                }
+            }
+
+            return value;
         }
 
         private static string ReadPayloadAlignedUtf8StringWithZeroPadding(
