@@ -1360,7 +1360,110 @@ namespace AnimeStudio.CLI
                 data["heuristicRawWordHints"] = rawWordHints;
             }
 
+            if (ShouldEmitFullManagedReferencePayloadTrace(header))
+            {
+                data["diagnosticNote"] = "Full raw payload trace for unresolved TargetSettings/buff-action layout recovery; this entry is intentionally still marked $unparsed.";
+                data["diagnosticFullPayloadHex"] = BuildPayloadHex(rawData, offset, length);
+                data["diagnosticRawWordTrace"] = CollectDiagnosticRawWordTrace(rawData, offset, length);
+            }
+
             return data;
+        }
+
+        private static bool ShouldEmitFullManagedReferencePayloadTrace(ManagedReferenceHeader header)
+        {
+            if (header == null || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal))
+            {
+                return string.Equals(header.ClassName, "CreateBuffAction/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "ModifyDynamicBlackboard/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "StoreBuffCount/Data", StringComparison.Ordinal);
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal))
+            {
+                return string.Equals(header.ClassName, "CheckObjectTypeMatch/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckMainCharacterCondition/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckTargetsEqual/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckBuffStackNum/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CheckBuffStackNumAdvanced/Data", StringComparison.Ordinal);
+            }
+
+            return false;
+        }
+
+        private static string BuildPayloadHex(byte[] rawData, int offset, int length)
+        {
+            if (rawData == null || offset < 0 || length <= 0 || offset > rawData.Length || offset + length > rawData.Length)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(length * 2);
+            for (var i = 0; i < length; i++)
+            {
+                builder.Append(rawData[offset + i].ToString("x2"));
+            }
+            return builder.ToString();
+        }
+
+        private static List<OrderedDictionary> CollectDiagnosticRawWordTrace(byte[] rawData, int offset, int length)
+        {
+            var words = new List<OrderedDictionary>();
+            if (rawData == null
+                || offset < 0
+                || length <= 0
+                || (length % 4) != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return words;
+            }
+
+            for (var pos = offset; pos < offset + length; pos += 4)
+            {
+                var value = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
+                var word = BuildPayloadHash32(value);
+                word["relativeOffset"] = pos - offset;
+                word["absoluteOffset"] = pos;
+                var floatValue = BitConverter.Int32BitsToSingle(value);
+                if (!float.IsNaN(floatValue) && !float.IsInfinity(floatValue))
+                {
+                    word["float32"] = floatValue;
+                }
+                if (TryBuildAsciiWord(rawData, pos, out var ascii))
+                {
+                    word["ascii4"] = ascii;
+                }
+                words.Add(word);
+            }
+            return words;
+        }
+
+        private static bool TryBuildAsciiWord(byte[] rawData, int offset, out string value)
+        {
+            value = null;
+            if (rawData == null || offset < 0 || offset > rawData.Length - 4)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < 4; i++)
+            {
+                var b = rawData[offset + i];
+                if (b < 0x20 || b > 0x7e)
+                {
+                    return false;
+                }
+            }
+
+            value = Encoding.ASCII.GetString(rawData, offset, 4);
+            return true;
         }
 
         private static List<OrderedDictionary> CollectHeuristicRawWordHints(
