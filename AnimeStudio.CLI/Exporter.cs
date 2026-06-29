@@ -4270,6 +4270,46 @@ namespace AnimeStudio.CLI
                 return true;
             }
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckBuffStackNum/Data", StringComparison.Ordinal))
+            {
+                if (length < 144 || length > 240 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNum.checkTarget", offset, recoveredByRid);
+                data["buffId"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "checkBuffStackNum.buffId", 128);
+                data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNum.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNum.value", 128);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget, buffId, compareType, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckBuffStackNumByTag/Data", StringComparison.Ordinal))
+            {
+                if (length < 160 || length > 512 || (length % 4) != 0)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumByTag.checkTarget", offset, recoveredByRid);
+                data["tagQuery"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkBuffStackNumByTag.tagQuery", 16, 256);
+                data["buffStackNumType"] = ReadPayloadEnum32(reader, "checkBuffStackNumByTag.buffStackNumType", 0, 16);
+                data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumByTag.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
+                data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumByTag.value", 128);
+                data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget, tagQuery, buffStackNumType, compareType, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
+                reader.EnsureComplete();
+                return true;
+            }
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckHp/Data", StringComparison.Ordinal))
             {
                 if (length < 136 || length > 192 || (length % 4) != 0)
