@@ -1092,6 +1092,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeViewManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeUIManagedReferenceData(
                 header,
                 rawData,
@@ -1701,6 +1711,96 @@ namespace AnimeStudio.CLI
                         { "escapeTag", ReadPayloadGameplayTag(reader, "escapeTag") },
                         { "hideTag", ReadPayloadGameplayTag(reader, "hideTag") },
                         { "escapeTriggerRadius", reader.ReadFloat("escapeTriggerRadius") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyBattleEventStimulus/EnemyBattleEventStimulusData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyBattleEventStimulus/EnemyBattleEventStimulusData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "eventType", BuildPayloadHash32(reader.ReadInt32("eventType")) },
+                        { "buffId", reader.ReadAlignedAsciiString("buffId") },
+                        { "filterDamageDecorate", reader.ReadBool32("filterDamageDecorate") },
+                        { "checkType", ReadPayloadNamedEnum32(reader, "checkType", new[] { "Exact", "HasAny", "HasAll", "ExceptAny", "ExceptAll" }) },
+                        { "damageDecorateMask", BuildPayloadHash64(reader.ReadInt64("damageDecorateMask")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeViewManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationParamChangePack", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.ModelViewStateControllerBase/AnimationParamChangePack" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "useNewMVSC", reader.ReadBool32("useNewMVSC") },
+                        { "paramName", reader.ReadAlignedAsciiString("paramName") },
+                        { "paramType", ReadPayloadNamedEnum32(reader, "paramType", new[] { "Float", "Int", "Bool", "Trigger" }) },
+                        { "boolValue", reader.ReadBool32("boolValue") },
+                        { "floatValue", reader.ReadFloat("floatValue") },
+                        { "intValue", reader.ReadInt32("intValue") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationPackSetState", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.ModelViewStateControllerBase/AnimationPackSetState" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "stateName", reader.ReadAlignedAsciiString("stateName") },
+                        { "layer", reader.ReadInt32("layer") },
+                        { "normalizedTime", reader.ReadFloat("normalizedTime") },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -2888,6 +2988,25 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadPayloadNamedEnum32(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string[] names
+        )
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value < 0 || value >= names.Length)
+            {
+                throw new InvalidDataException($"invalid enum32 {value} in {fieldName}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "value", value },
+                { "name", names[value] },
+            };
+        }
+
         private static float ReadPayloadFloatRange(
             ManagedReferencePayloadReader reader,
             string fieldName,
@@ -3277,6 +3396,15 @@ namespace AnimeStudio.CLI
             {
                 { "value", value },
                 { "hex", $"0x{unchecked((uint)value):x8}" },
+            };
+        }
+
+        private static OrderedDictionary BuildPayloadHash64(long value)
+        {
+            return new OrderedDictionary
+            {
+                { "value", value },
+                { "hex", $"0x{unchecked((ulong)value):x16}" },
             };
         }
 
