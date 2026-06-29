@@ -6148,6 +6148,16 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeWikiWeaponManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out data))
+            {
+                return true;
+            }
+
             if (length == 0 && IsKnownEmptyGeneralGameplayManagedReferenceData(header))
             {
                 data = BuildEmptyManagedReferenceData(header, offset, length);
@@ -6331,12 +6341,50 @@ namespace AnimeStudio.CLI
                     { "layout", "Beyond.Gameplay.WikiModelSpawnData" },
                     { "offset", offset },
                     { "length", length },
-                    { "position", ReadPayloadVector3(reader, "position") },
-                    { "rotation", ReadPayloadVector3(reader, "rotation") },
-                    { "scale", ReadPayloadVector3(reader, "scale") },
-                    { "cameraDistance", reader.ReadFloat("cameraDistance") },
-                    { "effects", ReadWikiModelEffectList(reader) },
-                    { "layoutNote", "Installed IL2CPP metadata and serialized TypeTree expose position, rotation, scale, cameraDistance, and effects; each observed effect contains name, mountPoint, follow flags, offset, rotation, and scale." },
+                };
+                foreach (DictionaryEntry entry in ReadWikiModelSpawnData(reader, string.Empty))
+                {
+                    data[entry.Key] = entry.Value;
+                }
+                data["layoutNote"] = "Installed IL2CPP metadata and serialized TypeTree expose position, rotation, scale, cameraDistance, and effects; each observed effect contains name, mountPoint, follow flags, offset, rotation, and scale.";
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeWikiWeaponManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WikiWeaponData", StringComparison.Ordinal)
+                || length < 4)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WikiWeaponData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "spawnDataList", ReadWikiModelSpawnDataList(reader) },
+                    { "layoutNote", "Installed IL2CPP metadata exposes WikiWeaponData.spawnDataList; observed entries serialize nested WikiModelSpawnData records." },
                 };
                 reader.EnsureComplete();
                 return true;
@@ -8408,25 +8456,53 @@ namespace AnimeStudio.CLI
             }
         }
 
-        private static List<OrderedDictionary> ReadWikiModelEffectList(ManagedReferencePayloadReader reader)
+        private static OrderedDictionary ReadWikiModelSpawnData(ManagedReferencePayloadReader reader, string fieldName)
         {
-            var count = reader.ReadInt32("effects.count");
+            var prefix = string.IsNullOrEmpty(fieldName) ? string.Empty : fieldName + ".";
+            return new OrderedDictionary
+            {
+                { "position", ReadPayloadVector3(reader, prefix + "position") },
+                { "rotation", ReadPayloadVector3(reader, prefix + "rotation") },
+                { "scale", ReadPayloadVector3(reader, prefix + "scale") },
+                { "cameraDistance", reader.ReadFloat(prefix + "cameraDistance") },
+                { "effects", ReadWikiModelEffectList(reader, prefix + "effects") },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadWikiModelSpawnDataList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("spawnDataList.count");
+            if (count < 0 || count > 16 || count > reader.Remaining / 44)
+            {
+                throw new InvalidDataException($"invalid count {count} for spawnDataList");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(ReadWikiModelSpawnData(reader, $"spawnDataList[{i}]"));
+            }
+            return items;
+        }
+
+        private static List<OrderedDictionary> ReadWikiModelEffectList(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
             if (count < 0 || count > 16 || count > reader.Remaining / 52)
             {
-                throw new InvalidDataException($"invalid count {count} for effects");
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
             }
 
             var effects = new List<OrderedDictionary>(count);
             for (var i = 0; i < count; i++)
             {
-                effects.Add(ReadWikiModelEffectData(reader, i));
+                effects.Add(ReadWikiModelEffectData(reader, $"{fieldName}[{i}]"));
             }
             return effects;
         }
 
-        private static OrderedDictionary ReadWikiModelEffectData(ManagedReferencePayloadReader reader, int index)
+        private static OrderedDictionary ReadWikiModelEffectData(ManagedReferencePayloadReader reader, string fieldName)
         {
-            var fieldName = $"effects[{index}]";
             return new OrderedDictionary
             {
                 { "name", reader.ReadAlignedAsciiString($"{fieldName}.name") },
