@@ -1145,6 +1145,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeGeneralGameplayManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeUIManagedReferenceData(
                 header,
                 rawData,
@@ -3671,7 +3681,7 @@ namespace AnimeStudio.CLI
                 || !header.Namespace.StartsWith("Beyond.Gameplay.Core", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
-                || length <= 0
+                || length < 0
                 || offset > rawData.Length
                 || offset + length > rawData.Length)
             {
@@ -3680,6 +3690,12 @@ namespace AnimeStudio.CLI
 
             try
             {
+                if (length == 0 && IsKnownEmptyCoreGameplayManagedReferenceData(header))
+                {
+                    data = BuildEmptyManagedReferenceData(header, offset, length);
+                    return true;
+                }
+
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                 if (string.Equals(header.ClassName, "ShowSquadTipsAction/Data", StringComparison.Ordinal))
                 {
@@ -5968,7 +5984,7 @@ namespace AnimeStudio.CLI
                     && !string.Equals(header.Namespace, "Beyond.Gameplay.View.Animation", StringComparison.Ordinal))
                 || rawData == null
                 || offset < 0
-                || length <= 0
+                || length < 0
                 || offset > rawData.Length
                 || offset + length > rawData.Length)
             {
@@ -5977,6 +5993,12 @@ namespace AnimeStudio.CLI
 
             try
             {
+                if (length == 0 && IsKnownEmptyViewManagedReferenceData(header))
+                {
+                    data = BuildEmptyManagedReferenceData(header, offset, length);
+                    return true;
+                }
+
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                 if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationParamChangePack", StringComparison.Ordinal))
                 {
@@ -6057,6 +6079,31 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeGeneralGameplayManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length
+                || !IsKnownEmptyGeneralGameplayManagedReferenceData(header))
+            {
+                return false;
+            }
+
+            data = BuildEmptyManagedReferenceData(header, offset, length);
+            return true;
         }
 
         private static bool TryDecodeUIManagedReferenceData(
@@ -7023,6 +7070,69 @@ namespace AnimeStudio.CLI
             data["rawWords"] = ReadRemainingPayloadRawInt32Words(reader, "rawWords", 8192);
             reader.EnsureComplete();
             return data;
+        }
+
+        private static OrderedDictionary BuildEmptyManagedReferenceData(
+            ManagedReferenceHeader header,
+            int offset,
+            int length
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", string.IsNullOrEmpty(header.Namespace) ? header.ClassName : $"{header.Namespace}.{header.ClassName}" },
+                { "layoutNote", "Serialized managed-reference payload length is zero; the type identity is the complete exported data for this entry." },
+                { "offset", offset },
+                { "length", length },
+            };
+        }
+
+        private static bool IsKnownEmptyCoreGameplayManagedReferenceData(ManagedReferenceHeader header)
+        {
+            return header != null
+                && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && (string.Equals(header.ClassName, "CharacterControllerData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CharacterAudioComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CharacterBlowOffComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "StateTransitionComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "RemoteFactoryMineComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "Selector/CharacterTeamFinder/Data", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "Selector/MainCharacterValidator/Data", StringComparison.Ordinal));
+        }
+
+        private static bool IsKnownEmptyViewManagedReferenceData(ManagedReferenceHeader header)
+        {
+            return header != null
+                && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "LookAtComponentData", StringComparison.Ordinal);
+        }
+
+        private static bool IsKnownEmptyGeneralGameplayManagedReferenceData(ManagedReferenceHeader header)
+        {
+            if (header == null)
+            {
+                return false;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal))
+            {
+                return string.Equals(header.ClassName, "DynamicBattleShapeComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "CustomAbilityComponentData", StringComparison.Ordinal);
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.InteractiveEvent", StringComparison.Ordinal))
+            {
+                return string.Equals(header.ClassName, "InteractiveInstigatorControlComponentData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "DetachFromInstigator", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "ClearInstigator", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "SetInstigator", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "AddThrowCameraControl", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "ThrowByForceAndDir", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "TriggerPickUpAction", StringComparison.Ordinal);
+            }
+
+            return false;
         }
 
         private static bool IsEmptyEnemyComponentType(ManagedReferenceHeader header)
