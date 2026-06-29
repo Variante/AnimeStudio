@@ -8891,7 +8891,7 @@ namespace AnimeStudio.CLI
                             },
                             { "modeConfig", ReadAbilitySystemModeConfig(reader) },
                         };
-                        if (TryReadAbilitySystemSkillDataBundle(reader, out var skillDataBundle))
+                        if (TryReadAbilitySystemSkillDataBundle(reader, recoveredByRid, out var skillDataBundle))
                         {
                             data["skillDataBundle"] = skillDataBundle;
                         }
@@ -10787,6 +10787,7 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemSkillDataBundle(
             ManagedReferencePayloadReader reader,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -10812,27 +10813,16 @@ namespace AnimeStudio.CLI
                 };
 
                 var comboSkillConditionCount = local.ReadInt32("skillDataBundle.comboSkillConditions.count");
-                if (comboSkillConditionCount < 0 || comboSkillConditionCount > 64)
-                {
-                    throw new InvalidDataException($"invalid count {comboSkillConditionCount} for skillDataBundle.comboSkillConditions");
-                }
-
-                data["comboSkillConditions"] = new OrderedDictionary
-                {
-                    { "$partial", comboSkillConditionCount > 0 },
-                    { "count", comboSkillConditionCount },
-                };
-
-                if (comboSkillConditionCount == 0)
-                {
-                    data["comboSkillId"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillId");
-                    data["comboSkillSpecialNodeName"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName");
-                    data["layoutNote"] = "decoded through comboSkillSpecialNodeName; defaultCmdMapping and later AbilitySystemData fields remain in remainingRawWords";
-                }
-                else
-                {
-                    data["layoutNote"] = "decoded through comboSkillConditions.count; non-empty comboSkillConditions and later SkillDataBundle fields remain in remainingRawWords";
-                }
+                data["comboSkillConditions"] = ReadAbilitySystemComboSkillConditionList(
+                    local,
+                    "skillDataBundle.comboSkillConditions",
+                    comboSkillConditionCount,
+                    recoveredByRid
+                );
+                data["comboSkillId"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillId");
+                data["comboSkillSpecialNodeName"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName");
+                data["defaultCmdMapping"] = ReadAbilitySystemBattleCommandStringDictionary(local, "skillDataBundle.defaultCmdMapping", 8);
+                data["layoutNote"] = "decoded through defaultCmdMapping; later AbilitySystemData fields remain in remainingRawWords";
 
                 reader.SetPosition(local.Position);
                 return true;
@@ -10842,6 +10832,118 @@ namespace AnimeStudio.CLI
                 data = null;
                 return false;
             }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemComboSkillConditionList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int count,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            if (count < 0 || count > 64)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var comboSkillEvent = reader.ReadInt32($"{fieldName}[{i}].comboSkillEvent");
+                var actionCount = reader.ReadInt32($"{fieldName}[{i}].comboSkillCheckAction.count");
+                if (actionCount < 0 || actionCount > 32 || actionCount > reader.Remaining / 8)
+                {
+                    throw new InvalidDataException($"invalid action count {actionCount} for {fieldName}[{i}]");
+                }
+
+                var actions = new List<OrderedDictionary>(actionCount);
+                for (var j = 0; j < actionCount; j++)
+                {
+                    var ridOffset = reader.Position;
+                    var rid = reader.ReadInt64($"{fieldName}[{i}].comboSkillCheckAction[{j}]");
+                    if (recoveredByRid == null || !recoveredByRid.TryGetValue(rid, out var target))
+                    {
+                        throw new InvalidDataException($"unresolved managed-reference RID {rid} for {fieldName}[{i}].comboSkillCheckAction[{j}]");
+                    }
+                    actions.Add(BuildManagedReferenceRidLink(rid, target, ridOffset));
+                }
+
+                var onlyExecuteWhenSourceIsMainChar = reader.ReadBool32($"{fieldName}[{i}].comboSkillCheckAction.onlyExecuteWhenSourceIsMainChar");
+                var onlyExecuteWhenSourceIsGuard = reader.ReadBool32($"{fieldName}[{i}].comboSkillCheckAction.onlyExecuteWhenSourceIsGuard");
+                var comboSkillConditionImmediately = reader.ReadBool32($"{fieldName}[{i}].comboSkillConditionImmediately");
+
+                entries.Add(new OrderedDictionary
+                {
+                    { "comboSkillEvent", BuildAbilitySystemEvent(comboSkillEvent) },
+                    { "comboSkillCheckAction", new OrderedDictionary
+                        {
+                            { "actionData", new OrderedDictionary
+                                {
+                                    { "count", actionCount },
+                                    { "entries", actions },
+                                }
+                            },
+                            { "onlyExecuteWhenSourceIsMainChar", onlyExecuteWhenSourceIsMainChar },
+                            { "onlyExecuteWhenSourceIsGuard", onlyExecuteWhenSourceIsGuard },
+                        }
+                    },
+                    { "comboSkillConditionImmediately", comboSkillConditionImmediately },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary BuildAbilitySystemEvent(int value)
+        {
+            var item = BuildPayloadHash32(value);
+            switch (value)
+            {
+                case 9:
+                    item["name"] = "OnAddedBuff";
+                    break;
+                case 12:
+                    item["name"] = "OnTakeDamage";
+                    break;
+                case 13:
+                    item["name"] = "OnOutputDamage";
+                    break;
+                case 21:
+                    item["name"] = "OnPoiseZero";
+                    break;
+                case 60:
+                    item["name"] = "OnAfterTakePhysicalInfliction";
+                    break;
+                case 101:
+                    item["name"] = "OnBeforeTakeDamage";
+                    break;
+                case 102:
+                    item["name"] = "OnOutputBuff";
+                    break;
+                case 121:
+                    item["name"] = "OnEnemyBeforeTakeSpellInfliction";
+                    break;
+                case 151:
+                    item["name"] = "OnSetWeakness";
+                    break;
+                case 204:
+                    item["name"] = "OnBuffEndsEarly";
+                    break;
+                case 205:
+                    item["name"] = "OnBeforeAddedBuff";
+                    break;
+                case 241:
+                    item["name"] = "OnPoiseKnotBreak";
+                    break;
+                case 302:
+                    item["name"] = "OnBeforeOutputDamage";
+                    break;
+            }
+            return item;
         }
 
         private static List<OrderedDictionary> ReadAbilitySystemRawWordList(
