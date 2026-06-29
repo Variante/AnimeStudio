@@ -17,6 +17,44 @@ namespace AnimeStudio
     {
         internal const int EndfieldShaderSubProgramVersion = 0x0C11FFE2;
         internal const int EndfieldD3D11ProgramType = 33;
+        private const int MaxShaderProgramBodyChars = 32 * 1024 * 1024;
+
+        [ThreadStatic]
+        private static ShaderExportContext s_currentExportContext;
+
+        internal static ShaderExportContext CurrentExportContext => s_currentExportContext;
+
+        internal sealed class ShaderExportContext
+        {
+            private int m_programBodyChars;
+
+            internal bool CanAppendProgramBody => m_programBodyChars < MaxShaderProgramBodyChars;
+
+            internal void AppendProgramBody(StringBuilder sb, string body, string bodyKind)
+            {
+                if (string.IsNullOrEmpty(body))
+                {
+                    return;
+                }
+
+                if (body.Length <= MaxShaderProgramBodyChars - m_programBodyChars)
+                {
+                    sb.Append(body);
+                    m_programBodyChars += body.Length;
+                    return;
+                }
+
+                m_programBodyChars = MaxShaderProgramBodyChars;
+                AppendProgramBodySkipped(sb, $"{bodyKind} ({body.Length.ToString(CultureInfo.InvariantCulture)} chars)");
+            }
+
+            internal void AppendProgramBodySkipped(StringBuilder sb, string bodyKind)
+            {
+                sb.Append($"// AnimeStudio: omitted {SanitizeComment(bodyKind)} body because shader program text budget ");
+                sb.Append($"{MaxShaderProgramBodyChars.ToString(CultureInfo.InvariantCulture)} chars was reached.\n");
+                sb.Append("// AnimeStudio: bytecode was parsed; hash, offset, and size comments above preserve identity.\n");
+            }
+        }
 
         internal static bool IsEndfieldD3D11ProgramType(ShaderGpuProgramType programType)
         {
@@ -24,17 +62,26 @@ namespace AnimeStudio
         }
         public static string Convert(this Shader shader)
         {
-            if (shader.platformInfos != null)
-            {
-                return null;
-            }
+            var previousContext = s_currentExportContext;
+            s_currentExportContext = new ShaderExportContext();
             try
             {
-                return ConvertCore(shader);
+                if (shader.platformInfos != null)
+                {
+                    return null;
+                }
+                try
+                {
+                    return ConvertCore(shader);
+                }
+                catch (Exception ex) when (IsRecoverableShaderBlobFailure(ex))
+                {
+                    return header + ConvertUnsupportedShader(shader, ex);
+                }
             }
-            catch (Exception ex) when (IsRecoverableShaderBlobFailure(ex))
+            finally
             {
-                return header + ConvertUnsupportedShader(shader, ex);
+                s_currentExportContext = previousContext;
             }
         }
 
@@ -1337,6 +1384,31 @@ namespace AnimeStudio
         {
             return programType == ShaderGpuProgramType.SPIRV || ShaderConverter.IsEndfieldD3D11ProgramType(programType);
         }
+
+        private static bool ShouldAppendProgramBody(StringBuilder sb, string bodyKind)
+        {
+            var context = ShaderConverter.CurrentExportContext;
+            if (context == null || context.CanAppendProgramBody)
+            {
+                return true;
+            }
+
+            context.AppendProgramBodySkipped(sb, bodyKind);
+            return false;
+        }
+
+        private static void AppendProgramBody(StringBuilder sb, string body, string bodyKind)
+        {
+            var context = ShaderConverter.CurrentExportContext;
+            if (context == null)
+            {
+                sb.Append(body);
+                return;
+            }
+
+            context.AppendProgramBody(sb, body, bodyKind);
+        }
+
         public string Export()
         {
             var sb = new StringBuilder();
@@ -1373,7 +1445,7 @@ namespace AnimeStudio
                     case ShaderGpuProgramType.GLCore41:
                     case ShaderGpuProgramType.GLCore43:
                         sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
-                        sb.Append(Encoding.UTF8.GetString(m_ProgramCode));
+                        AppendProgramBody(sb, Encoding.UTF8.GetString(m_ProgramCode), "shader source");
                         break;
                     case ShaderGpuProgramType.DX9VertexSM20:
                     case ShaderGpuProgramType.DX9VertexSM30:
@@ -1386,7 +1458,7 @@ namespace AnimeStudio
                                 var g = Compiler.Disassemble(programCodeSpan.GetPinnableReference(), new PointerUSize((ulong)programCodeSpan.Length), DisasmFlags.None, "");
 
                                 sb.Append($"// hash: {ComputeHash64(programCodeSpan):x8}\n");
-                                sb.Append(g.AsString());
+                                AppendProgramBody(sb, g.AsString(), "D3D disassembly");
                             }
                             catch (Exception e)
                             {
@@ -1426,7 +1498,7 @@ namespace AnimeStudio
                             try
                             {
                                 HLSLDecompiler.DecompileShader(buffSpan.ToArray(), buffSpan.Length, out var hlslText);
-                                sb.Append(hlslText);
+                                AppendProgramBody(sb, hlslText, "HLSL decompile");
                             }
                             catch (Exception e)
                             {
@@ -1436,7 +1508,7 @@ namespace AnimeStudio
                                 try
                                 {
                                     var g = Compiler.Disassemble(buffSpan.GetPinnableReference(), new PointerUSize((ulong)buffSpan.Length), DisasmFlags.None, "");
-                                    sb.Append(g.AsString());
+                                    AppendProgramBody(sb, g.AsString(), "D3D disassembly");
                                 }
                                 catch (Exception ex)
                                 {
@@ -1475,7 +1547,7 @@ namespace AnimeStudio
                             }
                             var entryName = reader.ReadStringToNull();
                             var buff = reader.ReadBytes((int)(reader.BaseStream.Length - reader.BaseStream.Position));
-                            sb.Append(Encoding.UTF8.GetString(buff));
+                            AppendProgramBody(sb, Encoding.UTF8.GetString(buff), "Metal shader source");
                         }
                         break;
                     case ShaderGpuProgramType.SPIRV:
@@ -1491,7 +1563,10 @@ namespace AnimeStudio
                                     {
                                         var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
                                         sb.Append($"// hash: {ComputeHash64(snippetProgram):x8}\n");
-                                        sb.Append(SpirVShaderConverter.Convert(snippetProgram));
+                                        if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
+                                        {
+                                            AppendProgramBody(sb, SpirVShaderConverter.Convert(snippetProgram), "SPIR-V disassembly");
+                                        }
                                     }
                                     catch (Exception e)
                                     {
@@ -1504,7 +1579,10 @@ namespace AnimeStudio
                                 try
                                 {
                                     sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
-                                    sb.Append(SpirVShaderConverter.Convert(m_ProgramCode));
+                                    if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
+                                    {
+                                        AppendProgramBody(sb, SpirVShaderConverter.Convert(m_ProgramCode), "SPIR-V disassembly");
+                                    }
                                 }
                                 catch (Exception e)
                                 {
@@ -1519,7 +1597,7 @@ namespace AnimeStudio
                     case ShaderGpuProgramType.ConsoleDS:
                     case ShaderGpuProgramType.ConsoleGS:
                         sb.Append($"//hash: {ComputeHash64(m_ProgramCode):x8}\n");
-                        sb.Append(Encoding.UTF8.GetString(m_ProgramCode));
+                        AppendProgramBody(sb, Encoding.UTF8.GetString(m_ProgramCode), "shader source");
                         break;
                     default:
                         sb.Append($"//hash: {ComputeHash64(m_ProgramCode):x8}\n");
@@ -1628,10 +1706,14 @@ namespace AnimeStudio
             var byteCodeArray = byteCode.ToArray();
             var byteCodeSpan = byteCodeArray.AsSpan();
             sb.Append($"// hash: {ComputeHash64(byteCodeSpan):x8}\n");
+            if (!ShouldAppendProgramBody(sb, "Endfield DXBC HLSL decompile"))
+            {
+                return;
+            }
             try
             {
                 HLSLDecompiler.DecompileShader(byteCodeArray, byteCodeArray.Length, out var hlslText);
-                sb.Append(hlslText);
+                AppendProgramBody(sb, hlslText, "Endfield DXBC HLSL decompile");
             }
             catch (Exception e)
             {
