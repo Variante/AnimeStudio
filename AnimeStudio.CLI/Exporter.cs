@@ -1735,6 +1735,120 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCastSkillResponse/EnemyCastSkillResponseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCastSkillResponse/EnemyCastSkillResponseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "skillId", reader.ReadAlignedAsciiString("skillId") },
+                        { "skillTarget", ReadPayloadNamedEnum32(reader, "skillTarget", new[] { "None", "Source", "Self", "Target", "MainChar" }) },
+                        { "interruptSkill", reader.ReadBool32("interruptSkill") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckBuffStackNum/EnemyCheckBuffStackNumData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckBuffStackNum/EnemyCheckBuffStackNumData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "buffId", reader.ReadAlignedAsciiString("buffId") },
+                        { "compareType", BuildPayloadHash32(reader.ReadInt32("compareType")) },
+                        { "layerCount", reader.ReadInt32("layerCount") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcFindMainCharBehavior/NpcFindMainCharBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcFindMainCharBehavior/NpcFindMainCharBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "radius", reader.ReadFloat("radius") },
+                        { "angle", reader.ReadFloat("angle") },
+                        { "height", reader.ReadFloat("height") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcFocusBehavior/NpcFocusBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcFocusBehavior/NpcFocusBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "focusBehavior", BuildPayloadHash32(reader.ReadInt32("focusBehavior")) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFocusBehavior/CharacterFocusBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFocusBehavior/CharacterFocusBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "focusBehavior", BuildPayloadHash32(reader.ReadInt32("focusBehavior")) },
+                        { "focusTarget", ReadPayloadNamedEnum32(reader, "focusTarget", new[] { "MainChar", "MainCamera" }) },
+                        { "autoLock", reader.ReadBool32("autoLock") },
+                        { "focusInDis", reader.ReadFloat("focusInDis") },
+                        { "focusOutDis", reader.ReadFloat("focusOutDis") },
+                        { "focusDuration", reader.ReadFloat("focusDuration") },
+                        { "duration", reader.ReadFloat("duration") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemySimpleAttackBehavior/EnemySimpleAttackBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemySimpleAttackBehavior/EnemySimpleAttackBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "skillId", reader.ReadAlignedAsciiString("skillId") },
+                        { "skillRange", reader.ReadFloat("skillRange") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
