@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using System.Buffers.Binary;
 using System;
@@ -1082,6 +1082,26 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeLuaManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeBattleMusicConfigManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeAIBehaviorManagedReferenceData(
                 header,
                 rawData,
@@ -1103,6 +1123,16 @@ namespace AnimeStudio.CLI
             }
 
             if (TryDecodeUIManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
+            if (TryDecodeInteractiveBehitManagedReferenceData(
                 header,
                 rawData,
                 offset,
@@ -1568,6 +1598,111 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static bool TryDecodeLuaManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Lua.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Lua", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "LuaReference/RefExtraInfo", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Lua.LuaReference/RefExtraInfo" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "customUIStyles", ReadLuaCustomUIStyleInfoList(reader, "customUIStyles", 64) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static bool TryDecodeBattleMusicConfigManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.ClassName, "BattleMusicConfig/PotentialEnemyRangeConfig/Circle", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.BattleMusicConfig/PotentialEnemyRangeConfig/Circle" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "radius", reader.ReadFloat("radius") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "BattleMusicConfig/PotentialEnemyRangeConfig/Sector", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "layout", "Beyond.Gameplay.BattleMusicConfig/PotentialEnemyRangeConfig/Sector" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "radius", reader.ReadFloat("radius") },
+                        { "angle", reader.ReadFloat("angle") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
         private static bool TryDecodeAIBehaviorManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
@@ -1581,7 +1716,7 @@ namespace AnimeStudio.CLI
                 || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                 || rawData == null
                 || offset < 0
-                || length <= 0
+                || length < 0
                 || offset > rawData.Length
                 || offset + length > rawData.Length)
             {
@@ -1849,6 +1984,233 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyResetPoiseResponse/EnemyResetPoiseResponseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyResetPoiseResponse/EnemyResetPoiseResponseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCastSkillInRangeBehavior/EnemyCastSkillInRangeBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCastSkillInRangeBehavior/EnemyCastSkillInRangeBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckCanInterruptCurSkill/EnemyCheckCanInterruptCurSkillData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckCanInterruptCurSkill/EnemyCheckCanInterruptCurSkillData" },
+                        { "offset", offset },
+                        { "length", length },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyFindTargetlBehavior/EnemyFindTargetlBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyFindTargetlBehavior/EnemyFindTargetlBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "forgetTime", reader.ReadFloat("forgetTime") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyHpChangeStimulus/EnemyHpChangeStimulusData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyHpChangeStimulus/EnemyHpChangeStimulusData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "checkType", ReadPayloadNamedEnum32(reader, "checkType", new[] { "LT", "LE", "GT", "GE", "Equals" }) },
+                        { "hpPct", reader.ReadFloat("hpPct") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckHP/EnemyCheckHPData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckHP/EnemyCheckHPData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "targetType", ReadPayloadNamedEnum32(reader, "targetType", new[] { "Self", "Source" }) },
+                        { "checkType", ReadPayloadNamedEnum32(reader, "checkType", new[] { "LT", "LE", "GT", "GE", "Equals" }) },
+                        { "hpPct", reader.ReadFloat("hpPct") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckInZeroPoise/EnemyCheckInZeroPoiseData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckInZeroPoise/EnemyCheckInZeroPoiseData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "invert", reader.ReadBool32("invert") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemySinglePatrolBehavior/EnemySinglePatrolBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemySinglePatrolBehavior/EnemySinglePatrolBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "enterRestart", reader.ReadBool32("enterRestart") },
+                        { "moveMode", ReadPayloadNamedEnum32(reader, "moveMode", new[] { "NavMesh", "World", "TowerDefence" }) },
+                        { "reachDis", reader.ReadFloat("reachDis") },
+                        { "reachRunDis", reader.ReadFloat("reachRunDis") },
+                        { "entityModeId", reader.ReadAlignedAsciiString("entityModeId") },
+                        { "entityRunModeId", reader.ReadAlignedAsciiString("entityRunModeId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemySettlementBattleBehavior/EnemySettlementBattleBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemySettlementBattleBehavior/EnemySettlementBattleBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "skillData", ReadEnemySettlementAttackTargetSkillMap(reader) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "NpcSpaceShipBehavior/NpcSpaceShipBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.NpcSpaceShipBehavior/NpcSpaceShipBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "canvasGraph", ReadPayloadPPtr(reader, "canvasGraph") },
+                        { "greetVirtualTag", ReadPayloadGameplayTag(reader, "greetVirtualTag") },
+                        { "greetCD", reader.ReadFloat("greetCD") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && (string.Equals(header.ClassName, "CharacterSingleSwitchGraph/CharacterSingleSwitchGraphData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "EnemySingleSwitchGraph/EnemySingleSwitchGraphData", StringComparison.Ordinal)
+                        || string.Equals(header.ClassName, "NpcSingleSwitchGraph/NpcSingleSwitchGraphData", StringComparison.Ordinal)))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", $"Beyond.Gameplay.AI.{header.ClassName}" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "behavior", ReadPayloadGameplayTag(reader, "behavior") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterCheckBehavior/CharacterCheckBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterCheckBehavior/CharacterCheckBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "checkBehaviorType", ReadPayloadNamedEnum32(reader, "checkBehaviorType", new[] { "And", "Or" }) },
+                        { "charBehaviorTags", ReadPayloadInvertGameplayTagList(reader, "charBehaviorTags", "behavior", 64) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyCheckGameplayTag/EnemyCheckGameplayTagData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyCheckGameplayTag/EnemyCheckGameplayTagData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "targetType", ReadPayloadNamedEnum32(reader, "targetType", new[] { "Self", "Source" }) },
+                        { "checkTagType", ReadPayloadNamedEnum32(reader, "checkTagType", new[] { "And", "Or" }) },
+                        { "tagInfo", ReadPayloadInvertGameplayTagList(reader, "tagInfo", "tag", 64) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
             }
             catch (InvalidDataException)
             {
@@ -1973,6 +2335,51 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static bool TryDecodeInteractiveBehitManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "InteractiveBehitPerformSetting/FightBehitBase", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.InteractiveBehitPerformSetting/FightBehitBase" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "cameraShake", ReadPayloadNamedEnum32(reader, "cameraShake", new[] { "Base", "Normal", "HighLevel" }) },
+                    { "stopFrame", ReadPayloadNamedEnum32(reader, "stopFrame", new[] { "Base", "Normal", "HighLevel" }) },
+                    { "entityAnim", ReadPayloadNamedEnum32(reader, "entityAnim", new[] { "Base", "Normal", "HighLevel" }) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
         private static bool TryDecodeSkeletalMorphMappingData(
             ManagedReferenceHeader header,
             byte[] rawData,
@@ -2887,6 +3294,100 @@ namespace AnimeStudio.CLI
                 { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
                 { "tagId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.tagId")) },
             };
+        }
+
+        private static List<OrderedDictionary> ReadPayloadInvertGameplayTagList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string tagFieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "invert", reader.ReadBool32($"{fieldName}[{i}].invert") },
+                    { tagFieldName, ReadPayloadGameplayTag(reader, $"{fieldName}[{i}].{tagFieldName}") },
+                });
+            }
+            return items;
+        }
+
+        private static OrderedDictionary ReadEnemySettlementAttackTargetSkillMap(ManagedReferencePayloadReader reader)
+        {
+            var keyCount = reader.ReadInt32("skillData.keys.count");
+            if (keyCount < 0 || keyCount > 16)
+            {
+                throw new InvalidDataException($"invalid count {keyCount} for skillData.keys");
+            }
+
+            var keys = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(ReadPayloadNamedEnum32(reader, $"skillData.keys[{i}]", new[] { "Building", "Character", "Core" }));
+            }
+
+            var valueCount = reader.ReadInt32("skillData.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException("skillData key/value count mismatch");
+            }
+
+            var values = new List<OrderedDictionary>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = new OrderedDictionary
+                {
+                    { "skillId", reader.ReadAlignedAsciiString($"skillData.values[{i}].skillId") },
+                    { "skillRange", reader.ReadFloat($"skillData.values[{i}].skillRange") },
+                };
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { "target", keys[i] },
+                    { "skill", value },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", keys },
+                { "values", values },
+                { "entries", entries },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadLuaCustomUIStyleInfoList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "style", ReadPayloadPPtr(reader, $"{fieldName}[{i}].style") },
+                    { "component", ReadPayloadPPtr(reader, $"{fieldName}[{i}].component") },
+                });
+            }
+            return items;
         }
 
         private static List<int> ReadPayloadInt32List(
