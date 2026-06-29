@@ -3292,6 +3292,7 @@ namespace AnimeStudio.CLI
                     reader.EnsureComplete();
                     return true;
                 }
+
                 if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "CharacterPickupBehavior/CharacterPickupBehaviorData", StringComparison.Ordinal))
                 {
@@ -3775,6 +3776,153 @@ namespace AnimeStudio.CLI
                         { "passiveAttractPointTag", ReadPayloadGameplayTag(reader, "passiveAttractPointTag") },
                         { "idleShowTag", ReadPayloadGameplayTag(reader, "idleShowTag") },
                         { "npcSR", ReadNpcStimulusResponseList(reader, "npcSR.cfg", 16, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterFollowGraph/CharacterFollowGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterFollowGraph/CharacterFollowGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseCheckInterval", reader.ReadFloat("baseCheckInterval") },
+                        { "randomCheckInterval", reader.ReadFloat("randomCheckInterval") },
+                        { "characterSR", ReadCharacterStimulusResponse(reader, "characterSR", 64, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterBattleGraph/CharacterBattleGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.CharacterBattleGraph/CharacterBattleGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "characterSR", ReadCharacterStimulusResponse(reader, "characterSR", 64, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyPatrolGraph/EnemyPatrolGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyPatrolGraph/EnemyPatrolGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "singlePatrol", ReadPayloadGameplayTag(reader, "singlePatrol") },
+                        { "groupPatrol", ReadPayloadGameplayTag(reader, "groupPatrol") },
+                        { "enemySR", ReadNpcStimulusResponseList(reader, "enemySR", 16, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyBornBehavior/EnemyBornBehaviorData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyBornBehavior/EnemyBornBehaviorData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "bornBehaviorData", ReadEnemyBornBehaviorData(reader, "bornBehaviorData") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyBattleGraph/EnemyBattleGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyBattleGraph/EnemyBattleGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "canvasGraph", ReadPayloadPPtr(reader, "canvasGraph") },
+                        { "entityMode", BuildPayloadHash32(reader.ReadInt32("entityMode")) },
+                        { "soundName", reader.ReadAlignedAsciiString("soundName") },
+                        { "alertRange", reader.ReadFloat("alertRange") },
+                        { "setWaitTime", reader.ReadBool32("setWaitTime") },
+                        { "waitTime", reader.ReadFloat("waitTime") },
+                        { "useCommonBehavior", reader.ReadBool32("useCommonBehavior") },
+                        { "enterConfrontDis", reader.ReadFloat("enterConfrontDis") },
+                        { "enemySR", ReadNpcStimulusResponseList(reader, "enemySR", 64, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemyDefendBattleGraph/EnemyDefendBattleGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemyDefendBattleGraph/EnemyDefendBattleGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "canvasGraph", ReadPayloadPPtr(reader, "canvasGraph") },
+                        { "useCommonBehavior", reader.ReadBool32("useCommonBehavior") },
+                        { "enterConfrontDis", reader.ReadFloat("enterConfrontDis") },
+                        { "searchRadius", reader.ReadFloat("searchRadius") },
+                        { "searchHeight", reader.ReadFloat("searchHeight") },
+                        { "searchMode", BuildPayloadHash32(reader.ReadInt32("searchMode")) },
+                        { "onHitTimeout", reader.ReadFloat("onHitTimeout") },
+                        { "enemySR", ReadNpcStimulusResponseList(reader, "enemySR", 64, recoveredByRid) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "EnemySettlementBattleGraph/EnemySettlementBattleGraphData", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AI.EnemySettlementBattleGraph/EnemySettlementBattleGraphData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "baseInterval", reader.ReadFloat("baseInterval") },
+                        { "canvasGraph", ReadPayloadPPtr(reader, "canvasGraph") },
+                        { "battleTag", ReadPayloadGameplayTag(reader, "battleTag") },
+                        { "patrolTag", ReadPayloadGameplayTag(reader, "patrolTag") },
+                        { "searchCoreRadius", reader.ReadFloat("searchCoreRadius") },
+                        { "searchCoreHeight", reader.ReadFloat("searchCoreHeight") },
+                        { "searchMode", BuildPayloadHash32(reader.ReadInt32("searchMode")) },
+                        { "onHitTimeout", reader.ReadFloat("onHitTimeout") },
+                        { "sightRadius", reader.ReadFloat("sightRadius") },
+                        { "sightAngle", reader.ReadFloat("sightAngle") },
+                        { "leaveDis", reader.ReadFloat("leaveDis") },
+                        { "exAction", BuildPayloadHash32(reader.ReadInt32("exAction")) },
+                        { "enemySR", ReadNpcStimulusResponseList(reader, "enemySR", 64, recoveredByRid) },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -5183,6 +5331,46 @@ namespace AnimeStudio.CLI
                 item["name"] = "InImmobilized";
             }
             return item;
+        }
+
+        private static OrderedDictionary ReadEnemyBornBehaviorData(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "desc", reader.ReadAlignedAsciiString($"{fieldName}.desc") },
+                { "enterMode", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.enterMode")) },
+                { "enterBuffId", reader.ReadAlignedAsciiString($"{fieldName}.enterBuffId") },
+                { "enterRepeat", reader.ReadBool32($"{fieldName}.enterRepeat") },
+                { "enterAnimSpeed", reader.ReadFloat($"{fieldName}.enterAnimSpeed") },
+                { "enterAnimId", reader.ReadAlignedAsciiString($"{fieldName}.enterAnimId") },
+                { "enterRootMotion", reader.ReadBool32($"{fieldName}.enterRootMotion") },
+                { "enterSkillId", reader.ReadAlignedAsciiString($"{fieldName}.enterSkillId") },
+                { "exitMode", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.exitMode")) },
+                { "exitBuffId", reader.ReadAlignedAsciiString($"{fieldName}.exitBuffId") },
+                { "exitAnimSpeed", reader.ReadFloat($"{fieldName}.exitAnimSpeed") },
+                { "exitAnimId", reader.ReadAlignedAsciiString($"{fieldName}.exitAnimId") },
+                { "exitRootMotion", reader.ReadBool32($"{fieldName}.exitRootMotion") },
+                { "bornCanInterrupt", reader.ReadBool32($"{fieldName}.bornCanInterrupt") },
+                { "exitSkillId", reader.ReadAlignedAsciiString($"{fieldName}.exitSkillId") },
+                { "canInterruptTime", reader.ReadFloat($"{fieldName}.canInterruptTime") },
+            };
+        }
+
+        private static OrderedDictionary ReadCharacterStimulusResponse(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "unknownFloat0", reader.ReadFloat($"{fieldName}.unknownFloat0") },
+                { "srData", ReadNpcStimulusResponseList(reader, $"{fieldName}.srData", maxCount, recoveredByRid) },
+            };
         }
 
         private static List<OrderedDictionary> ReadNpcStimulusResponseList(
