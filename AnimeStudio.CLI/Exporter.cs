@@ -446,10 +446,12 @@ namespace AnimeStudio.CLI
                 OrderedDictionary partialTypeTreeStoppedAt = null;
                 OrderedDictionary recoveredManagedReferences = null;
                 OrderedDictionary managedReferenceRecoveryFailure = null;
+                OrderedDictionary rawPayloadDecodeDiagnostic = null;
                 HashSet<long> expectedManagedReferenceRids = null;
                 var recoveredManagedReferencesTail = false;
                 var recoveredManagedReferencesFullyDecoded = false;
                 var recoveredManagedReferencesStatus = "notRecovered";
+                var rawPayloadDecodedEntryCount = 0;
                 string partialTypeTreeSourceLabel = null;
 
                 if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && Studio.assemblyLoader.Loaded)
@@ -571,6 +573,17 @@ namespace AnimeStudio.CLI
                     {
                         managedReferenceRecoveryFailure = recoveryFailure;
                     }
+                }
+                if (type != null
+                    && !recoveredManagedReferencesTail
+                    && TryEnrichKnownManagedReferencePayloadsFromRawData(
+                        type,
+                        rawData,
+                        out var enrichedReferences,
+                        out rawPayloadDecodeDiagnostic,
+                        out rawPayloadDecodedEntryCount))
+                {
+                    type["references"] = enrichedReferences;
                 }
 
                 if (type == null)
@@ -700,6 +713,15 @@ namespace AnimeStudio.CLI
                             meta["managedReferencesRegistryRecoveryAttempted"] = true;
                             meta["managedReferencesRegistryRecoveryFailure"] = managedReferenceRecoveryFailure;
                         }
+                    }
+                }
+                if (rawPayloadDecodedEntryCount > 0)
+                {
+                    meta["managedReferencesRawPayloadDecoded"] = true;
+                    meta["managedReferencesRawPayloadDecodedEntryCount"] = rawPayloadDecodedEntryCount;
+                    if (rawPayloadDecodeDiagnostic != null)
+                    {
+                        meta["managedReferencesRawPayloadDecode"] = rawPayloadDecodeDiagnostic;
                     }
                 }
                 type.Insert(0, "$animestudio", meta);
@@ -875,6 +897,390 @@ namespace AnimeStudio.CLI
             catch
             {
                 return false;
+            }
+        }
+
+        private static bool TryEnrichKnownManagedReferencePayloadsFromRawData(
+            OrderedDictionary type,
+            byte[] rawData,
+            out OrderedDictionary enrichedReferences,
+            out OrderedDictionary diagnostic,
+            out int decodedEntryCount
+        )
+        {
+            enrichedReferences = null;
+            diagnostic = null;
+            decodedEntryCount = 0;
+            if (type == null
+                || rawData == null
+                || rawData.Length < 8
+                || !type.Contains("references")
+                || type["references"] is not OrderedDictionary references)
+            {
+                return false;
+            }
+
+            if (!TryGetManagedReferenceEntries(references, out var existingEntries) || existingEntries.Count == 0)
+            {
+                return false;
+            }
+
+            var candidateEntries = existingEntries
+                .Where(entry => IsEmptyManagedReferenceData(entry) && IsKnownRawPayloadMergeCandidate(entry))
+                .ToList();
+            if (candidateEntries.Count == 0)
+            {
+                return false;
+            }
+
+            var existingByRid = new Dictionary<long, OrderedDictionary>();
+            foreach (var entry in existingEntries)
+            {
+                if (!TryGetManagedReferenceRid(entry, out var rid) || existingByRid.ContainsKey(rid))
+                {
+                    return false;
+                }
+                existingByRid[rid] = entry;
+            }
+
+            var expectedRids = new HashSet<long>(existingByRid.Keys);
+            var expectedCount = existingEntries.Count;
+            int? expectedVersion = null;
+            if (TryGetDictionaryValue(references, "version", out var versionValue)
+                && TryConvertToInt64(versionValue, out var version64)
+                && version64 >= int.MinValue
+                && version64 <= int.MaxValue)
+            {
+                expectedVersion = (int)version64;
+            }
+
+            for (var startOffset = 0; startOffset <= rawData.Length - 8; startOffset += 4)
+            {
+                var version = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(startOffset, 4));
+                if (version < 1 || version > 3 || (expectedVersion.HasValue && version != expectedVersion.Value))
+                {
+                    continue;
+                }
+
+                var count = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(startOffset + 4, 4));
+                if (count != expectedCount)
+                {
+                    continue;
+                }
+
+                if (!TryRecoverManagedReferences(rawData, startOffset, expectedRids, out var recoveredReferences, out _)
+                    || !TryGetManagedReferenceEntries(recoveredReferences, out var recoveredEntries)
+                    || recoveredEntries.Count != expectedCount)
+                {
+                    continue;
+                }
+
+                var recoveredByRid = new Dictionary<long, OrderedDictionary>();
+                var typeMismatch = false;
+                foreach (var recoveredEntry in recoveredEntries)
+                {
+                    if (!TryGetManagedReferenceRid(recoveredEntry, out var rid)
+                        || recoveredByRid.ContainsKey(rid)
+                        || !existingByRid.TryGetValue(rid, out var existingEntry)
+                        || !ManagedReferenceTypesEqual(existingEntry, recoveredEntry))
+                    {
+                        typeMismatch = true;
+                        break;
+                    }
+                    recoveredByRid[rid] = recoveredEntry;
+                }
+                if (typeMismatch)
+                {
+                    continue;
+                }
+
+                var mergedCount = 0;
+                foreach (var existingEntry in candidateEntries)
+                {
+                    if (!TryGetManagedReferenceRid(existingEntry, out var rid)
+                        || !recoveredByRid.TryGetValue(rid, out var recoveredEntry)
+                        || !TryGetDictionaryValue(recoveredEntry, "data", out var recoveredData)
+                        || !IsDecodedManagedReferenceData(recoveredData))
+                    {
+                        continue;
+                    }
+
+                    SetOrderedDictionaryValue(existingEntry, "data", recoveredData);
+                    if (TryGetDictionaryValue(recoveredEntry, "dataOffset", out var dataOffset))
+                    {
+                        SetOrderedDictionaryValue(existingEntry, "dataOffset", dataOffset);
+                    }
+                    if (TryGetDictionaryValue(recoveredEntry, "dataLength", out var dataLength))
+                    {
+                        SetOrderedDictionaryValue(existingEntry, "dataLength", dataLength);
+                    }
+                    mergedCount++;
+                }
+
+                if (mergedCount == 0)
+                {
+                    continue;
+                }
+
+                SetOrderedDictionaryValue(references, "$rawPayloadDecoded", true);
+                SetOrderedDictionaryValue(references, "rawPayloadDecodedEntryCount", mergedCount);
+                SetOrderedDictionaryValue(references, "rawPayloadRegistryStartOffset", startOffset);
+                enrichedReferences = references;
+                decodedEntryCount = mergedCount;
+                diagnostic = new OrderedDictionary
+                {
+                    { "source", "raw MonoBehaviour payload" },
+                    { "registryStartOffset", startOffset },
+                    { "registryCount", expectedCount },
+                    { "decodedEntryCount", mergedCount },
+                    { "scope", "empty known managed-reference payloads only" },
+                };
+                return true;
+            }
+
+            var directMergedCount = 0;
+            foreach (var existingEntry in candidateEntries.Where(IsEmptyManagedReferenceData))
+            {
+                if (!TryDecodeKnownManagedReferencePayloadByHeaderScan(
+                    existingEntry,
+                    rawData,
+                    expectedRids,
+                    out var decodedData,
+                    out var dataOffset,
+                    out var dataLength))
+                {
+                    continue;
+                }
+
+                SetOrderedDictionaryValue(existingEntry, "data", decodedData);
+                SetOrderedDictionaryValue(existingEntry, "dataOffset", dataOffset);
+                SetOrderedDictionaryValue(existingEntry, "dataLength", dataLength);
+                directMergedCount++;
+            }
+
+            if (directMergedCount > 0)
+            {
+                SetOrderedDictionaryValue(references, "$rawPayloadDecoded", true);
+                SetOrderedDictionaryValue(references, "rawPayloadDecodedEntryCount", directMergedCount);
+                enrichedReferences = references;
+                decodedEntryCount = directMergedCount;
+                diagnostic = new OrderedDictionary
+                {
+                    { "source", "raw MonoBehaviour payload header scan" },
+                    { "decodedEntryCount", directMergedCount },
+                    { "scope", "empty known managed-reference payloads only" },
+                };
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryDecodeKnownManagedReferencePayloadByHeaderScan(
+            OrderedDictionary existingEntry,
+            byte[] rawData,
+            IReadOnlySet<long> expectedRids,
+            out OrderedDictionary decodedData,
+            out int dataOffset,
+            out int dataLength
+        )
+        {
+            decodedData = null;
+            dataOffset = 0;
+            dataLength = 0;
+            if (!TryGetManagedReferenceRid(existingEntry, out var expectedRid)
+                || !TryGetManagedReferenceTypeStrings(existingEntry, out var expectedClass, out var expectedNamespace, out var expectedAssembly))
+            {
+                return false;
+            }
+
+            for (var candidate = 0; candidate <= rawData.Length - MinManagedReferenceHeaderBytes; candidate += 4)
+            {
+                if (!TryReadManagedReferenceHeader(rawData, candidate, out var header)
+                    || header.Rid != expectedRid
+                    || !string.Equals(header.ClassName, expectedClass, StringComparison.Ordinal)
+                    || !string.Equals(header.Namespace, expectedNamespace, StringComparison.Ordinal)
+                    || !string.Equals(header.AssemblyName, expectedAssembly, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var nextOffset = FindNextExpectedManagedReferenceHeaderOffset(rawData, header.DataStart, expectedRids, expectedRid);
+                if (nextOffset < 0)
+                {
+                    nextOffset = rawData.Length;
+                }
+                if (nextOffset < header.DataStart)
+                {
+                    continue;
+                }
+
+                dataOffset = header.DataStart;
+                dataLength = nextOffset - header.DataStart;
+                var recoveredByRid = new Dictionary<long, ManagedReferenceHeader> { { header.Rid, header } };
+                var remainingStringHintBudget = MaxHeuristicStringHintsPerReference;
+                var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
+                var data = BuildManagedReferenceData(
+                    header,
+                    rawData,
+                    dataOffset,
+                    dataLength,
+                    recoveredByRid,
+                    ref remainingStringHintBudget,
+                    ref remainingRidLinkBudget);
+                if (!IsDecodedManagedReferenceData(data))
+                {
+                    continue;
+                }
+
+                decodedData = data;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static int FindNextExpectedManagedReferenceHeaderOffset(
+            byte[] rawData,
+            int start,
+            IReadOnlySet<long> expectedRids,
+            long currentRid
+        )
+        {
+            if (expectedRids == null || expectedRids.Count <= 1)
+            {
+                return -1;
+            }
+
+            var candidate = (start + 3) & ~3;
+            for (; candidate <= rawData.Length - MinManagedReferenceHeaderBytes; candidate += 4)
+            {
+                if (TryReadManagedReferenceHeader(rawData, candidate, out var header)
+                    && header.Rid != currentRid
+                    && expectedRids.Contains(header.Rid))
+                {
+                    return candidate;
+                }
+            }
+
+            return -1;
+        }
+
+        private static bool TryGetManagedReferenceEntries(OrderedDictionary references, out List<OrderedDictionary> entries)
+        {
+            entries = new List<OrderedDictionary>();
+            if (references == null
+                || !TryGetDictionaryValue(references, "RefIds", out var refIds)
+                || refIds is string
+                || refIds is not IEnumerable enumerable)
+            {
+                return false;
+            }
+
+            foreach (var item in enumerable)
+            {
+                if (item is OrderedDictionary entry)
+                {
+                    entries.Add(entry);
+                }
+            }
+            return entries.Count > 0;
+        }
+
+        private static bool TryGetManagedReferenceRid(OrderedDictionary entry, out long rid)
+        {
+            rid = 0;
+            return entry != null
+                && TryGetDictionaryValue(entry, "rid", out var value)
+                && TryConvertToInt64(value, out rid);
+        }
+
+        private static bool IsEmptyManagedReferenceData(OrderedDictionary entry)
+        {
+            return entry != null
+                && TryGetDictionaryValue(entry, "data", out var data)
+                && data is OrderedDictionary dictionary
+                && dictionary.Count == 0;
+        }
+
+        private static bool IsKnownRawPayloadMergeCandidate(OrderedDictionary entry)
+        {
+            return TryGetManagedReferenceTypeStrings(entry, out var className, out var namespaceName, out var assemblyName)
+                && string.Equals(assemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                && string.Equals(namespaceName, "Beyond.Gameplay", StringComparison.Ordinal)
+                && (string.Equals(className, "PlaySound", StringComparison.Ordinal)
+                    || string.Equals(className, "PlaySingleSound", StringComparison.Ordinal)
+                    || string.Equals(className, "PlaySoundByParticleCount", StringComparison.Ordinal));
+        }
+
+        private static bool ManagedReferenceTypesEqual(OrderedDictionary left, OrderedDictionary right)
+        {
+            return TryGetManagedReferenceTypeStrings(left, out var leftClass, out var leftNamespace, out var leftAssembly)
+                && TryGetManagedReferenceTypeStrings(right, out var rightClass, out var rightNamespace, out var rightAssembly)
+                && string.Equals(leftClass, rightClass, StringComparison.Ordinal)
+                && string.Equals(leftNamespace, rightNamespace, StringComparison.Ordinal)
+                && string.Equals(leftAssembly, rightAssembly, StringComparison.Ordinal);
+        }
+
+        private static bool TryGetManagedReferenceTypeStrings(
+            OrderedDictionary entry,
+            out string className,
+            out string namespaceName,
+            out string assemblyName
+        )
+        {
+            className = null;
+            namespaceName = null;
+            assemblyName = null;
+            if (entry == null
+                || !TryGetDictionaryValue(entry, "type", out var typeObject)
+                || typeObject is not OrderedDictionary type)
+            {
+                return false;
+            }
+
+            className = TryGetDictionaryValue(type, "class", out var classValue) ? classValue?.ToString() ?? string.Empty : string.Empty;
+            namespaceName = TryGetDictionaryValue(type, "ns", out var namespaceValue) ? namespaceValue?.ToString() ?? string.Empty : string.Empty;
+            assemblyName = TryGetDictionaryValue(type, "asm", out var assemblyValue) ? assemblyValue?.ToString() ?? string.Empty : string.Empty;
+            return true;
+        }
+
+        private static bool IsDecodedManagedReferenceData(object data)
+        {
+            return data is OrderedDictionary dictionary
+                && IsTrueDictionaryFlag(dictionary, "$decoded")
+                && !IsTrueDictionaryFlag(dictionary, "$unparsed")
+                && !IsTrueDictionaryFlag(dictionary, "$heuristic");
+        }
+
+        private static bool IsTrueDictionaryFlag(OrderedDictionary dictionary, string key)
+        {
+            return dictionary != null
+                && TryGetDictionaryValue(dictionary, key, out var value)
+                && value is bool flag
+                && flag;
+        }
+
+        private static bool TryGetDictionaryValue(OrderedDictionary dictionary, string key, out object value)
+        {
+            value = null;
+            if (dictionary == null || !dictionary.Contains(key))
+            {
+                return false;
+            }
+            value = dictionary[key];
+            return true;
+        }
+
+        private static void SetOrderedDictionaryValue(OrderedDictionary dictionary, string key, object value)
+        {
+            if (dictionary.Contains(key))
+            {
+                dictionary[key] = value;
+            }
+            else
+            {
+                dictionary.Add(key, value);
             }
         }
 
@@ -9608,8 +10014,51 @@ namespace AnimeStudio.CLI
 
             try
             {
+                if (string.Equals(header.ClassName, "PlaySound", StringComparison.Ordinal))
+                {
+                    if (length < 8)
+                    {
+                        return false;
+                    }
+
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var soundName = reader.ReadAlignedAsciiString("soundName");
+                    if (reader.Remaining != 4)
+                    {
+                        throw new InvalidDataException("PlaySound payload must end with largeType int32");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlaySound" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "soundName", soundName },
+                        { "largeType", BuildPayloadHash32(reader.ReadInt32("largeType")) },
+                        { "layoutNote", "Installed IL2CPP metadata exposes static marker fields plus serialized soundName and largeType; observed managed-reference payloads contain soundName followed by largeType." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.ClassName, "PlaySingleSound", StringComparison.Ordinal))
                 {
+                    if (length == 0)
+                    {
+                        data = new OrderedDictionary
+                        {
+                            { "$decoded", true },
+                            { "$inferred", true },
+                            { "layout", "Beyond.Gameplay.PlaySingleSound" },
+                            { "offset", offset },
+                            { "length", length },
+                            { "serializedFieldsPresent", false },
+                            { "layoutNote", "Observed zero-byte PlaySingleSound payload variant; IL2CPP metadata names soundSpawn/soundFinish/shouldTick and override tracking fields, but this serialized entry carries none of those fields." },
+                        };
+                        return true;
+                    }
                     if (length != 28)
                     {
                         return false;
