@@ -12743,7 +12743,8 @@ namespace AnimeStudio.CLI
                     local,
                     "modeConfig.modes.cmdMapping",
                     8,
-                    overrideCmdMapping
+                    overrideCmdMapping,
+                    overrideStateClip
                 );
                 foreach (DictionaryEntry entry in tail)
                 {
@@ -12763,15 +12764,53 @@ namespace AnimeStudio.CLI
             string fieldName
         )
         {
-            var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 2);
-            if (!PayloadRawWordsEqual(headerWords, 0, 0))
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > 16)
             {
-                throw new InvalidDataException($"unsupported non-empty {fieldName} header");
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(BuildPayloadHash32(reader.ReadInt32($"{fieldName}.keys[{i}]")));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"key/value count mismatch for {fieldName}");
+            }
+
+            var values = new List<string>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = reader.ReadAlignedAsciiString($"{fieldName}.values[{i}]");
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { "stateClipHash", keys[i] },
+                    { "clipName", value },
+                });
             }
 
             return new OrderedDictionary
             {
-                { "headerRawWords", headerWords },
+                { "layout", "SerializeFieldDictionary<int, string>" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", keys },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", values },
+                    }
+                },
+                { "entries", entries },
             };
         }
 
@@ -12779,12 +12818,18 @@ namespace AnimeStudio.CLI
             ManagedReferencePayloadReader reader,
             string fieldName,
             int maxMappedValues,
-            bool overrideCmdMapping
+            bool overrideCmdMapping,
+            bool preferTwoWordEmpty
         )
         {
             if (overrideCmdMapping)
             {
                 return ReadAbilitySystemBattleCommandStringDictionary(reader, fieldName, maxMappedValues);
+            }
+
+            if (preferTwoWordEmpty && TryReadAbilitySystemEmptyTwoCountDictionary(reader, fieldName, out var emptyDictionary))
+            {
+                return emptyDictionary;
             }
 
             var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 4);
@@ -12806,6 +12851,43 @@ namespace AnimeStudio.CLI
 
             data["values"] = ReadPayloadStringList(reader, $"{fieldName}.values", maxMappedValues);
             return data;
+        }
+
+        private static bool TryReadAbilitySystemEmptyTwoCountDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            var keyCount = local.ReadInt32($"{fieldName}.keys.count");
+            var valueCount = local.ReadInt32($"{fieldName}.values.count");
+            if (keyCount != 0 || valueCount != 0)
+            {
+                return false;
+            }
+
+            reader.SetPosition(local.Position);
+            data = new OrderedDictionary
+            {
+                { "layout", "SerializeFieldDictionary<BattleCommandType, string>" },
+                { "serializationShape", "two-count-empty-dictionary" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", new List<OrderedDictionary>() },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", new List<string>() },
+                    }
+                },
+                { "entries", new List<OrderedDictionary>() },
+            };
+            return true;
         }
 
         private static OrderedDictionary ReadAbilitySystemBattleCommandStringDictionary(
