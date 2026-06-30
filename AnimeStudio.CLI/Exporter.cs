@@ -11848,6 +11848,14 @@ namespace AnimeStudio.CLI
                 { "$inferred", true },
                 { "layout", "Beyond.Gameplay.EffectActionCfg" },
                 { "layoutNote", "Unity MonoBehaviour payload follows IL2CPP metadata field order except centerOffset is omitted in observed AbilitySystemData rows. BlackboardDouble internals remain exposed as raw 3-word wrappers." },
+                { "observedPayloadStatus", "fixed 107-word AbilitySystemData EffectActionCfg variant consumed by this reader" },
+                { "partialReasons", new List<string>
+                    {
+                        "BlackboardDouble internals remain emitted as raw 3-word wrappers",
+                        "IL2CPP metadata lists centerOffset, but observed AbilitySystemData rows omit it",
+                        "AbilitySystemData overrideDeadEffect variant is not proven in focused samples",
+                    }
+                },
                 { "omittedSerializedFields", new List<string> { "centerOffset" } },
                 { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
                 { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
