@@ -13233,15 +13233,17 @@ namespace AnimeStudio.CLI
             string fieldName
         )
         {
-            return ReadPayloadNamedEnum32(reader, fieldName, new[]
-            {
-                "None",
-                "HeadBar",
-                "FootBar",
-                "LockPoint",
-                "HeadStatus",
-                "DmgTxtSpawnPoint",
-            });
+            return ReadPayloadSparseNamedEnum32(
+                reader,
+                fieldName,
+                true,
+                (0, "None"),
+                (1, "HeadBar"),
+                (2, "FootBar"),
+                (3, "LockPoint"),
+                (4, "HeadStatus"),
+                (5, "DmgTxtSpawnPoint")
+            );
         }
 
         private static bool TryReadAbilitySystemEntityBlackboardSection(
