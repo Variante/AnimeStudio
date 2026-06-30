@@ -11385,7 +11385,8 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.ClassName, "EnemyPartsRootComponentData", StringComparison.Ordinal))
                 {
                     if (TryReadEnemyPartsRootComponentData(rawData, offset, length, 8, out data)
-                        || TryReadEnemyPartsRootComponentData(rawData, offset, length, 10, out data))
+                        || TryReadEnemyPartsRootComponentData(rawData, offset, length, 10, out data)
+                        || TryReadEnemyPartsRootComponentDataWithPartIdList(rawData, offset, length, out data))
                     {
                         return true;
                     }
@@ -14300,6 +14301,57 @@ namespace AnimeStudio.CLI
                 return false;
             }
         }
+        private static bool TryReadEnemyPartsRootComponentDataWithPartIdList(
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
+                    { "layoutVariant", "prefixWords6PartIdList" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "prefixWords", ReadPayloadRawInt32Words(reader, "prefixWords", 6) },
+                    { "partIdListEnabled", reader.ReadBool32("partIdListEnabled") },
+                    { "partIds", ReadEnemyPartIdList(reader) },
+                    { "partName", reader.ReadAlignedAsciiString("partName") },
+                    { "partTags", ReadEnemyPartTagList(reader) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartIdList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("partIds.count");
+            if (count < 0 || count > 32 || count > reader.Remaining / 4)
+            {
+                throw new InvalidDataException($"invalid count {count} for partIds");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(BuildPayloadHash32(reader.ReadInt32($"partIds[{i}]")));
+            }
+            return values;
+        }
+
         private static List<OrderedDictionary> ReadEnemyPartTagList(ManagedReferencePayloadReader reader)
         {
             var count = reader.ReadInt32("partTags.count");
