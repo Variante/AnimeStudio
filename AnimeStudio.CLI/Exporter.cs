@@ -4552,7 +4552,7 @@ namespace AnimeStudio.CLI
                 },
                 { "structuredRemainingTail", ReadProjectileComponentRemainingTailDiagnostic(reader.RawData, reader.Position, reader.Remaining, $"{fieldName}.structuredRemainingTail") },
                 { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
-                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, mainEffect finish fields, and guarded end-relative alert/sound suffix view are decoded from current samples; effect-list assignment and non-empty sound layouts remain raw until validated." },
+                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, mainEffect finish fields, and guarded end-relative showAlertEffect/alertEffect view are decoded from current samples; effect-list assignment and separate audio/sound field bytes remain raw until validated." },
             };
             data["length"] = reader.Position - start;
             return data;
@@ -4571,7 +4571,7 @@ namespace AnimeStudio.CLI
                 { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/RemainingTail" },
                 { "relativeOffset", offset },
                 { "wordCount", length / 4 },
-                { "layoutNote", "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix is still raw effect-list data; the stable suffix decodes current default alert/sound/scalar fields." },
+                { "layoutNote", "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix is still raw effect-list data; the stable suffix is showAlertEffect plus a projectile EffectActionCfg variant that consumes through the observed tail end." },
             };
 
             if ((length % 4) != 0 || length < 116 * 4)
@@ -4584,23 +4584,20 @@ namespace AnimeStudio.CLI
 
             try
             {
-                var local = new ManagedReferencePayloadReader(rawData, offset, length);
                 var totalWords = length / 4;
-                var prefixWords = totalWords - 116;
-                data["effectListAndFinishPrefixWordCount"] = prefixWords;
-                data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.effectListAndFinishPrefixRawWords", prefixWords);
-                data["showAlertEffect"] = local.ReadBool32($"{fieldName}.showAlertEffect");
-                data["alertEffect"] = ReadProjectileDefaultEffectRecordDiagnostic(local, $"{fieldName}.alertEffect", 106);
-                data["launchSound"] = local.ReadAlignedAsciiString($"{fieldName}.launchSound");
-                data["loopSound"] = local.ReadAlignedAsciiString($"{fieldName}.loopSound");
-                data["reachSound"] = local.ReadAlignedAsciiString($"{fieldName}.reachSound");
-                data["hitSound"] = local.ReadAlignedAsciiString($"{fieldName}.hitSound");
-                data["blockSound"] = local.ReadAlignedAsciiString($"{fieldName}.blockSound");
-                data["finishedSound"] = local.ReadAlignedAsciiString($"{fieldName}.finishedSound");
-                data["sizzleSound"] = local.ReadAlignedAsciiString($"{fieldName}.sizzleSound");
-                data["sizzleSoundTriggerDistance"] = local.ReadFloat($"{fieldName}.sizzleSoundTriggerDistance");
-                data["ringProjectileSoundSmoothFactor"] = local.ReadFloat($"{fieldName}.ringProjectileSoundSmoothFactor");
-                local.EnsureComplete();
+                var suffix = FindProjectileAlertEffectSuffix(rawData, offset, length, fieldName);
+                if (suffix == null)
+                {
+                    throw new InvalidDataException("no end-relative showAlertEffect + projectile EffectActionCfg suffix candidate consumed the tail exactly");
+                }
+
+                var prefixReader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data["effectListAndFinishPrefixWordCount"] = suffix.PrefixWordCount;
+                data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(prefixReader, $"{fieldName}.effectListAndFinishPrefixRawWords", suffix.PrefixWordCount);
+                data["showAlertEffect"] = suffix.ShowAlertEffect;
+                data["alertEffect"] = suffix.AlertEffect;
+                data["alertEffectSuffixWordCount"] = suffix.SuffixWordCount;
+                data["alertEffectCandidateCount"] = suffix.CandidateCount;
                 data["structuredDecodeStatus"] = "decoded";
                 data["consumedWordCount"] = totalWords;
             }
@@ -4615,23 +4612,137 @@ namespace AnimeStudio.CLI
             return data;
         }
 
-        private static OrderedDictionary ReadProjectileDefaultEffectRecordDiagnostic(
+        private sealed class ProjectileAlertEffectSuffix
+        {
+            public int PrefixWordCount { get; set; }
+            public int SuffixWordCount { get; set; }
+            public int CandidateCount { get; set; }
+            public bool ShowAlertEffect { get; set; }
+            public OrderedDictionary AlertEffect { get; set; }
+        }
+
+        private static ProjectileAlertEffectSuffix FindProjectileAlertEffectSuffix(
+            byte[] rawData,
+            int offset,
+            int length,
+            string fieldName
+        )
+        {
+            var totalWords = length / 4;
+            ProjectileAlertEffectSuffix best = null;
+            var candidateCount = 0;
+            for (var prefixWords = 0; prefixWords <= totalWords - 3; prefixWords++)
+            {
+                try
+                {
+                    var local = new ManagedReferencePayloadReader(
+                        rawData,
+                        offset + prefixWords * 4,
+                        length - prefixWords * 4
+                    );
+                    var showAlertEffect = local.ReadBool32($"{fieldName}.showAlertEffect");
+                    var alertEffect = ReadProjectileAlertEffectActionCfgDiagnostic(local, $"{fieldName}.alertEffect");
+                    local.EnsureComplete();
+                    if (!TryReadPayloadInt64(alertEffect, "fxType", "value", out var fxType) || fxType != 1)
+                    {
+                        continue;
+                    }
+
+                    var suffixWords = totalWords - prefixWords;
+                    var effectName = alertEffect.Contains("effectName") ? alertEffect["effectName"] as string : null;
+                    if (!IsObservedProjectileAlertEffectSuffix(suffixWords, effectName))
+                    {
+                        continue;
+                    }
+
+                    candidateCount++;
+                    best = new ProjectileAlertEffectSuffix
+                    {
+                        PrefixWordCount = prefixWords,
+                        SuffixWordCount = suffixWords,
+                        ShowAlertEffect = showAlertEffect,
+                        AlertEffect = alertEffect,
+                    };
+                }
+                catch (InvalidDataException)
+                {
+                }
+            }
+
+            if (best != null)
+            {
+                best.CandidateCount = candidateCount;
+            }
+
+            return best;
+        }
+
+        private static bool IsObservedProjectileAlertEffectSuffix(int suffixWords, string effectName)
+        {
+            if (string.IsNullOrEmpty(effectName))
+            {
+                return suffixWords == 116;
+            }
+
+            if (string.Equals(effectName, "P_skillalert_circle_01", StringComparison.Ordinal))
+            {
+                return suffixWords == 122;
+            }
+
+            if (string.Equals(effectName, "P_skillalert_circle_01_02", StringComparison.Ordinal))
+            {
+                return suffixWords == 123;
+            }
+
+            return false;
+        }
+
+        private static bool TryReadPayloadInt64(
+            OrderedDictionary parent,
+            string childKey,
+            string valueKey,
+            out long value
+        )
+        {
+            value = 0;
+            if (parent == null || !parent.Contains(childKey) || parent[childKey] is not OrderedDictionary child || !child.Contains(valueKey))
+            {
+                return false;
+            }
+
+            return TryConvertToInt64(child[valueKey], out value);
+        }
+
+        private static OrderedDictionary ReadProjectileAlertEffectActionCfgDiagnostic(
             ManagedReferencePayloadReader reader,
-            string fieldName,
-            int wordCount
+            string fieldName
         )
         {
             var start = reader.Position;
-            return new OrderedDictionary
+            var data = new OrderedDictionary
             {
                 { "$partial", true },
-                { "layout", "Beyond.Gameplay.ProjectileEffectRecord" },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.EffectActionCfg" },
                 { "relativeOffset", start },
-                { "wordCount", wordCount },
-                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", wordCount) },
-                { "layoutNote", "Current samples show this alertEffect slot as a default 106-word effect record. It is bounded and preserved raw because the EffectActionCfg/effect-list item internals are not fully proven here." },
+                { "layoutNote", "Projectile alertEffect is bounded as an end-relative EffectActionCfg variant. Only fxType and effectName are field-decoded here; the remaining EffectActionCfg words are preserved raw because inner variant fields differ between projectile rows and are not fully proven." },
+                { "observedPayloadStatus", "projectile alertEffect suffix consumes through the observed ProjectileComponentData tail end" },
+                { "partialReasons", new List<string>
+                    {
+                        "Projectile alertEffect inner field variants differ from the focused AbilitySystemData deadEffect variant.",
+                        "The 300-sample projectile slice proves the end-relative alertEffect boundary and effectName strings, but not every inner EffectActionCfg field width.",
+                        "ProjectileComponentData audio/sound metadata fields are not byte-proven as a separate suffix in the 300-sample projectile slice.",
+                    }
+                },
+                { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (1, "Alert"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
+                { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
             };
+            data["remainingRawWordCount"] = reader.Remaining / 4;
+            data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", reader.Remaining / 4);
+            data["serializedWordCount"] = (reader.Position - start) / 4;
+            return data;
         }
+
         private static OrderedDictionary ReadProjectileMoveModeDictDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
