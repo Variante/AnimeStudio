@@ -4436,14 +4436,14 @@ namespace AnimeStudio.CLI
         )
         {
             var start = reader.Position;
-            var rawWordCount = reader.Remaining / 4;
             var data = new OrderedDictionary
             {
                 { "$partial", true },
                 { "relativeOffset", start },
-                { "metadataFieldOrder", new[]
+                { "moveModeDict", ReadProjectileMoveModeDictHeaderDiagnostic(reader, $"{fieldName}.moveModeDict") },
+                { "remainingMetadataFieldOrder", new[]
                     {
-                        "moveModeDict",
+                        "moveModeDict.values",
                         "mainEffectFinishType",
                         "mainEffectFinishDistance",
                         "mainEffects",
@@ -4467,12 +4467,39 @@ namespace AnimeStudio.CLI
                         "ringProjectileSoundSmoothFactor",
                     }
                 },
-                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", rawWordCount) },
-                { "layoutNote", "Raw tail begins at moveModeDict and follows the remaining IL2CPP ProjectileComponentData field order. It is intentionally preserved as words until nested dictionaries, effect arrays, and projectile sound structs are validated." },
+                { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
+                { "layoutNote", "Tail begins at moveModeDict. The dictionary header is decoded from current samples; values plus subsequent effect/sound/scalar fields remain raw until their nested shapes are validated." },
             };
             data["length"] = reader.Position - start;
             return data;
         }
+
+        private static OrderedDictionary ReadProjectileMoveModeDictHeaderDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var keys = ReadPayloadStringList(reader, $"{fieldName}.keys", 32);
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keys.Count)
+            {
+                throw new InvalidDataException($"mismatched key/value counts {keys.Count}/{valueCount} for {fieldName}");
+            }
+
+            return new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Dictionary<string, Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData>" },
+                { "relativeOffset", start },
+                { "keyCount", keys.Count },
+                { "keys", keys },
+                { "valueCount", valueCount },
+                { "length", reader.Position - start },
+                { "layoutNote", "Only the dictionary header is decoded. MoveModeData values remain in the following raw tail because speed-info, animation-curve, and BezierPoint wrappers still need cross-sample proof." },
+            };
+        }
+
         private static bool TryDecodeCoreActionConditionManagedReferenceData(
             ManagedReferenceHeader header,
             ManagedReferencePayloadReader reader,
