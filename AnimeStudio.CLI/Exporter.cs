@@ -4578,8 +4578,15 @@ namespace AnimeStudio.CLI
 
             return new OrderedDictionary
             {
-                { "$partial", true },
+                { "$decoded", true },
                 { "layout", "Dictionary<string, Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData>" },
+                { "observedPayloadStatus", "dictionary key/value counts and fixed-size value boundaries are fully consumed by this reader" },
+                { "nestedPartialReasons", new List<string>
+                    {
+                        "Nested MoveModeData records still contain raw speed-info, animation-curve, and BezierPoint internals.",
+                        "The enclosing ProjectileComponentData tail still contains effect/sound/scalar collections after moveModeDict.",
+                    }
+                },
                 { "relativeOffset", start },
                 { "keyCount", keys.Count },
                 { "keys", keys },
@@ -4608,8 +4615,18 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData" },
+                { "observedPayloadStatus", "fixed 124-word MoveModeData value consumed by this reader; prefix through parabolaDef decoded" },
+                { "partialReasons", new List<string>
+                    {
+                        "Remaining 115 words are preserved raw because speed-info, AnimationCurve, and BezierPoint internals are not field-accurate yet.",
+                        "IL2CPP metadata supplies field order, but local DummyDll/Cpp2IL assemblies do not expose this type for reliable field-width proof.",
+                        "Enum numeric values are emitted with enum type names, but member names are withheld until independently validated.",
+                    }
+                },
                 { "key", key },
                 { "relativeOffset", start },
+                { "decodedPrefixWordCount", decodedPrefixWords },
+                { "remainingRawWordCount", wordCount - decodedPrefixWords },
                 { "traceType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.traceType", "Beyond.Gameplay.ProjectileTraceType") },
                 { "traceTime", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceTime") },
                 { "traceUntilDistance", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceUntilDistance") },
