@@ -4618,7 +4618,7 @@ namespace AnimeStudio.CLI
                 { "observedPayloadStatus", "fixed 124-word MoveModeData value consumed by this reader; prefix through parabolaDef and guarded suffix view are decoded while the original suffix remains raw" },
                 { "partialReasons", new List<string>
                     {
-                        "The suffix after parabolaDef is decoded through scalar, bool, and AnimationCurve boundaries, but the original raw suffix is preserved because the BezierPoint range wrappers are not field-accurate yet.",
+                        "The suffix after parabolaDef is decoded through scalar, bool, AnimationCurve, and full BezierPoint boundaries, but the original raw suffix is preserved because one observed bezierMidPoint2 record is truncated.",
                         "IL2CPP metadata lists m_parabolaSpeedInfo, m_bezierSpeedInfo, and m_speedCurveInfo, but current payload samples show no serialized bytes for those fields.",
                         "bezierMidPoint2 is a full 21-word record in most focused samples but is truncated to raw trailing words in one sample, so this record remains partial.",
                         "Enum numeric values are emitted with enum type names, but member names are withheld until independently validated.",
@@ -4660,7 +4660,7 @@ namespace AnimeStudio.CLI
             var suffixLength = (wordCount - decodedPrefixWords) * 4;
             data["structuredSuffix"] = ReadProjectileMoveModeDataSuffixDiagnostic(reader.RawData, suffixStart, suffixLength, $"{fieldName}.structuredSuffix");
             data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", wordCount - decodedPrefixWords);
-            data["layoutNote"] = "Current samples serialize each MoveModeData value as 124 int32 words. The prefix through parabolaDef and guarded suffix boundaries are decoded from IL2CPP field order and byte evidence; the original suffix remains raw because BezierPoint internals and non-serialized speed-info metadata fields are not fully proven.";
+            data["layoutNote"] = "Current samples serialize each MoveModeData value as 124 int32 words. The prefix through parabolaDef and guarded suffix boundaries are decoded from IL2CPP field order and byte evidence; the original suffix remains raw because one BezierPoint variant is truncated and non-serialized speed-info metadata fields are not fully proven.";
             data["wordCount"] = (reader.Position - start) / 4;
             data["length"] = reader.Position - start;
             return data;
@@ -4686,7 +4686,7 @@ namespace AnimeStudio.CLI
                         "m_speedCurveInfo",
                     }
                 },
-                { "layoutNote", "Guarded structured view of the fixed MoveModeData suffix. Scalar, bool, and AnimationCurve boundaries are decoded; BezierPoint records stay bounded raw records because their range wrapper internals are unresolved." },
+                { "layoutNote", "Guarded structured view of the fixed MoveModeData suffix. Scalar, bool, AnimationCurve, and full 21-word BezierPoint records are decoded; truncated BezierPoint records stay bounded raw records." },
             };
 
             try
@@ -4762,6 +4762,59 @@ namespace AnimeStudio.CLI
 
             var start = reader.Position;
             var actualWordCount = Math.Min(wordCount, reader.Remaining / 4);
+            if (actualWordCount == 21)
+            {
+                var local = new ManagedReferencePayloadReader(reader.RawData, start, wordCount * 4);
+                try
+                {
+                    var decoded = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/BezierPoint" },
+                        { "relativeOffset", start },
+                        { "wordCount", actualWordCount },
+                        { "usePresetPoint", local.ReadBool32($"{fieldName}.usePresetPoint") },
+                        { "presetPointKey", local.ReadAlignedAsciiString($"{fieldName}.presetPointKey") },
+                        { "xRatioRange", ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.xRatioRange") },
+                        { "yzAngleRange", ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.yzAngleRange") },
+                        { "yzRadiusRange", ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.yzRadiusRange") },
+                        { "scaledYzRadius", local.ReadBool32($"{fieldName}.scaledYzRadius") },
+                        { "layoutNote", "Decoded from IL2CPP BezierPoint field order and the observed 21-word payload shape: bool, aligned string, three two-endpoint BlackboardDouble ranges, bool." },
+                    };
+                    local.EnsureComplete();
+                    reader.SetPosition(start + wordCount * 4);
+                    decoded["length"] = wordCount * 4;
+                    return decoded;
+                }
+                catch (InvalidDataException ex)
+                {
+                    reader.SetPosition(start);
+                    var fallback = new OrderedDictionary
+                    {
+                        { "$partial", true },
+                        { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/BezierPoint" },
+                        { "relativeOffset", start },
+                        { "wordCount", actualWordCount },
+                        { "decodeError", ex.Message },
+                        { "metadataFieldOrder", new[]
+                            {
+                                "usePresetPoint",
+                                "presetPointKey",
+                                "xRatioRange",
+                                "yzAngleRange",
+                                "yzRadiusRange",
+                                "scaledYzRadius",
+                            }
+                        },
+                        { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", actualWordCount) },
+                        { "layoutNote", "BezierPoint field order is known, but this record did not match the focused 21-word decoded shape and is retained raw." },
+                    };
+                    fallback["length"] = reader.Position - start;
+                    return fallback;
+                }
+            }
+
             var data = new OrderedDictionary
             {
                 { "$partial", true },
@@ -4779,10 +4832,33 @@ namespace AnimeStudio.CLI
                     }
                 },
                 { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", actualWordCount) },
-                { "layoutNote", "IL2CPP metadata supplies BezierPoint field order, but the local metadata dump does not resolve the range wrapper type names or widths. The bounded record is retained raw." },
+                { "layoutNote", "IL2CPP metadata supplies BezierPoint field order, but this truncated record is shorter than the observed 21-word decoded shape and is retained raw." },
             };
             data["length"] = reader.Position - start;
             return data;
+        }
+
+        private static OrderedDictionary ReadProjectileBlackboardDoubleRange(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var min = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.min");
+            var max = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.max");
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Blackboard.BlackboardDoubleRange" },
+                { "min", min },
+                { "max", max },
+                { "valueCandidate", new OrderedDictionary
+                    {
+                        { "min", min["valueFloatCandidate"] },
+                        { "max", max["valueFloatCandidate"] },
+                    }
+                },
+            };
         }
         private static OrderedDictionary ReadPayloadEnum32Candidate(
             ManagedReferencePayloadReader reader,
