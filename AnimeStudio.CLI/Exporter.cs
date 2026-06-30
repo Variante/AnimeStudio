@@ -9539,7 +9539,6 @@ namespace AnimeStudio.CLI
                         {
                             { "$decoded", true },
                             { "$inferred", true },
-                            { "$partial", true },
                             { "layout", "Beyond.Gameplay.Core.AbilitySystemData" },
                             { "offset", offset },
                             { "length", length },
@@ -9598,14 +9597,30 @@ namespace AnimeStudio.CLI
                                 }
                             }
                         }
-                        data["remainingStringHints"] = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
+                        var remainingStringHints = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
+                        data["remainingStringHints"] = remainingStringHints;
                         var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
                         var remainingRidLinks = CollectHeuristicRidLinks(rawData, reader.Position, reader.Remaining, recoveredByRid, ref remainingRidLinkBudget);
                         if (remainingRidLinks.Count > 0)
                         {
                             data["remainingRidLinks"] = remainingRidLinks;
                         }
-                        data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
+                        var remainingRawWords = ReadRemainingPayloadRawInt32Words(reader, "remainingRawWords", 8192);
+                        data["remainingRawWords"] = remainingRawWords;
+                        if (remainingStringHints.Count > 0 || remainingRidLinks.Count > 0 || remainingRawWords.Count > 0)
+                        {
+                            data["$partial"] = true;
+                            data["partialReasons"] = new List<string>
+                            {
+                                "AbilitySystemData reader left own remaining string hints, RID links, or raw words after the staged metadata-backed sections.",
+                                "Nested partial payloads carry their own partial markers and are not counted as parent unread bytes.",
+                            };
+                        }
+                        else
+                        {
+                            data["observedPayloadStatus"] = "all serialized AbilitySystemData bytes consumed by staged reader; nested partial objects carry their own partial markers";
+                            data["layoutNote"] = "AbilitySystemData serialized bytes are fully consumed by the staged metadata-backed reader in this payload. Nested objects keep their own decode status, so child partial markers do not imply unread parent bytes.";
+                        }
                         reader.EnsureComplete();
                         return true;
                     }
