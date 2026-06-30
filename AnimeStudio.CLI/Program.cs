@@ -137,8 +137,6 @@ namespace AnimeStudio.CLI
                 // instead of layering it on top of the default settings from App.config.
                 TypeFlags.SetTypes(new Dictionary<ClassIDType, (bool, bool)>());
 
-                var exportTexture2D = false;
-                var exportMaterial = false;
                 var classTypeFilterList = new List<ClassIDType>();
 
                 ClassIDType[] ParseTypeFilter(string[] typeFilters, string label)
@@ -168,15 +166,6 @@ namespace AnimeStudio.CLI
 
                             type = (ClassIDType)Enum.Parse(typeof(ClassIDType), typeStr, true);
 
-                            if (type == ClassIDType.Texture2D)
-                            {
-                                exportTexture2D = flag.HasFlag(TypeFlag.Export);
-                            }
-                            else if (type == ClassIDType.Material)
-                            {
-                                exportMaterial = flag.HasFlag(TypeFlag.Export);
-                            }
-
                             TypeFlags.SetType(type, flag.HasFlag(TypeFlag.Parse), flag.HasFlag(TypeFlag.Export));
 
                             if (!targetClassTypeFilterList.Contains(type))
@@ -202,24 +191,42 @@ namespace AnimeStudio.CLI
                 secondaryClassTypeFilter = o.SecondaryTypeFilter.IsNullOrEmpty()
                     ? primaryClassTypeFilter
                     : ParseTypeFilter(o.SecondaryTypeFilter, "secondary");
-                classTypeFilter = classTypeFilterList.ToArray();
+
+                void EnsureParseDependency(ClassIDType type)
+                {
+                    var export = type.CanExport();
+                    TypeFlags.SetType(type, true, export);
+                    if (!classTypeFilterList.Contains(type))
+                    {
+                        classTypeFilterList.Add(type);
+                    }
+                }
 
                 if (ClassIDType.GameObject.CanExport() || ClassIDType.Animator.CanExport())
                 {
-                    TypeFlags.SetType(ClassIDType.Texture2D, true, exportTexture2D);
-                    if (Settings.Default.exportMaterials)
-                    {
-                        TypeFlags.SetType(ClassIDType.Material, true, exportMaterial);
-                    }
+                    EnsureParseDependency(ClassIDType.Texture2D);
+                    EnsureParseDependency(ClassIDType.Material);
+                    EnsureParseDependency(ClassIDType.Transform);
+                    EnsureParseDependency(ClassIDType.RectTransform);
+                    EnsureParseDependency(ClassIDType.MeshFilter);
+                    EnsureParseDependency(ClassIDType.MeshRenderer);
+                    EnsureParseDependency(ClassIDType.SkinnedMeshRenderer);
+                    EnsureParseDependency(ClassIDType.Mesh);
+                    EnsureParseDependency(ClassIDType.Avatar);
+                    EnsureParseDependency(ClassIDType.AnimatorController);
+                    EnsureParseDependency(ClassIDType.AnimatorOverrideController);
+                    EnsureParseDependency(ClassIDType.AnimationClip);
                     if (ClassIDType.GameObject.CanExport())
                     {
-                        TypeFlags.SetType(ClassIDType.Animator, true, false);
+                        EnsureParseDependency(ClassIDType.Animator);
                     }
                     else if(ClassIDType.Animator.CanExport())
                     {
-                        TypeFlags.SetType(ClassIDType.GameObject, true, false);
+                        EnsureParseDependency(ClassIDType.GameObject);
                     }
                 }
+
+                classTypeFilter = classTypeFilterList.ToArray();
             }
             if (o.GroupAssetsType == AssetGroupOption.ByContainer)
             {
