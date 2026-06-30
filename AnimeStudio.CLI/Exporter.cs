@@ -4449,7 +4449,7 @@ namespace AnimeStudio.CLI
                 { "moveSegments", ReadPayloadObjectList(reader, "projectileComponent.moveSegments", 64, ReadProjectileMoveSegment) },
                 { "tail", ReadProjectileComponentTailDiagnostic(reader, "projectileComponent.tail") },
             };
-            data["layoutNote"] = "Installed IL2CPP metadata supplies ProjectileComponentData field order. The prefix through moveSegments is decoded from current byte evidence; moveModeDict, effect lists, sound fields, and final scalar fields remain raw metadata-ordered tail diagnostics until their nested collection shapes are proven across broader samples.";
+            data["layoutNote"] = "Installed IL2CPP metadata supplies ProjectileComponentData field order. The prefix through moveSegments plus the tail moveModeDict and mainEffect finish fields are decoded from current byte evidence; effect lists, sound fields, and final scalar fields remain raw metadata-ordered tail diagnostics until their nested collection shapes are proven across broader samples.";
             reader.EnsureComplete();
             return true;
         }
@@ -4525,10 +4525,10 @@ namespace AnimeStudio.CLI
                 { "$partial", true },
                 { "relativeOffset", start },
                 { "moveModeDict", ReadProjectileMoveModeDictDiagnostic(reader, $"{fieldName}.moveModeDict") },
+                { "mainEffectFinishType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.mainEffectFinishType", "Beyond.Gameplay.ProjectileMainEffectFinishType") },
+                { "mainEffectFinishDistance", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.mainEffectFinishDistance") },
                 { "remainingMetadataFieldOrder", new[]
                     {
-                        "mainEffectFinishType",
-                        "mainEffectFinishDistance",
                         "mainEffects",
                         "launchEffects",
                         "showReachEffectOnlyWithTarget",
@@ -4551,7 +4551,7 @@ namespace AnimeStudio.CLI
                     }
                 },
                 { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
-                { "layoutNote", "Tail begins at moveModeDict. The dictionary keys and byte-proven fixed-size MoveModeData value records are decoded from current samples; effect/sound/scalar fields remain raw until their collection and struct shapes are validated." },
+                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, and mainEffect finish enum/BlackboardDouble fields are decoded from current samples; effect/sound/scalar fields remain raw until their collection and struct shapes are validated." },
             };
             data["length"] = reader.Position - start;
             return data;
@@ -4615,11 +4615,12 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData" },
-                { "observedPayloadStatus", "fixed 124-word MoveModeData value consumed by this reader; prefix through parabolaDef decoded" },
+                { "observedPayloadStatus", "fixed 124-word MoveModeData value consumed by this reader; prefix through parabolaDef and guarded suffix view are decoded while the original suffix remains raw" },
                 { "partialReasons", new List<string>
                     {
-                        "Remaining 115 words are preserved raw because speed-info, AnimationCurve, and BezierPoint internals are not field-accurate yet.",
-                        "IL2CPP metadata supplies field order, but local DummyDll/Cpp2IL assemblies do not expose this type for reliable field-width proof.",
+                        "The suffix after parabolaDef is decoded through scalar, bool, and AnimationCurve boundaries, but the original raw suffix is preserved because the BezierPoint range wrappers are not field-accurate yet.",
+                        "IL2CPP metadata lists m_parabolaSpeedInfo, m_bezierSpeedInfo, and m_speedCurveInfo, but current payload samples show no serialized bytes for those fields.",
+                        "bezierMidPoint2 is a full 21-word record in most focused samples but is truncated to raw trailing words in one sample, so this record remains partial.",
                         "Enum numeric values are emitted with enum type names, but member names are withheld until independently validated.",
                     }
                 },
@@ -4653,14 +4654,136 @@ namespace AnimeStudio.CLI
                         "bezierMidPoint2",
                     }
                 },
-                { "remainingRawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", wordCount - decodedPrefixWords) },
-                { "layoutNote", "Current samples serialize each MoveModeData value as 124 int32 words. The prefix through parabolaDef is decoded from IL2CPP field order; the remaining fixed-size record is retained raw because speed-info, FAnimationCurve, and BezierPoint internals are not fully proven." },
             };
+
+            var suffixStart = reader.Position;
+            var suffixLength = (wordCount - decodedPrefixWords) * 4;
+            data["structuredSuffix"] = ReadProjectileMoveModeDataSuffixDiagnostic(reader.RawData, suffixStart, suffixLength, $"{fieldName}.structuredSuffix");
+            data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", wordCount - decodedPrefixWords);
+            data["layoutNote"] = "Current samples serialize each MoveModeData value as 124 int32 words. The prefix through parabolaDef and guarded suffix boundaries are decoded from IL2CPP field order and byte evidence; the original suffix remains raw because BezierPoint internals and non-serialized speed-info metadata fields are not fully proven.";
             data["wordCount"] = (reader.Position - start) / 4;
             data["length"] = reader.Position - start;
             return data;
         }
 
+        private static OrderedDictionary ReadProjectileMoveModeDataSuffixDiagnostic(
+            byte[] rawData,
+            int offset,
+            int length,
+            string fieldName
+        )
+        {
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData/StructuredSuffix" },
+                { "relativeOffset", offset },
+                { "wordCount", length / 4 },
+                { "nonSerializedMetadataFields", new[]
+                    {
+                        "m_parabolaSpeedInfo",
+                        "m_bezierSpeedInfo",
+                        "m_speedCurveInfo",
+                    }
+                },
+                { "layoutNote", "Guarded structured view of the fixed MoveModeData suffix. Scalar, bool, and AnimationCurve boundaries are decoded; BezierPoint records stay bounded raw records because their range wrapper internals are unresolved." },
+            };
+
+            try
+            {
+                var local = new ManagedReferencePayloadReader(rawData, offset, length);
+                data["speed"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.speed");
+                data["speedCurve"] = ReadPayloadAnimationCurveFloat(local, $"{fieldName}.speedCurve");
+                data["useSpeedScaleWithDistance"] = local.ReadBool32($"{fieldName}.useSpeedScaleWithDistance");
+                data["speedScaleWithDistance"] = ReadPayloadAnimationCurveFloat(local, $"{fieldName}.speedScaleWithDistance");
+                data["lockVelocityToXZ"] = local.ReadBool32($"{fieldName}.lockVelocityToXZ");
+                data["groundedMove"] = local.ReadBool32($"{fieldName}.groundedMove");
+                data["limitAngularSpeed"] = local.ReadBool32($"{fieldName}.limitAngularSpeed");
+                data["angularSpeed"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.angularSpeed");
+                data["angularSpeedCurve"] = ReadPayloadAnimationCurveFloat(local, $"{fieldName}.angularSpeedCurve");
+                data["travelDuration"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.travelDuration");
+                data["vertexYOffset"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.vertexYOffset");
+                data["gravity"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.gravity");
+                data["bezierMidPoint1"] = ReadProjectileBezierPointRawRecord(local, $"{fieldName}.bezierMidPoint1", 21, true);
+
+                if (local.Remaining >= 21 * 4)
+                {
+                    data["bezierMidPoint2Status"] = "full 21-word record";
+                    data["bezierMidPoint2"] = ReadProjectileBezierPointRawRecord(local, $"{fieldName}.bezierMidPoint2", 21, true);
+                }
+                else if (local.Remaining > 0)
+                {
+                    var remainingWords = local.Remaining / 4;
+                    data["bezierMidPoint2Status"] = $"truncated; {remainingWords} raw words preserved";
+                    data["bezierMidPoint2RawWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.bezierMidPoint2RawWords", remainingWords);
+                }
+                else
+                {
+                    data["bezierMidPoint2Status"] = "absent";
+                    data["bezierMidPoint2RawWords"] = new List<OrderedDictionary>();
+                }
+
+                if (local.Remaining > 0)
+                {
+                    data["trailingRawWords"] = ReadRemainingPayloadRawInt32Words(local, $"{fieldName}.trailingRawWords", 128);
+                }
+
+                data["structuredDecodeStatus"] = "decoded";
+                data["consumedWordCount"] = (local.Position - offset) / 4;
+                data["remainingWordCount"] = local.Remaining / 4;
+            }
+            catch (InvalidDataException ex)
+            {
+                data["structuredDecodeStatus"] = "failed";
+                data["structuredDecodeError"] = ex.Message;
+                var fallback = new ManagedReferencePayloadReader(rawData, offset, length);
+                data["fallbackRawWords"] = ReadPayloadRawInt32Words(fallback, $"{fieldName}.fallbackRawWords", length / 4);
+            }
+
+            return data;
+        }
+
+        private static OrderedDictionary ReadProjectileBezierPointRawRecord(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int wordCount,
+            bool requireFull
+        )
+        {
+            if (wordCount < 0 || wordCount > 21)
+            {
+                throw new InvalidDataException($"invalid BezierPoint word count {wordCount} for {fieldName}");
+            }
+
+            if (requireFull && reader.Remaining < wordCount * 4)
+            {
+                throw new InvalidDataException($"not enough bytes for {fieldName}; need {wordCount * 4}, have {reader.Remaining}");
+            }
+
+            var start = reader.Position;
+            var actualWordCount = Math.Min(wordCount, reader.Remaining / 4);
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/BezierPoint" },
+                { "relativeOffset", start },
+                { "wordCount", actualWordCount },
+                { "metadataFieldOrder", new[]
+                    {
+                        "usePresetPoint",
+                        "presetPointKey",
+                        "xRatioRange",
+                        "yzAngleRange",
+                        "yzRadiusRange",
+                        "scaledYzRadius",
+                    }
+                },
+                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", actualWordCount) },
+                { "layoutNote", "IL2CPP metadata supplies BezierPoint field order, but the local metadata dump does not resolve the range wrapper type names or widths. The bounded record is retained raw." },
+            };
+            data["length"] = reader.Position - start;
+            return data;
+        }
         private static OrderedDictionary ReadPayloadEnum32Candidate(
             ManagedReferencePayloadReader reader,
             string fieldName,
