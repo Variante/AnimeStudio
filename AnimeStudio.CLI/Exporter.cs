@@ -11422,13 +11422,30 @@ namespace AnimeStudio.CLI
                         );
                         data["fields"] = ReadEnemyPartAbilityScalarFields(reader);
                     }
+                    else if (wordCount >= EnemyPartAbilityPostAttributeScalarWordCount
+                        && CanDecodeEnemyPartAbilityPostAttributeScalarTail(rawData, offset + length - (EnemyPartAbilityPostAttributeScalarWordCount * 4), EnemyPartAbilityPostAttributeScalarWordCount * 4))
+                    {
+                        data["$partial"] = true;
+                        data["layoutVariant"] = "postAttributeScalarTail18";
+                        data["layoutNote"] = "final 18 scalar fields are decoded; defaultEnabled, asIndividualInExcludeTargetProcessor, and partAttributes remain in the unresolved prolog.";
+                        data["partialReasons"] = new List<string>
+                        {
+                            "AbilitySystemForEnemyPartData front prolog/partAttributes boundary is not fully decoded yet.",
+                            "Final scalar fields from useMainBodyHp through damageTransferType validate as a contiguous suffix.",
+                        };
+                        data["partAttributesAndScalarPrologRawWords"] = ReadPayloadRawInt32Words(
+                            reader,
+                            "partAttributesAndScalarPrologRawWords",
+                            wordCount - EnemyPartAbilityPostAttributeScalarWordCount
+                        );
+                        data["fields"] = ReadEnemyPartAbilityPostAttributeScalarFields(reader);
+                    }
                     else
                     {
                         data["$partial"] = true;
                         data["layoutNote"] = "word-aligned numeric payload; scalar tail did not match the known AbilitySystemForEnemyPartData field constraints";
                         data["rawWords"] = ReadPayloadRawInt32Words(reader, "rawWords", wordCount);
                     }
-
                     reader.EnsureComplete();
                     return true;
                 }
@@ -11639,6 +11656,7 @@ namespace AnimeStudio.CLI
         }
 
         private const int EnemyPartAbilityScalarWordCount = 20;
+        private const int EnemyPartAbilityPostAttributeScalarWordCount = 18;
 
         private static int ReadPayloadFixedCount(ManagedReferencePayloadReader reader, string fieldName, int expected)
         {
@@ -12456,10 +12474,37 @@ namespace AnimeStudio.CLI
 
         private static OrderedDictionary ReadEnemyPartAbilityScalarFields(ManagedReferencePayloadReader reader)
         {
-            return new OrderedDictionary
+            var fields = new OrderedDictionary
             {
                 { "defaultEnabled", reader.ReadBool32("defaultEnabled") },
                 { "asIndividualInExcludeTargetProcessor", reader.ReadBool32("asIndividualInExcludeTargetProcessor") },
+            };
+            foreach (DictionaryEntry entry in ReadEnemyPartAbilityPostAttributeScalarFields(reader))
+            {
+                fields[entry.Key] = entry.Value;
+            }
+            return fields;
+        }
+
+        private static bool CanDecodeEnemyPartAbilityPostAttributeScalarTail(byte[] rawData, int offset, int length)
+        {
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                ReadEnemyPartAbilityPostAttributeScalarFields(reader);
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadEnemyPartAbilityPostAttributeScalarFields(ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
                 { "useMainBodyHp", reader.ReadBool32("useMainBodyHp") },
                 { "useMainBodyPoise", reader.ReadBool32("useMainBodyPoise") },
                 { "showHpBar", reader.ReadBool32("showHpBar") },
@@ -12480,7 +12525,6 @@ namespace AnimeStudio.CLI
                 { "damageTransferType", ReadPayloadEnum32(reader, "damageTransferType", 0, 2) },
             };
         }
-
         private static OrderedDictionary ReadPayloadEnum32(
             ManagedReferencePayloadReader reader,
             string fieldName,
