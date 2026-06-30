@@ -4893,24 +4893,95 @@ namespace AnimeStudio.CLI
                 { "$inferred", true },
                 { "layout", "Beyond.Gameplay.EffectActionCfg" },
                 { "relativeOffset", start },
-                { "layoutNote", "Projectile alertEffect is bounded as an end-relative EffectActionCfg variant. Only fxType and effectName are field-decoded here; the remaining EffectActionCfg words are preserved raw because inner variant fields differ between projectile rows and are not fully proven." },
+                { "layoutNote", "Projectile alertEffect is bounded as an end-relative EffectActionCfg variant. The 24-word prefix after effectName is decoded only for the byte-proven 113-word post-name shape; the remaining EffectActionCfg words are preserved raw because later variant fields are not fully proven." },
                 { "observedPayloadStatus", "projectile alertEffect suffix consumes through the observed ProjectileComponentData tail end" },
                 { "partialReasons", new List<string>
                     {
                         "Projectile alertEffect inner field variants differ from the focused AbilitySystemData deadEffect variant.",
-                        "The 300-sample projectile slice proves the end-relative alertEffect boundary and effectName strings, but not every inner EffectActionCfg field width.",
+                        "The 300-sample projectile slice proves fxType, effectName, and the first 24 post-name words; later EffectActionCfg fields remain raw.",
                         "ProjectileComponentData audio/sound metadata fields are not byte-proven as a separate suffix in the 300-sample projectile slice.",
                     }
                 },
                 { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (1, "Alert"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
                 { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
             };
+
+            if (reader.Remaining == 113 * 4
+                && TryReadProjectileAlertEffectActionCfgPrefix(reader, fieldName, out var prefix))
+            {
+                data["projectilePrefixStatus"] = "decoded 24-word projectile alertEffect prefix";
+                data["projectilePrefixWordCount"] = prefix.WordCount;
+                data["omittedSerializedFields"] = new List<string> { "useScaleBB" };
+                foreach (DictionaryEntry entry in prefix.Fields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+            }
+            else
+            {
+                data["projectilePrefixStatus"] = "raw fallback";
+            }
+
             data["remainingRawWordCount"] = reader.Remaining / 4;
             data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", reader.Remaining / 4);
             data["serializedWordCount"] = (reader.Position - start) / 4;
             return data;
         }
 
+        private sealed class ProjectileAlertEffectPrefix
+        {
+            public int WordCount { get; set; }
+            public OrderedDictionary Fields { get; } = new OrderedDictionary();
+        }
+
+        private static bool TryReadProjectileAlertEffectActionCfgPrefix(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out ProjectileAlertEffectPrefix prefix
+        )
+        {
+            prefix = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var fields = new OrderedDictionary
+                {
+                    { "guardEffect", local.ReadBool32($"{fieldName}.guardEffect") },
+                    { "forceGuardEffect", local.ReadBool32($"{fieldName}.forceGuardEffect") },
+                    { "isCenterChangeLod", local.ReadBool32($"{fieldName}.isCenterChangeLod") },
+                    { "useScaleBBSerialized", false },
+                    { "scale", ReadPayloadVector3(local, $"{fieldName}.scale") },
+                    { "scaleBB", ReadAbilitySystemBlackboardVector3(local, $"{fieldName}.scaleBB") },
+                    { "useLengthBB", local.ReadBool32($"{fieldName}.useLengthBB") },
+                    { "lengthBB", ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.lengthBB") },
+                    { "releaseByAction", local.ReadBool32($"{fieldName}.releaseByAction") },
+                    { "ignoreOwnerTimeScale", local.ReadBool32($"{fieldName}.ignoreOwnerTimeScale") },
+                    { "interruptTime", local.ReadFloat($"{fieldName}.interruptTime") },
+                    { "terrainPrefab", local.ReadBool32($"{fieldName}.terrainPrefab") },
+                    { "effectPosData", ReadAbilitySystemTerrainEffectDataArray(local, $"{fieldName}.effectPosData") },
+                };
+                var wordCount = (local.Position - start) / 4;
+                if (wordCount != 24 || local.Remaining != 89 * 4)
+                {
+                    throw new InvalidDataException($"projectile alertEffect prefix consumed {wordCount} words with {local.Remaining / 4} words remaining");
+                }
+
+                reader.SetPosition(local.Position);
+                prefix = new ProjectileAlertEffectPrefix { WordCount = wordCount };
+                foreach (DictionaryEntry entry in fields)
+                {
+                    prefix.Fields[entry.Key] = entry.Value;
+                }
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                reader.SetPosition(start);
+                prefix = null;
+                return false;
+            }
+        }
         private static OrderedDictionary ReadProjectileMoveModeDictDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
