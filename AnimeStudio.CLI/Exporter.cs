@@ -1765,9 +1765,9 @@ namespace AnimeStudio.CLI
                 data["selectorDataRoleNote"] = "Installed IL2CPP metadata names this slot finderData, but the linked class is not a proven Finder/Data sample yet.";
             }
 
-            var selectorCountOrFlag = reader.ReadInt32($"{fieldName}.selectorCountOrFlag");
-            data["selectorCountOrFlag"] = BuildPayloadHash32(selectorCountOrFlag);
-            if (selectorCountOrFlag == 1)
+            var validatorDataCount = reader.ReadInt32($"{fieldName}.validatorDataCount");
+            data["validatorDataCount"] = BuildPayloadHash32(validatorDataCount);
+            if (validatorDataCount == 1)
             {
                 var validatorDataCandidate = ReadPayloadRidLink(reader, $"{fieldName}.validatorDataRid", recoveredByRid);
                 if (ManagedReferenceLinkClassEndsWith(validatorDataCandidate, "Validator/Data"))
@@ -1780,9 +1780,9 @@ namespace AnimeStudio.CLI
                     data["validatorDataRoleNote"] = "Installed IL2CPP metadata names this optional slot validatorData, but the linked class is not a proven Validator/Data sample yet.";
                 }
             }
-            else if (selectorCountOrFlag != 0)
+            else if (validatorDataCount != 0)
             {
-                throw new InvalidDataException($"unsupported selector count/flag {selectorCountOrFlag} in {fieldName}");
+                throw new InvalidDataException($"unsupported validatorData count {validatorDataCount} in {fieldName}");
             }
 
             data["reservedZeroWords"] = ReadDiagnosticZeroWords(reader, $"{fieldName}.reservedZeroWords", 3);
