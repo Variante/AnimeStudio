@@ -1670,10 +1670,10 @@ namespace AnimeStudio.CLI
                 { "centerContextKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.centerContextKey", 128) },
                 { "centerToGround", reader.ReadBool32($"{fieldName}.centerToGround") },
                 { "selectorData", ReadDiagnosticSelectorData(reader, $"{fieldName}.selectorData", payloadOffset, recoveredByRid) },
-                { "suffixWords", ReadDiagnosticRawWords(reader, $"{fieldName}.suffixWords", 8) },
+                { "postSelectorFields", ReadDiagnosticTargetSettingsPostSelectorFields(reader, $"{fieldName}.postSelectorFields") },
             };
             data["length"] = reader.Position - start;
-            data["layoutNote"] = "Field order up through selectorData is metadata-backed. The eight suffix words are preserved raw because their semantic names are not yet fully proven.";
+            data["layoutNote"] = "Field order up through selectorData is metadata-backed. Post-selector fields are preserved raw because their exact byte widths and enum meanings are not yet fully proven.";
             return data;
         }
 
@@ -1691,14 +1691,33 @@ namespace AnimeStudio.CLI
                 { "layout", "Beyond.Gameplay.Core.Selector/SelectorData" },
                 { "relativeOffset", start - payloadOffset },
                 { "absoluteOffset", start },
-                { "selectorDataRid", ReadPayloadRidLink(reader, $"{fieldName}.selectorDataRid", recoveredByRid) },
             };
+
+            var finderDataCandidate = ReadPayloadRidLink(reader, $"{fieldName}.finderDataRid", recoveredByRid);
+            if (IsNullRidLink(finderDataCandidate) || ManagedReferenceLinkClassEndsWith(finderDataCandidate, "Finder/Data"))
+            {
+                data["finderDataRid"] = finderDataCandidate;
+            }
+            else
+            {
+                data["selectorDataRid"] = finderDataCandidate;
+                data["selectorDataRoleNote"] = "Installed IL2CPP metadata names this slot finderData, but the linked class is not a proven Finder/Data sample yet.";
+            }
 
             var selectorCountOrFlag = reader.ReadInt32($"{fieldName}.selectorCountOrFlag");
             data["selectorCountOrFlag"] = BuildPayloadHash32(selectorCountOrFlag);
             if (selectorCountOrFlag == 1)
             {
-                data["extraSelectorRid"] = ReadPayloadRidLink(reader, $"{fieldName}.extraSelectorRid", recoveredByRid);
+                var validatorDataCandidate = ReadPayloadRidLink(reader, $"{fieldName}.validatorDataRid", recoveredByRid);
+                if (ManagedReferenceLinkClassEndsWith(validatorDataCandidate, "Validator/Data"))
+                {
+                    data["validatorDataRid"] = validatorDataCandidate;
+                }
+                else
+                {
+                    data["extraSelectorRid"] = validatorDataCandidate;
+                    data["validatorDataRoleNote"] = "Installed IL2CPP metadata names this optional slot validatorData, but the linked class is not a proven Validator/Data sample yet.";
+                }
             }
             else if (selectorCountOrFlag != 0)
             {
@@ -1706,11 +1725,85 @@ namespace AnimeStudio.CLI
             }
 
             data["reservedZeroWords"] = ReadDiagnosticZeroWords(reader, $"{fieldName}.reservedZeroWords", 3);
-            data["lateRidA"] = ReadPayloadRidLink(reader, $"{fieldName}.lateRidA", recoveredByRid);
-            data["lateRidB"] = ReadPayloadRidLink(reader, $"{fieldName}.lateRidB", recoveredByRid);
+            data["postProcessorDataCandidates"] = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "metadataField", "postProcessorData" },
+                { "lateRidA", ReadPayloadRidLink(reader, $"{fieldName}.lateRidA", recoveredByRid) },
+                { "lateRidB", ReadPayloadRidLink(reader, $"{fieldName}.lateRidB", recoveredByRid) },
+                { "layoutNote", "Installed IL2CPP metadata names the third SelectorData field postProcessorData, but current samples have not proven which late RID slot or container shape owns it." },
+            };
             data["length"] = reader.Position - start;
-            data["layoutNote"] = "RID slots are proven by byte offsets and recovered registry links; selectorCountOrFlag and late RID semantic names remain unresolved.";
+            data["layoutNote"] = "RID slots are proven by byte offsets and recovered registry links. finderData and validatorData names are emitted only when null/proven by linked class suffix; postProcessorData remains a raw candidate.";
             return data;
+        }
+
+        private static OrderedDictionary ReadDiagnosticTargetSettingsPostSelectorFields(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$partial", true },
+                { "metadataFieldOrder", new[]
+                    {
+                        "enableAdvancedDirection",
+                        "advancedDirection",
+                        "selectorDirection",
+                        "target",
+                        "targetContextKey",
+                        "Default",
+                    }
+                },
+                { "rawWords", ReadDiagnosticRawWords(reader, $"{fieldName}.rawWords", 8) },
+                { "layoutNote", "Installed IL2CPP metadata names the post-selector TargetSettings fields, but current byte evidence only proves this combined eight-word tail." },
+            };
+        }
+
+        private static bool IsNullRidLink(OrderedDictionary link)
+        {
+            if (link == null || !link.Contains("rid") || !TryConvertToInt64(link["rid"], out var rid))
+            {
+                return false;
+            }
+
+            return rid == 0 || ManagedReferenceLinkHasEmptyType(link);
+        }
+
+        private static bool ManagedReferenceLinkClassEndsWith(OrderedDictionary link, string suffix)
+        {
+            return TryGetManagedReferenceLinkType(link, out var type)
+                && type.Contains("class")
+                && type["class"] is string className
+                && className.EndsWith(suffix, StringComparison.Ordinal);
+        }
+
+        private static bool ManagedReferenceLinkHasEmptyType(OrderedDictionary link)
+        {
+            return TryGetManagedReferenceLinkType(link, out var type)
+                && IsManagedReferenceTypeFieldEmpty(type, "class")
+                && IsManagedReferenceTypeFieldEmpty(type, "ns")
+                && IsManagedReferenceTypeFieldEmpty(type, "asm");
+        }
+
+        private static bool TryGetManagedReferenceLinkType(OrderedDictionary link, out OrderedDictionary type)
+        {
+            type = null;
+            if (link == null || !link.Contains("type") || link["type"] is not OrderedDictionary linkType)
+            {
+                return false;
+            }
+
+            type = linkType;
+            return true;
+        }
+
+        private static bool IsManagedReferenceTypeFieldEmpty(OrderedDictionary type, string fieldName)
+        {
+            return !type.Contains(fieldName)
+                || type[fieldName] == null
+                || string.Equals(type[fieldName] as string, string.Empty, StringComparison.Ordinal);
         }
 
         private static List<OrderedDictionary> ReadDiagnosticRawWords(
