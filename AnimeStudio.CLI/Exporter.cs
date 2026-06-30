@@ -1721,6 +1721,14 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "layout", "Beyond.Gameplay.Core.TargetSettings" },
+                { "observedPayloadStatus", "TargetSettings is byte-consumed in current focused samples, but selector/post-selector semantics remain diagnostic." },
+                { "partialReasons", new List<string>
+                    {
+                        "SelectorData postProcessorData ownership remains unproven because observed late RID candidates are empty.",
+                        "Post-selector compact eight-word tail is consumed but exact field widths and enum meanings remain unproven.",
+                        "No focused sample proves a non-empty targetContextKey or non-default direction/target variant.",
+                    }
+                },
                 { "relativeOffset", start - payloadOffset },
                 { "absoluteOffset", start },
                 { "targetSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.targetSource")) },
@@ -1790,6 +1798,13 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "metadataField", "postProcessorData" },
+                { "observedPayloadStatus", "candidate postProcessorData RID slots are preserved but not promoted until a linked non-empty sample proves the container shape." },
+                { "partialReasons", new List<string>
+                    {
+                        "Installed IL2CPP metadata names postProcessorData, but observed focused samples do not contain a linked post-processor RID.",
+                        "The current two late RID candidates are retained so a future non-empty sample can prove ownership without losing bytes.",
+                    }
+                },
                 { "lateRidA", ReadPayloadRidLink(reader, $"{fieldName}.lateRidA", recoveredByRid) },
                 { "lateRidB", ReadPayloadRidLink(reader, $"{fieldName}.lateRidB", recoveredByRid) },
                 { "layoutNote", "Installed IL2CPP metadata names the third SelectorData field postProcessorData, but current samples have not proven which late RID slot or container shape owns it." },
@@ -1807,6 +1822,14 @@ namespace AnimeStudio.CLI
             return new OrderedDictionary
             {
                 { "$partial", true },
+                { "observedPayloadStatus", "compact eight-word post-selector tail consumed as raw diagnostics" },
+                { "partialReasons", new List<string>
+                    {
+                        "Current focused samples only prove two zero-heavy raw word patterns.",
+                        "The split between enableAdvancedDirection, advancedDirection, selectorDirection, target, targetContextKey, and Default is not field-width proven.",
+                        "No non-empty targetContextKey or non-default direction sample has been observed in focused validation.",
+                    }
+                },
                 { "metadataFieldOrder", new[]
                     {
                         "enableAdvancedDirection",
