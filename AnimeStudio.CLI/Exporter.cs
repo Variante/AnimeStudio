@@ -4550,13 +4550,88 @@ namespace AnimeStudio.CLI
                         "ringProjectileSoundSmoothFactor",
                     }
                 },
+                { "structuredRemainingTail", ReadProjectileComponentRemainingTailDiagnostic(reader.RawData, reader.Position, reader.Remaining, $"{fieldName}.structuredRemainingTail") },
                 { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
-                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, and mainEffect finish enum/BlackboardDouble fields are decoded from current samples; effect/sound/scalar fields remain raw until their collection and struct shapes are validated." },
+                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, mainEffect finish fields, and guarded end-relative alert/sound suffix view are decoded from current samples; effect-list assignment and non-empty sound layouts remain raw until validated." },
             };
             data["length"] = reader.Position - start;
             return data;
         }
 
+        private static OrderedDictionary ReadProjectileComponentRemainingTailDiagnostic(
+            byte[] rawData,
+            int offset,
+            int length,
+            string fieldName
+        )
+        {
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/RemainingTail" },
+                { "relativeOffset", offset },
+                { "wordCount", length / 4 },
+                { "layoutNote", "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix is still raw effect-list data; the stable suffix decodes current default alert/sound/scalar fields." },
+            };
+
+            if ((length % 4) != 0 || length < 116 * 4)
+            {
+                var fallback = new ManagedReferencePayloadReader(rawData, offset, length - (length % 4));
+                data["structuredDecodeStatus"] = "notEnoughWords";
+                data["fallbackRawWords"] = ReadRemainingPayloadRawInt32Words(fallback, $"{fieldName}.fallbackRawWords", 8192);
+                return data;
+            }
+
+            try
+            {
+                var local = new ManagedReferencePayloadReader(rawData, offset, length);
+                var totalWords = length / 4;
+                var prefixWords = totalWords - 116;
+                data["effectListAndFinishPrefixWordCount"] = prefixWords;
+                data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.effectListAndFinishPrefixRawWords", prefixWords);
+                data["showAlertEffect"] = local.ReadBool32($"{fieldName}.showAlertEffect");
+                data["alertEffect"] = ReadProjectileDefaultEffectRecordDiagnostic(local, $"{fieldName}.alertEffect", 106);
+                data["launchSound"] = local.ReadAlignedAsciiString($"{fieldName}.launchSound");
+                data["loopSound"] = local.ReadAlignedAsciiString($"{fieldName}.loopSound");
+                data["reachSound"] = local.ReadAlignedAsciiString($"{fieldName}.reachSound");
+                data["hitSound"] = local.ReadAlignedAsciiString($"{fieldName}.hitSound");
+                data["blockSound"] = local.ReadAlignedAsciiString($"{fieldName}.blockSound");
+                data["finishedSound"] = local.ReadAlignedAsciiString($"{fieldName}.finishedSound");
+                data["sizzleSound"] = local.ReadAlignedAsciiString($"{fieldName}.sizzleSound");
+                data["sizzleSoundTriggerDistance"] = local.ReadFloat($"{fieldName}.sizzleSoundTriggerDistance");
+                data["ringProjectileSoundSmoothFactor"] = local.ReadFloat($"{fieldName}.ringProjectileSoundSmoothFactor");
+                local.EnsureComplete();
+                data["structuredDecodeStatus"] = "decoded";
+                data["consumedWordCount"] = totalWords;
+            }
+            catch (InvalidDataException ex)
+            {
+                data["structuredDecodeStatus"] = "failed";
+                data["structuredDecodeError"] = ex.Message;
+                var fallback = new ManagedReferencePayloadReader(rawData, offset, length);
+                data["fallbackRawWords"] = ReadPayloadRawInt32Words(fallback, $"{fieldName}.fallbackRawWords", length / 4);
+            }
+
+            return data;
+        }
+
+        private static OrderedDictionary ReadProjectileDefaultEffectRecordDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int wordCount
+        )
+        {
+            var start = reader.Position;
+            return new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.ProjectileEffectRecord" },
+                { "relativeOffset", start },
+                { "wordCount", wordCount },
+                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", wordCount) },
+                { "layoutNote", "Current samples show this alertEffect slot as a default 106-word effect record. It is bounded and preserved raw because the EffectActionCfg/effect-list item internals are not fully proven here." },
+            };
+        }
         private static OrderedDictionary ReadProjectileMoveModeDictDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
