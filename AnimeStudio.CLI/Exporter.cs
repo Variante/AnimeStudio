@@ -4440,10 +4440,9 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "relativeOffset", start },
-                { "moveModeDict", ReadProjectileMoveModeDictHeaderDiagnostic(reader, $"{fieldName}.moveModeDict") },
+                { "moveModeDict", ReadProjectileMoveModeDictDiagnostic(reader, $"{fieldName}.moveModeDict") },
                 { "remainingMetadataFieldOrder", new[]
                     {
-                        "moveModeDict.values",
                         "mainEffectFinishType",
                         "mainEffectFinishDistance",
                         "mainEffects",
@@ -4468,13 +4467,13 @@ namespace AnimeStudio.CLI
                     }
                 },
                 { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
-                { "layoutNote", "Tail begins at moveModeDict. The dictionary header is decoded from current samples; values plus subsequent effect/sound/scalar fields remain raw until their nested shapes are validated." },
+                { "layoutNote", "Tail begins at moveModeDict. The dictionary keys and byte-proven fixed-size MoveModeData value records are decoded from current samples; effect/sound/scalar fields remain raw until their collection and struct shapes are validated." },
             };
             data["length"] = reader.Position - start;
             return data;
         }
 
-        private static OrderedDictionary ReadProjectileMoveModeDictHeaderDiagnostic(
+        private static OrderedDictionary ReadProjectileMoveModeDictDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
         )
@@ -4487,6 +4486,12 @@ namespace AnimeStudio.CLI
                 throw new InvalidDataException($"mismatched key/value counts {keys.Count}/{valueCount} for {fieldName}");
             }
 
+            var values = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                values.Add(ReadProjectileMoveModeDataDiagnostic(reader, $"{fieldName}.values[{i}]", keys[i]));
+            }
+
             return new OrderedDictionary
             {
                 { "$partial", true },
@@ -4495,9 +4500,76 @@ namespace AnimeStudio.CLI
                 { "keyCount", keys.Count },
                 { "keys", keys },
                 { "valueCount", valueCount },
+                { "values", values },
                 { "length", reader.Position - start },
-                { "layoutNote", "Only the dictionary header is decoded. MoveModeData values remain in the following raw tail because speed-info, animation-curve, and BezierPoint wrappers still need cross-sample proof." },
+                { "layoutNote", "Dictionary header and current fixed-size MoveModeData records are decoded. The first MoveModeData fields are named from IL2CPP metadata; speed-info, animation-curve, and BezierPoint internals remain raw inside each value record." },
             };
+        }
+
+        private static OrderedDictionary ReadProjectileMoveModeDataDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string key
+        )
+        {
+            const int wordCount = 124;
+            const int decodedPrefixWords = 9;
+            var start = reader.Position;
+            if (reader.Remaining < wordCount * 4)
+            {
+                throw new InvalidDataException($"not enough bytes for {fieldName}; need {wordCount * 4}, have {reader.Remaining}");
+            }
+
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData" },
+                { "key", key },
+                { "relativeOffset", start },
+                { "traceType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.traceType", "Beyond.Gameplay.ProjectileTraceType") },
+                { "traceTime", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceTime") },
+                { "traceUntilDistance", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceUntilDistance") },
+                { "moveType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.moveType", "Beyond.Gameplay.ProjectileMoveType") },
+                { "parabolaDef", ReadPayloadEnum32Candidate(reader, $"{fieldName}.parabolaDef", "Beyond.Gameplay.ProjectileParabolaDef") },
+                { "remainingMetadataFieldOrder", new[]
+                    {
+                        "m_parabolaSpeedInfo",
+                        "m_bezierSpeedInfo",
+                        "speed",
+                        "m_speedCurveInfo",
+                        "speedCurve",
+                        "useSpeedScaleWithDistance",
+                        "speedScaleWithDistance",
+                        "lockVelocityToXZ",
+                        "groundedMove",
+                        "limitAngularSpeed",
+                        "angularSpeed",
+                        "angularSpeedCurve",
+                        "travelDuration",
+                        "vertexYOffset",
+                        "gravity",
+                        "bezierMidPoint1",
+                        "bezierMidPoint2",
+                    }
+                },
+                { "remainingRawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", wordCount - decodedPrefixWords) },
+                { "layoutNote", "Current samples serialize each MoveModeData value as 124 int32 words. The prefix through parabolaDef is decoded from IL2CPP field order; the remaining fixed-size record is retained raw because speed-info, FAnimationCurve, and BezierPoint internals are not fully proven." },
+            };
+            data["wordCount"] = (reader.Position - start) / 4;
+            data["length"] = reader.Position - start;
+            return data;
+        }
+
+        private static OrderedDictionary ReadPayloadEnum32Candidate(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string enumType
+        )
+        {
+            var data = BuildPayloadHash32(reader.ReadInt32(fieldName));
+            data["enumType"] = enumType;
+            data["layoutNote"] = "Enum field type is known from IL2CPP metadata; numeric names are withheld until enum constants are independently validated.";
+            return data;
         }
 
         private static bool TryDecodeCoreActionConditionManagedReferenceData(
