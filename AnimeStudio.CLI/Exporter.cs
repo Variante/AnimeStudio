@@ -11365,20 +11365,12 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyPartsRootComponentData", StringComparison.Ordinal))
                 {
-                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
-                    data = new OrderedDictionary
+                    if (TryReadEnemyPartsRootComponentData(rawData, offset, length, 8, out data)
+                        || TryReadEnemyPartsRootComponentData(rawData, offset, length, 10, out data))
                     {
-                        { "$decoded", true },
-                        { "$inferred", true },
-                        { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
-                        { "offset", offset },
-                        { "length", length },
-                        { "prefixWords", ReadPayloadRawInt32Words(reader, "prefixWords", 8) },
-                        { "partName", reader.ReadAlignedAsciiString("partName") },
-                        { "partTags", ReadEnemyPartTagList(reader) },
-                    };
-                    reader.EnsureComplete();
-                    return true;
+                        return true;
+                    }
+                    throw new InvalidDataException("unsupported EnemyPartsRootComponentData prefix variant");
                 }
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
@@ -13244,8 +13236,8 @@ namespace AnimeStudio.CLI
                 data = new OrderedDictionary
                 {
                     { "entityBlackboard", ReadAbilitySystemEntityBlackboard(local, "entityBlackboard", 64) },
-                    { "bakedMeshPoints", ReadPayloadEmptyCountObject(local, "bakedMeshPoints") },
-                    { "bakedMeshPointBonePathList", ReadPayloadEmptyCountList(local, "bakedMeshPointBonePathList") },
+                    { "bakedMeshPoints", ReadAbilitySystemBakedMeshPointsDictionary(local, "bakedMeshPoints", 64, 4096) },
+                    { "bakedMeshPointBonePathList", ReadPayloadStringList(local, "bakedMeshPointBonePathList", 4096) },
                     { "extraShapesData", ReadPayloadEmptyCountObject(local, "extraShapesData") },
                 };
                 reader.SetPosition(local.Position);
@@ -13283,6 +13275,106 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadAbilitySystemBakedMeshPointsDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount,
+            int maxPointsPerList
+        )
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > maxCount)
+            {
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<string>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(reader.ReadAlignedAsciiString($"{fieldName}.keys[{i}]"));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                values.Add(ReadAbilitySystemBakedMeshPointList(reader, $"{fieldName}.values[{i}]", maxPointsPerList));
+            }
+
+            var entries = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                entries.Add(new OrderedDictionary
+                {
+                    { "key", keys[i] },
+                    { "value", values[i] },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "SerializeFieldDictionary<string, Beyond.Gameplay.Core.AbilitySystemData.BakedMeshPointList>" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", keys },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", values },
+                    }
+                },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBakedMeshPointList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            const int recordByteCount = 28;
+            var count = reader.ReadInt32($"{fieldName}.pointList.count");
+            if (count < 0 || count > maxCount || count > reader.Remaining / recordByteCount)
+            {
+                throw new InvalidDataException($"invalid BakedMeshPoint count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadAbilitySystemBakedMeshPoint(reader, $"{fieldName}.pointList[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.AbilitySystemData.BakedMeshPointList" },
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBakedMeshPoint(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.AbilitySystemData.BakedMeshPoint" },
+                { "battleShapePointOffset", ReadPayloadVector3(reader, $"{fieldName}.battleShapePointOffset") },
+                { "bonePathIndex", reader.ReadInt32($"{fieldName}.bonePathIndex") },
+                { "meshPointOffset", ReadPayloadVector3(reader, $"{fieldName}.meshPointOffset") },
+            };
+        }
         private static OrderedDictionary ReadAbilitySystemBlackboardDataPair(
             ManagedReferencePayloadReader reader,
             string fieldName
@@ -14124,6 +14216,39 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static bool TryReadEnemyPartsRootComponentData(
+            byte[] rawData,
+            int offset,
+            int length,
+            int prefixWordCount,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
+                    { "layoutVariant", $"prefixWords{prefixWordCount}" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "prefixWords", ReadPayloadRawInt32Words(reader, "prefixWords", prefixWordCount) },
+                    { "partName", reader.ReadAlignedAsciiString("partName") },
+                    { "partTags", ReadEnemyPartTagList(reader) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
         private static List<OrderedDictionary> ReadEnemyPartTagList(ManagedReferencePayloadReader reader)
         {
             var count = reader.ReadInt32("partTags.count");
