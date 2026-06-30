@@ -8936,6 +8936,14 @@ namespace AnimeStudio.CLI
                                                 {
                                                     data[entry.Key] = entry.Value;
                                                 }
+
+                                                if (TryReadAbilitySystemPostCameraFields(reader, out var postCameraFields))
+                                                {
+                                                    foreach (DictionaryEntry entry in postCameraFields)
+                                                    {
+                                                        data[entry.Key] = entry.Value;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -11371,6 +11379,132 @@ namespace AnimeStudio.CLI
             }
 
             throw new InvalidDataException($"invalid enum32 {value} in {fieldName}");
+        }
+
+        private static bool TryReadAbilitySystemPostCameraFields(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "layoutNote", "IL2CPP metadata lists overrideDeadEffect before deadEffect, but focused Unity payloads start directly with deadEffect; overrideDeadEffect is not emitted here until a validated payload variant proves it." },
+                    { "deadEffect", ReadAbilitySystemEffectActionCfgObservedBlock(local, "deadEffect") },
+                    { "effectScale", local.ReadFloat("effectScale") },
+                    { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
+                    { "hitFlashAsset", local.ReadAlignedAsciiString("hitFlashAsset") },
+                    { "healthType", ReadPayloadSparseNamedEnum32(local, "healthType", false, (0, "Normal"), (2, "Independent")) },
+                    { "preloadAbilityEntities", ReadPayloadStringIntDictionary(local, "preloadAbilityEntities", 8) },
+                    { "maxPotentialEffectBuffId", local.ReadAlignedAsciiString("maxPotentialEffectBuffId") },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemEffectActionCfgObservedBlock(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            const int wordCount = 107;
+            var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", wordCount);
+            return new OrderedDictionary
+            {
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.EffectActionCfg" },
+                { "layoutNote", "Observed AbilitySystemData payload stores deadEffect as a fixed 107-word EffectActionCfg block before effectScale. Internal EffectActionCfg field names are not emitted yet because metadata order does not fully prove this Unity serialized layout." },
+                { "wordCount", wordCount },
+                { "rawWords", rawWords },
+                { "nonZeroWordIndexes", BuildPayloadRawWordNonZeroIndexes(rawWords) },
+            };
+        }
+
+        private static List<OrderedDictionary> BuildPayloadRawWordNonZeroIndexes(List<OrderedDictionary> rawWords)
+        {
+            var indexes = new List<OrderedDictionary>();
+            for (var i = 0; i < rawWords.Count; i++)
+            {
+                if (rawWords[i]["value"] is int value && value != 0)
+                {
+                    indexes.Add(new OrderedDictionary
+                    {
+                        { "wordIndex", i },
+                        { "value", value },
+                        { "hex", $"0x{unchecked((uint)value):x8}" },
+                    });
+                }
+            }
+            return indexes;
+        }
+
+        private static OrderedDictionary ReadPayloadStringIntDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > maxCount)
+            {
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<string>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(reader.ReadAlignedAsciiString($"{fieldName}.keys[{i}]"));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}");
+            }
+
+            var values = new List<int>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                values.Add(reader.ReadInt32($"{fieldName}.values[{i}]"));
+            }
+
+            var entries = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                entries.Add(new OrderedDictionary
+                {
+                    { "key", keys[i] },
+                    { "value", values[i] },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "SerializeFieldDictionary<string, int>" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", keys },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", values },
+                    }
+                },
+                { "entries", entries },
+            };
         }
 
         private static bool TryReadAbilitySystemSkillDataBundle(
