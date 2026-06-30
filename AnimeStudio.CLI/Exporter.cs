@@ -12066,7 +12066,7 @@ namespace AnimeStudio.CLI
             {
                 data = new OrderedDictionary
                 {
-                    { "$partial", true },
+                    { "$decoded", true },
                     { "layout", "Beyond.Gameplay.Core.SkillDataBundle" },
                     { "allNormalAttackId", ReadPayloadStringList(local, "skillDataBundle.allNormalAttackId", 256) },
                     { "allActiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allActiveSkillId", 256) },
@@ -12091,7 +12091,7 @@ namespace AnimeStudio.CLI
                 data["comboSkillId"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillId");
                 data["comboSkillSpecialNodeName"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName");
                 data["defaultCmdMapping"] = ReadAbilitySystemBattleCommandStringDictionary(local, "skillDataBundle.defaultCmdMapping", 8);
-                data["layoutNote"] = "decoded through defaultCmdMapping; later AbilitySystemData fields remain in remainingRawWords";
+                data["layoutNote"] = "SkillDataBundle fields are consumed through defaultCmdMapping. Nested comboSkillConditions may still contain partial action/condition payloads, and later AbilitySystemData fields are decoded by the parent AbilitySystemData reader.";
 
                 reader.SetPosition(local.Position);
                 return true;
