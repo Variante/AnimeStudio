@@ -445,6 +445,7 @@ namespace AnimeStudio.CLI
                 long partialTypeTreeBytesRead = 0;
                 OrderedDictionary partialTypeTreeStoppedAt = null;
                 OrderedDictionary recoveredManagedReferences = null;
+                OrderedDictionary managedReferenceRecoveryFailure = null;
                 HashSet<long> expectedManagedReferenceRids = null;
                 var recoveredManagedReferencesTail = false;
                 var recoveredManagedReferencesFullyDecoded = false;
@@ -558,13 +559,17 @@ namespace AnimeStudio.CLI
                     && IsFinalTopLevelTypeTreeField(exportTypeTree, "references", "ManagedReferencesRegistry"))
                 {
                     expectedManagedReferenceRids = CollectManagedReferenceRids(type);
-                    if (TryRecoverManagedReferences(rawData, referencesStartOffset, expectedManagedReferenceRids, out var recoveredReferences))
+                    if (TryRecoverManagedReferences(rawData, referencesStartOffset, expectedManagedReferenceRids, out var recoveredReferences, out var recoveryFailure))
                     {
                         recoveredManagedReferences = recoveredReferences;
                         type["references"] = recoveredReferences;
                         recoveredManagedReferencesTail = true;
                         recoveredManagedReferencesStatus = GetManagedReferenceRecoveryStatus(recoveredReferences);
                         recoveredManagedReferencesFullyDecoded = string.Equals(recoveredManagedReferencesStatus, "fullyDecoded", StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        managedReferenceRecoveryFailure = recoveryFailure;
                     }
                 }
 
@@ -682,6 +687,18 @@ namespace AnimeStudio.CLI
                         if (recoveredManagedReferences != null)
                         {
                             meta["recoveredManagedReferences"] = recoveredManagedReferences;
+                        }
+                        if (managedReferenceRecoveryFailure != null)
+                        {
+                            managedReferenceRecoveryFailure["source"] = partialTypeTreeSourceLabel ?? typeTreeSource;
+                            managedReferenceRecoveryFailure["partialTypeTreeBytesRead"] = partialTypeTreeBytesRead;
+                            managedReferenceRecoveryFailure["partialTypeTreeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
+                            if (partialTypeTreeStoppedAt != null)
+                            {
+                                managedReferenceRecoveryFailure["stoppedAt"] = partialTypeTreeStoppedAt;
+                            }
+                            meta["managedReferencesRegistryRecoveryAttempted"] = true;
+                            meta["managedReferencesRegistryRecoveryFailure"] = managedReferenceRecoveryFailure;
                         }
                     }
                 }
@@ -865,13 +882,21 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             long startOffset,
             IReadOnlySet<long> expectedRids,
-            out OrderedDictionary references
+            out OrderedDictionary references,
+            out OrderedDictionary diagnostic
         )
         {
             references = null;
+            diagnostic = null;
             expectedRids ??= new HashSet<long>();
-            if (rawData == null || startOffset < 0 || startOffset > rawData.Length - 8)
+            if (rawData == null)
             {
+                diagnostic = BuildManagedReferenceRecoveryFailure("rawDataMissing", startOffset, -1, expectedRidCount: expectedRids.Count);
+                return false;
+            }
+            if (startOffset < 0 || startOffset > rawData.Length - 8)
+            {
+                diagnostic = BuildManagedReferenceRecoveryFailure("registryStartOffsetOutOfRange", startOffset, rawData.Length, expectedRidCount: expectedRids.Count);
                 return false;
             }
 
@@ -880,17 +905,31 @@ namespace AnimeStudio.CLI
             pos += 4;
             var count = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(pos, 4));
             pos += 4;
-            if (version < 1 || version > 3 || count < 0 || count > 10000)
+            if (version < 1 || version > 3)
             {
+                diagnostic = BuildManagedReferenceRecoveryFailure("invalidRegistryVersion", startOffset, rawData.Length, version, count, expectedRids.Count);
+                return false;
+            }
+            if (count < 0 || count > 10000)
+            {
+                diagnostic = BuildManagedReferenceRecoveryFailure("invalidRegistryCount", startOffset, rawData.Length, version, count, expectedRids.Count);
                 return false;
             }
             if (count < expectedRids.Count)
             {
+                diagnostic = BuildManagedReferenceRecoveryFailure("registryCountLessThanExpectedRidCount", startOffset, rawData.Length, version, count, expectedRids.Count);
                 return false;
             }
 
-            if (!TryParseManagedReferenceHeaders(rawData, pos, count, expectedRids, out var headers))
+            if (!TryParseManagedReferenceHeaders(rawData, pos, count, expectedRids, out var headers, out diagnostic))
             {
+                if (diagnostic != null)
+                {
+                    diagnostic["registryStartOffset"] = startOffset;
+                    diagnostic["version"] = version;
+                    diagnostic["count"] = count;
+                    diagnostic["expectedRidCount"] = expectedRids.Count;
+                }
                 return false;
             }
 
@@ -903,8 +942,14 @@ namespace AnimeStudio.CLI
             {
                 var header = headers[i];
                 var nextPos = i == headers.Count - 1 ? rawData.Length : headers[i + 1].HeaderStart;
-                if (!recoveredRids.Add(header.Rid) || nextPos < header.DataStart)
+                if (!recoveredRids.Add(header.Rid))
                 {
+                    diagnostic = BuildManagedReferenceRecoveryFailure("duplicateRecoveredRid", startOffset, rawData.Length, version, count, expectedRids.Count, headerIndex: i, headerOffset: header.HeaderStart, rid: header.Rid);
+                    return false;
+                }
+                if (nextPos < header.DataStart)
+                {
+                    diagnostic = BuildManagedReferenceRecoveryFailure("entryDataRangeInvalid", startOffset, rawData.Length, version, count, expectedRids.Count, headerIndex: i, headerOffset: header.HeaderStart, rid: header.Rid, detail: $"next header offset {nextPos} is before data start {header.DataStart}");
                     return false;
                 }
 
@@ -930,6 +975,7 @@ namespace AnimeStudio.CLI
             {
                 if (!recoveredRids.Contains(expectedRid))
                 {
+                    diagnostic = BuildManagedReferenceRecoveryFailure("missingExpectedRid", startOffset, rawData.Length, version, count, expectedRids.Count, rid: expectedRid);
                     return false;
                 }
             }
@@ -960,7 +1006,70 @@ namespace AnimeStudio.CLI
             {
                 references["$decoded"] = true;
             }
+            diagnostic = null;
             return true;
+        }
+
+        private static OrderedDictionary BuildManagedReferenceRecoveryFailure(
+            string reason,
+            long registryStartOffset,
+            int rawDataLength,
+            int? version = null,
+            int? count = null,
+            int? expectedRidCount = null,
+            int? headerIndex = null,
+            int? headerOffset = null,
+            int? searchStartOffset = null,
+            int? remainingHeaderCount = null,
+            long? rid = null,
+            string detail = null
+        )
+        {
+            var diagnostic = new OrderedDictionary
+            {
+                { "reason", reason },
+                { "field", "references" },
+                { "type", "ManagedReferencesRegistry" },
+                { "registryStartOffset", registryStartOffset },
+                { "rawDataLength", rawDataLength },
+            };
+            if (version.HasValue)
+            {
+                diagnostic["version"] = version.Value;
+            }
+            if (count.HasValue)
+            {
+                diagnostic["count"] = count.Value;
+            }
+            if (expectedRidCount.HasValue)
+            {
+                diagnostic["expectedRidCount"] = expectedRidCount.Value;
+            }
+            if (headerIndex.HasValue)
+            {
+                diagnostic["headerIndex"] = headerIndex.Value;
+            }
+            if (headerOffset.HasValue)
+            {
+                diagnostic["headerOffset"] = headerOffset.Value;
+            }
+            if (searchStartOffset.HasValue)
+            {
+                diagnostic["searchStartOffset"] = searchStartOffset.Value;
+            }
+            if (remainingHeaderCount.HasValue)
+            {
+                diagnostic["remainingHeaderCount"] = remainingHeaderCount.Value;
+            }
+            if (rid.HasValue)
+            {
+                diagnostic["rid"] = rid.Value;
+            }
+            if (!string.IsNullOrEmpty(detail))
+            {
+                diagnostic["detail"] = detail;
+            }
+            return diagnostic;
         }
 
         private static string GetManagedReferenceRecoveryStatus(object value)
@@ -1044,18 +1153,42 @@ namespace AnimeStudio.CLI
             int firstHeaderOffset,
             int count,
             IReadOnlySet<long> expectedRids,
-            out List<ManagedReferenceHeader> headers
+            out List<ManagedReferenceHeader> headers,
+            out OrderedDictionary diagnostic
         )
         {
             headers = new List<ManagedReferenceHeader>(count);
+            diagnostic = null;
+            expectedRids ??= new HashSet<long>();
+            var registryStartOffset = firstHeaderOffset - 8;
             var usedRids = new HashSet<long>();
             var pos = firstHeaderOffset;
 
             for (var i = 0; i < count; i++)
             {
-                if (!TryReadManagedReferenceHeader(rawData, pos, out var header)
-                    || !usedRids.Add(header.Rid))
+                if (!TryReadManagedReferenceHeader(rawData, pos, out var header))
                 {
+                    diagnostic = BuildManagedReferenceRecoveryFailure(
+                        i == 0 ? "firstHeaderInvalid" : "remainingHeaderChainInvalid",
+                        registryStartOffset,
+                        rawData?.Length ?? -1,
+                        expectedRidCount: expectedRids.Count,
+                        headerIndex: i,
+                        headerOffset: pos
+                    );
+                    return false;
+                }
+                if (!usedRids.Add(header.Rid))
+                {
+                    diagnostic = BuildManagedReferenceRecoveryFailure(
+                        "duplicateHeaderRid",
+                        registryStartOffset,
+                        rawData?.Length ?? -1,
+                        expectedRidCount: expectedRids.Count,
+                        headerIndex: i,
+                        headerOffset: pos,
+                        rid: header.Rid
+                    );
                     return false;
                 }
                 headers.Add(header);
@@ -1073,6 +1206,17 @@ namespace AnimeStudio.CLI
                     usedRids,
                     out pos))
                 {
+                    diagnostic = BuildManagedReferenceRecoveryFailure(
+                        "nextHeaderNotFound",
+                        registryStartOffset,
+                        rawData?.Length ?? -1,
+                        expectedRidCount: expectedRids.Count,
+                        headerIndex: i,
+                        headerOffset: header.HeaderStart,
+                        searchStartOffset: header.DataStart,
+                        remainingHeaderCount: count - i - 1,
+                        rid: header.Rid
+                    );
                     return false;
                 }
             }
