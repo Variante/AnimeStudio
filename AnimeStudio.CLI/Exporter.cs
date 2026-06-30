@@ -8929,6 +8929,14 @@ namespace AnimeStudio.CLI
                                             {
                                                 data[entry.Key] = entry.Value;
                                             }
+
+                                            if (TryReadAbilitySystemSkillCameraConfigSection(reader, out var skillCameraConfigSection))
+                                            {
+                                                foreach (DictionaryEntry entry in skillCameraConfigSection)
+                                                {
+                                                    data[entry.Key] = entry.Value;
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -11117,6 +11125,252 @@ namespace AnimeStudio.CLI
                 { "valueStr", reader.ReadAlignedAsciiString($"{fieldName}.valueStr") },
                 { "isDynamic", reader.ReadBool32($"{fieldName}.isDynamic") },
             };
+        }
+
+        private static bool TryReadAbilitySystemSkillCameraConfigSection(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "skillCameraConfig", ReadAbilitySystemSkillCameraConfigDictionary(local, "skillCameraConfig", 16) },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemSkillCameraConfigDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > maxCount)
+            {
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<string>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(reader.ReadAlignedAsciiString($"{fieldName}.keys[{i}]"));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                values.Add(ReadAbilitySystemSkillCameraConfig(reader, $"{fieldName}.values[{i}]"));
+            }
+
+            var entries = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                entries.Add(new OrderedDictionary
+                {
+                    { "key", keys[i] },
+                    { "value", values[i] },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "SerializeFieldDictionary<string, Beyond.Gameplay.Core.SkillCameraConfig>" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", keys },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", values },
+                    }
+                },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemSkillCameraConfig(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.SkillCameraConfig" },
+                { "clip", ReadPayloadPPtr(reader, $"{fieldName}.clip") },
+                { "clipPathHash", BuildPayloadHash64(reader.ReadInt64($"{fieldName}.clipPathHash")) },
+                { "collideShapeList", ReadAbilitySystemSkillCameraCollideShapeList(reader, $"{fieldName}.collideShapeList", 8) },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemSkillCameraCollideShapeList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            const int recordByteCount = 50 * 4;
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount || count > reader.Remaining / recordByteCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var recordStart = reader.Position;
+                var entry = ReadAbilitySystemSkillCameraShapeData(reader, $"{fieldName}[{i}]");
+                var consumed = reader.Position - recordStart;
+                if (consumed != recordByteCount)
+                {
+                    throw new InvalidDataException($"unexpected ShapeData byte count {consumed} for {fieldName}[{i}]");
+                }
+                entries.Add(entry);
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "List<Beyond.Gameplay.Core.Selector.HitBoxFinder.ShapeData>" },
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemSkillCameraShapeData(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.Selector.HitBoxFinder.ShapeData" },
+                { "shapeType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.shapeType", false, (0, "Box"), (2, "Capsule"), (4, "Sphere")) },
+                { "positionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.positionRef", false, (0, "OwnerMountPoint"), (2, "InputCenter")) },
+                { "posRefMP", ReadAbilitySystemShapeMountPoint(reader, $"{fieldName}.posRefMP") },
+                { "directionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.directionRef", false, (0, "OwnerForward"), (2, "OwnerMountPoint"), (4, "InputDirection")) },
+                { "dirRefMountPoint", ReadAbilitySystemShapeMountPoint(reader, $"{fieldName}.dirRefMountPoint") },
+                { "centerOffset", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.centerOffset") },
+                { "eulerAngle", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.eulerAngle") },
+                { "size", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.size") },
+                { "radius", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.radius") },
+                { "height", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.height") },
+                { "limitAngle", reader.ReadBool32($"{fieldName}.limitAngle") },
+                { "angle", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.angle") },
+                { "limitHeight", reader.ReadBool32($"{fieldName}.limitHeight") },
+                { "maxHeight", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.maxHeight") },
+                { "useDirection", reader.ReadBool32($"{fieldName}.useDirection") },
+                { "castDirection", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.castDirection", false, (0, "ZForward"), (2, "ZBackward"), (4, "XForward"), (6, "XBackward"), (8, "YForward"), (10, "YBackward")) },
+                { "enablePreview", reader.ReadBool32($"{fieldName}.enablePreview") },
+                { "hitEffectTowardsType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.hitEffectTowardsType", false, (0, "TowardsAttacker"), (2, "TowardsHitBoxCenter")) },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBlackboardVector3(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var x = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.x");
+            var y = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.y");
+            var z = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.z");
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardVector3" },
+                { "x", x },
+                { "y", y },
+                { "z", z },
+                { "valueCandidate", new OrderedDictionary
+                    {
+                        { "x", x["valueFloatCandidate"] },
+                        { "y", y["valueFloatCandidate"] },
+                        { "z", z["valueFloatCandidate"] },
+                    }
+                },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBlackboardDouble(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", 3);
+            var rawValue = rawWords[1]["value"] is int word ? word : 0;
+            var value = BitConverter.Int32BitsToSingle(rawValue);
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                { "layoutNote", "serialized as three int32 words in AbilitySystemData ShapeData; middle word is exposed as a float candidate" },
+                { "rawWords", rawWords },
+                { "valueFloatCandidate", value },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemShapeMountPoint(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return ReadPayloadSparseNamedEnum32(
+                reader,
+                fieldName,
+                true,
+                (0, "None"),
+                (2, "HeadBar"),
+                (4, "FootBar"),
+                (6, "LockPoint"),
+                (8, "HeadStatus"),
+                (10, "DmgTxtSpawnPoint"),
+                (2000, "HeadLabel")
+            );
+        }
+        private static OrderedDictionary ReadPayloadSparseNamedEnum32(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            bool allowUnknown,
+            params (int Value, string Name)[] names
+        )
+        {
+            var value = reader.ReadInt32(fieldName);
+            foreach (var entry in names)
+            {
+                if (entry.Value == value)
+                {
+                    return new OrderedDictionary
+                    {
+                        { "value", value },
+                        { "name", entry.Name },
+                    };
+                }
+            }
+
+            if (allowUnknown)
+            {
+                return BuildPayloadHash32(value);
+            }
+
+            throw new InvalidDataException($"invalid enum32 {value} in {fieldName}");
         }
 
         private static bool TryReadAbilitySystemSkillDataBundle(
