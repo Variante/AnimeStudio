@@ -11393,7 +11393,7 @@ namespace AnimeStudio.CLI
                 data = new OrderedDictionary
                 {
                     { "layoutNote", "IL2CPP metadata lists overrideDeadEffect before deadEffect, but focused Unity payloads start directly with deadEffect; overrideDeadEffect is not emitted here until a validated payload variant proves it." },
-                    { "deadEffect", ReadAbilitySystemEffectActionCfgObservedBlock(local, "deadEffect") },
+                    { "deadEffect", ReadAbilitySystemEffectActionCfg(local, "deadEffect") },
                     { "effectScale", local.ReadFloat("effectScale") },
                     { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
                     { "hitFlashAsset", local.ReadAlignedAsciiString("hitFlashAsset") },
@@ -11411,41 +11411,163 @@ namespace AnimeStudio.CLI
             }
         }
 
-        private static OrderedDictionary ReadAbilitySystemEffectActionCfgObservedBlock(
+        private static OrderedDictionary ReadAbilitySystemEffectActionCfg(
             ManagedReferencePayloadReader reader,
             string fieldName
         )
         {
-            const int wordCount = 107;
-            var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", wordCount);
-            return new OrderedDictionary
+            var start = reader.Position;
+            var data = new OrderedDictionary
             {
                 { "$partial", true },
                 { "$inferred", true },
                 { "layout", "Beyond.Gameplay.EffectActionCfg" },
-                { "layoutNote", "Observed AbilitySystemData payload stores deadEffect as a fixed 107-word EffectActionCfg block before effectScale. Internal EffectActionCfg field names are not emitted yet because metadata order does not fully prove this Unity serialized layout." },
-                { "wordCount", wordCount },
-                { "rawWords", rawWords },
-                { "nonZeroWordIndexes", BuildPayloadRawWordNonZeroIndexes(rawWords) },
+                { "layoutNote", "Unity MonoBehaviour payload follows IL2CPP metadata field order except centerOffset is omitted in observed AbilitySystemData rows. BlackboardDouble internals remain exposed as raw 3-word wrappers." },
+                { "omittedSerializedFields", new List<string> { "centerOffset" } },
+                { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
+                { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
+                { "guardEffect", reader.ReadBool32($"{fieldName}.guardEffect") },
+                { "forceGuardEffect", reader.ReadBool32($"{fieldName}.forceGuardEffect") },
+                { "isCenterChangeLod", reader.ReadBool32($"{fieldName}.isCenterChangeLod") },
+                { "useScaleBB", reader.ReadBool32($"{fieldName}.useScaleBB") },
+                { "scale", ReadPayloadVector3(reader, $"{fieldName}.scale") },
+                { "scaleBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.scaleBB") },
+                { "useLengthBB", reader.ReadBool32($"{fieldName}.useLengthBB") },
+                { "lengthBB", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.lengthBB") },
+                { "releaseByAction", reader.ReadBool32($"{fieldName}.releaseByAction") },
+                { "ignoreOwnerTimeScale", reader.ReadBool32($"{fieldName}.ignoreOwnerTimeScale") },
+                { "interruptTime", reader.ReadFloat($"{fieldName}.interruptTime") },
+                { "terrainPrefab", reader.ReadBool32($"{fieldName}.terrainPrefab") },
+                { "effectPosData", ReadAbilitySystemTerrainEffectDataArray(reader, $"{fieldName}.effectPosData") },
+                { "isShowInDialog", reader.ReadBool32($"{fieldName}.isShowInDialog") },
+                { "isLimitEffectCount", reader.ReadBool32($"{fieldName}.isLimitEffectCount") },
+                { "limitCount", reader.ReadInt32($"{fieldName}.limitCount") },
+                { "protectTime", reader.ReadFloat($"{fieldName}.protectTime") },
+                { "limitTime", reader.ReadFloat($"{fieldName}.limitTime") },
+                { "limitKey", reader.ReadAlignedAsciiString($"{fieldName}.limitKey") },
+                { "assetOnlyAffectModelRoot", reader.ReadBool32($"{fieldName}.assetOnlyAffectModelRoot") },
+                { "isUltimateShow", reader.ReadBool32($"{fieldName}.isUltimateShow") },
+                { "visibleWithEntity", reader.ReadBool32($"{fieldName}.visibleWithEntity") },
+                { "visibleWithEntityType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.visibleWithEntityType", true, (0, "Source"), (2, "Target")) },
+                { "moveType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.moveType", true, (0, "Stationary"), (2, "FollowTarget"), (4, "FollowCamera"), (6, "FollowSlot")) },
+                { "positionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.positionRef", true, (0, "Target"), (2, "Source")) },
+                { "grounded", reader.ReadBool32($"{fieldName}.grounded") },
+                { "followGrounded", reader.ReadBool32($"{fieldName}.followGrounded") },
+                { "followGroundedMaxDistance", reader.ReadFloat($"{fieldName}.followGroundedMaxDistance") },
+                { "followHideTarget", reader.ReadBool32($"{fieldName}.followHideTarget") },
+                { "visibleWhenHideTarget", reader.ReadBool32($"{fieldName}.visibleWhenHideTarget") },
+                { "slotIndex", reader.ReadInt32($"{fieldName}.slotIndex") },
+                { "useWeaponMountPoint", reader.ReadBool32($"{fieldName}.useWeaponMountPoint") },
+                { "mountPoint", ReadAbilitySystemEffectMountPoint(reader, $"{fieldName}.mountPoint") },
+                { "useAccurateMp", reader.ReadBool32($"{fieldName}.useAccurateMp") },
+                { "isClothMountPoint", reader.ReadBool32($"{fieldName}.isClothMountPoint") },
+                { "weaponIndex", reader.ReadInt32($"{fieldName}.weaponIndex") },
+                { "weaponMountPoint", ReadAbilitySystemWeaponMountPoint(reader, $"{fieldName}.weaponMountPoint") },
+                { "showHideWithWeapon", reader.ReadBool32($"{fieldName}.showHideWithWeapon") },
+                { "offsetDir", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.offsetDir", true, (0, "Self"), (2, "Source"), (4, "Target"), (6, "SelfToSource"), (8, "SelfToTarget"), (10, "SourceToTarget"), (12, "Camera")) },
+                { "offsetDirRevert", reader.ReadBool32($"{fieldName}.offsetDirRevert") },
+                { "usePositionOffsetBB", reader.ReadBool32($"{fieldName}.usePositionOffsetBB") },
+                { "positionOffset", ReadPayloadVector3(reader, $"{fieldName}.positionOffset") },
+                { "positionOffsetBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.positionOffsetBB") },
+                { "useTargetRotation", reader.ReadBool32($"{fieldName}.useTargetRotation") },
+                { "scaleWithTargetSize", reader.ReadBool32($"{fieldName}.scaleWithTargetSize") },
+                { "fxSize", reader.ReadFloat($"{fieldName}.fxSize") },
+                { "unpackPosDelayFrame", reader.ReadInt32($"{fieldName}.unpackPosDelayFrame") },
+                { "unpackFollowTargetOnRelease", reader.ReadBool32($"{fieldName}.unpackFollowTargetOnRelease") },
+                { "rotType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.rotType", true, (0, "Stationary"), (2, "FollowTarget")) },
+                { "rotRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.rotRef", true, (0, "Target"), (2, "Source")) },
+                { "directionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.directionRef", true, (1, "None"), (0, "Target"), (2, "Source"), (4, "SourceToTarget"), (6, "TargetToSource"), (8, "CurrentPosToTarget"), (10, "CurrentPosToInputTarget"), (12, "CurPosToCamera"), (14, "CameraForward")) },
+                { "rotUseWeaponMountPoint", reader.ReadBool32($"{fieldName}.rotUseWeaponMountPoint") },
+                { "rotMountPoint", ReadAbilitySystemEffectMountPoint(reader, $"{fieldName}.rotMountPoint") },
+                { "rotWeaponIndex", reader.ReadInt32($"{fieldName}.rotWeaponIndex") },
+                { "rotWeaponMountPoint", ReadAbilitySystemWeaponMountPoint(reader, $"{fieldName}.rotWeaponMountPoint") },
+                { "revertDir", reader.ReadBool32($"{fieldName}.revertDir") },
+                { "useSelfRotationBB", reader.ReadBool32($"{fieldName}.useSelfRotationBB") },
+                { "selfRotation", ReadPayloadVector3(reader, $"{fieldName}.selfRotation") },
+                { "selfRotationBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.selfRotationBB") },
+                { "lockYRotation", reader.ReadBool32($"{fieldName}.lockYRotation") },
+                { "unpackRotDelayFrame", reader.ReadInt32($"{fieldName}.unpackRotDelayFrame") },
+                { "unpackFollowTargetRotOnRelease", reader.ReadBool32($"{fieldName}.unpackFollowTargetRotOnRelease") },
+                { "weaponVfxKey", reader.ReadAlignedAsciiString($"{fieldName}.weaponVfxKey") },
+                { "weaponVfxIndex", reader.ReadInt32($"{fieldName}.weaponVfxIndex") },
+                { "weaponVfxPersistent", reader.ReadBool32($"{fieldName}.weaponVfxPersistent") },
+                { "alertType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.alertType", true, (0, "Decal"), (2, "Particle")) },
+                { "animateAlert", reader.ReadBool32($"{fieldName}.animateAlert") },
+                { "alertAnimateDuration", reader.ReadFloat($"{fieldName}.alertAnimateDuration") },
+                { "isAlertAnimateReverse", reader.ReadBool32($"{fieldName}.isAlertAnimateReverse") },
+                { "angle", reader.ReadFloat($"{fieldName}.angle") },
+                { "hollow", reader.ReadFloat($"{fieldName}.hollow") },
+                { "modifyType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.modifyType", true, (0, "StartLifeTime")) },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+            };
+            data["serializedWordCount"] = (reader.Position - start) / 4;
+            return data;
+        }
+
+        private static OrderedDictionary ReadAbilitySystemTerrainEffectDataArray(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > 64)
+            {
+                throw new InvalidDataException($"invalid TerrainEffectData count {count} in {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(new OrderedDictionary
+                {
+                    { "tag", reader.ReadAlignedAsciiString($"{fieldName}[{i}].tag") },
+                    { "effectName", reader.ReadAlignedAsciiString($"{fieldName}[{i}].effectName") },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.TerrainEffectData[]" },
+                { "count", count },
+                { "entries", entries },
             };
         }
 
-        private static List<OrderedDictionary> BuildPayloadRawWordNonZeroIndexes(List<OrderedDictionary> rawWords)
+        private static OrderedDictionary ReadAbilitySystemEffectMountPoint(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
         {
-            var indexes = new List<OrderedDictionary>();
-            for (var i = 0; i < rawWords.Count; i++)
-            {
-                if (rawWords[i]["value"] is int value && value != 0)
-                {
-                    indexes.Add(new OrderedDictionary
-                    {
-                        { "wordIndex", i },
-                        { "value", value },
-                        { "hex", $"0x{unchecked((uint)value):x8}" },
-                    });
-                }
-            }
-            return indexes;
+            return ReadPayloadSparseNamedEnum32(
+                reader,
+                fieldName,
+                true,
+                (0, "None"),
+                (2, "HeadBar"),
+                (4, "FootBar"),
+                (6, "LockPoint"),
+                (8, "HeadStatus"),
+                (10, "DmgTxtSpawnPoint"),
+                (2000, "HeadLabel")
+            );
+        }
+
+        private static OrderedDictionary ReadAbilitySystemWeaponMountPoint(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return ReadPayloadSparseNamedEnum32(
+                reader,
+                fieldName,
+                true,
+                (0, "Root"),
+                (2, "Muzzle"),
+                (200, "Custom0"),
+                (202, "Custom1"),
+                (204, "Custom2"),
+                (206, "Custom3")
+            );
         }
 
         private static OrderedDictionary ReadPayloadStringIntDictionary(
