@@ -11412,7 +11412,10 @@ namespace AnimeStudio.CLI
                         { "length", length },
                     };
 
-                    if (wordCount >= EnemyPartAbilityScalarWordCount
+                    if (TryReadEnemyPartAbilityDynamicScalarLayout(reader, wordCount, data))
+                    {
+                    }
+                    else if (wordCount >= EnemyPartAbilityScalarWordCount
                         && CanDecodeEnemyPartAbilityScalarTail(rawData, offset + length - (EnemyPartAbilityScalarWordCount * 4), EnemyPartAbilityScalarWordCount * 4))
                     {
                         data["partAttributesRawWords"] = ReadPayloadRawInt32Words(
@@ -11655,6 +11658,8 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.ClassName, "AdditionalBattleShapeComponentData", StringComparison.Ordinal));
         }
 
+        private const int EnemyPartAbilityPartAttributesWordCount = 187;
+        private const int EnemyPartAbilityPostDefaultRuleWordCount = 3;
         private const int EnemyPartAbilityScalarWordCount = 20;
         private const int EnemyPartAbilityPostAttributeScalarWordCount = 18;
 
@@ -12484,6 +12489,94 @@ namespace AnimeStudio.CLI
                 fields[entry.Key] = entry.Value;
             }
             return fields;
+        }
+
+        private static bool TryReadEnemyPartAbilityDynamicScalarLayout(
+            ManagedReferencePayloadReader reader,
+            int wordCount,
+            OrderedDictionary data
+        )
+        {
+            var start = reader.Position;
+            var minWordCount = EnemyPartAbilityPartAttributesWordCount
+                + 2
+                + EnemyPartAbilityPostAttributeScalarWordCount;
+            if (wordCount < minWordCount)
+            {
+                return false;
+            }
+
+            var dynamicRuleWords = wordCount - minWordCount;
+            if ((dynamicRuleWords % EnemyPartAbilityPostDefaultRuleWordCount) != 0)
+            {
+                return false;
+            }
+
+            var expectedRuleCount = dynamicRuleWords / EnemyPartAbilityPostDefaultRuleWordCount;
+            if (expectedRuleCount > 64)
+            {
+                return false;
+            }
+
+            try
+            {
+                data["layoutVariant"] = "partAttributesPostDefaultRules";
+                data["layoutNote"] = "partAttributes is preserved as the observed 187-word raw prefix; defaultEnabled, the counted post-default records, and the final scalar suffix are decoded.";
+                data["partAttributesRawWords"] = ReadPayloadRawInt32Words(
+                    reader,
+                    "partAttributesRawWords",
+                    EnemyPartAbilityPartAttributesWordCount
+                );
+
+                var fields = new OrderedDictionary
+                {
+                    { "defaultEnabled", reader.ReadBool32("defaultEnabled") },
+                };
+                var ruleCount = reader.ReadInt32("postDefaultRules.count");
+                if (ruleCount != expectedRuleCount)
+                {
+                    throw new InvalidDataException($"invalid postDefaultRules.count {ruleCount}; expected {expectedRuleCount}");
+                }
+
+                fields["postDefaultRuleCount"] = ruleCount;
+                fields["postDefaultRules"] = ReadEnemyPartAbilityPostDefaultRules(reader, ruleCount);
+                foreach (DictionaryEntry entry in ReadEnemyPartAbilityPostAttributeScalarFields(reader))
+                {
+                    fields[entry.Key] = entry.Value;
+                }
+
+                data["fields"] = fields;
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                reader.SetPosition(start);
+                data.Remove("layoutVariant");
+                data.Remove("layoutNote");
+                data.Remove("partAttributesRawWords");
+                data.Remove("fields");
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartAbilityPostDefaultRules(
+            ManagedReferencePayloadReader reader,
+            int count
+        )
+        {
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "kind", reader.ReadInt32($"postDefaultRules[{i}].kind") },
+                    { "flag", reader.ReadBool32($"postDefaultRules[{i}].flag") },
+                    { "value", reader.ReadFloat($"postDefaultRules[{i}].value") },
+                });
+            }
+
+            return values;
         }
 
         private static bool CanDecodeEnemyPartAbilityPostAttributeScalarTail(byte[] rawData, int offset, int length)
