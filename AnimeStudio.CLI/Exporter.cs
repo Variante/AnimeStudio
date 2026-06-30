@@ -13304,7 +13304,7 @@ namespace AnimeStudio.CLI
                     { "entityBlackboard", ReadAbilitySystemEntityBlackboard(local, "entityBlackboard", 64) },
                     { "bakedMeshPoints", ReadAbilitySystemBakedMeshPointsDictionary(local, "bakedMeshPoints", 64, 4096) },
                     { "bakedMeshPointBonePathList", ReadPayloadStringList(local, "bakedMeshPointBonePathList", 4096) },
-                    { "extraShapesData", ReadPayloadEmptyCountObject(local, "extraShapesData") },
+                    { "extraShapesData", ReadAbilitySystemExtraShapesDataDictionary(local, "extraShapesData", 16) },
                 };
                 reader.SetPosition(local.Position);
                 return true;
@@ -13468,9 +13468,78 @@ namespace AnimeStudio.CLI
             return new OrderedDictionary
             {
                 { "layout", "Beyond.Gameplay.Core.AbilitySystemData.BakedMeshPoint" },
-                { "battleShapePointOffset", ReadPayloadVector3(reader, $"{fieldName}.battleShapePointOffset") },
+                { "battleShapePointOffset", ReadPayloadVector3AllowNonFinite(reader, $"{fieldName}.battleShapePointOffset") },
                 { "bonePathIndex", reader.ReadInt32($"{fieldName}.bonePathIndex") },
-                { "meshPointOffset", ReadPayloadVector3(reader, $"{fieldName}.meshPointOffset") },
+                { "meshPointOffset", ReadPayloadVector3AllowNonFinite(reader, $"{fieldName}.meshPointOffset") },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemExtraShapesDataDictionary(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var keyCount = reader.ReadInt32($"{fieldName}.keys.count");
+            if (keyCount < 0 || keyCount > maxCount)
+            {
+                throw new InvalidDataException($"invalid key count {keyCount} for {fieldName}");
+            }
+
+            var keys = new List<OrderedDictionary>(keyCount);
+            for (var i = 0; i < keyCount; i++)
+            {
+                keys.Add(ReadAbilitySystemShapeMountPoint(reader, $"{fieldName}.keys[{i}]"));
+            }
+
+            var valueCount = reader.ReadInt32($"{fieldName}.values.count");
+            if (valueCount != keyCount)
+            {
+                throw new InvalidDataException($"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var value = ReadAbilitySystemBasicShapeData(reader, $"{fieldName}.values[{i}]");
+                values.Add(value);
+                entries.Add(new OrderedDictionary
+                {
+                    { "key", keys[i] },
+                    { "value", value },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "SerializeFieldDictionary<MountPoint, Beyond.Gameplay.Core.BasicShapeData>" },
+                { "keys", new OrderedDictionary
+                    {
+                        { "count", keyCount },
+                        { "entries", keys },
+                    }
+                },
+                { "values", new OrderedDictionary
+                    {
+                        { "count", valueCount },
+                        { "entries", values },
+                    }
+                },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBasicShapeData(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Gameplay.Core.BasicShapeData" },
+                { "detectedRadius", reader.ReadFloat($"{fieldName}.detectedRadius") },
+                { "detectedHeight", reader.ReadFloat($"{fieldName}.detectedHeight") },
             };
         }
         private static OrderedDictionary ReadAbilitySystemBlackboardDataPair(
@@ -14759,6 +14828,34 @@ namespace AnimeStudio.CLI
                 { "x", reader.ReadFloat($"{fieldName}.x") },
                 { "y", reader.ReadFloat($"{fieldName}.y") },
                 { "z", reader.ReadFloat($"{fieldName}.z") },
+            };
+        }
+
+
+        private static OrderedDictionary ReadPayloadVector3AllowNonFinite(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            return new OrderedDictionary
+            {
+                { "x", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.x") },
+                { "y", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.y") },
+                { "z", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.z") },
+            };
+        }
+
+        private static object ReadPayloadFloat32AllowNonFinite(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var raw = reader.ReadInt32(fieldName);
+            var value = BitConverter.Int32BitsToSingle(raw);
+            if (!float.IsNaN(value) && !float.IsInfinity(value))
+            {
+                return value;
+            }
+
+            return new OrderedDictionary
+            {
+                { "$nonFinite", float.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity" },
+                { "rawInt32", raw },
+                { "rawHex", $"0x{unchecked((uint)raw):x8}" },
             };
         }
 
