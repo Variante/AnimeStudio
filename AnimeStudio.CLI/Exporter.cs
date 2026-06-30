@@ -4397,6 +4397,17 @@ namespace AnimeStudio.CLI
                     return true;
                 }
             }
+            catch (InvalidDataException ex) when (IsCoreProjectileComponentData(header))
+            {
+                data = BuildKnownManagedReferenceDecodeFailureData(
+                    rawData,
+                    offset,
+                    length,
+                    "Beyond.Gameplay.Core.ProjectileComponentData",
+                    ex,
+                    recoveredByRid);
+                return true;
+            }
             catch (InvalidDataException)
             {
                 data = null;
@@ -4406,6 +4417,56 @@ namespace AnimeStudio.CLI
             return false;
         }
 
+        private static bool IsCoreProjectileComponentData(ManagedReferenceHeader header)
+        {
+            return header != null
+                && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "ProjectileComponentData", StringComparison.Ordinal);
+        }
+
+        private static OrderedDictionary BuildKnownManagedReferenceDecodeFailureData(
+            byte[] rawData,
+            int offset,
+            int length,
+            string layout,
+            Exception decodeException,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var data = new OrderedDictionary
+            {
+                { "$unparsed", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "layoutNote", "Known managed-reference type matched a focused decoder, but the focused layout reader rejected this payload. Heuristic hints are preserved so the failing variant can be recovered without losing the type identity." },
+                { "offset", offset },
+                { "length", length },
+                { "decodeError", $"{decodeException.GetType().Name}: {decodeException.Message}" },
+            };
+
+            var stringHintBudget = 64;
+            var stringHints = CollectAlignedStringHints(rawData, offset, length, ref stringHintBudget);
+            if (stringHints.Count > 0)
+            {
+                data["heuristicStringHints"] = stringHints;
+            }
+
+            var ridLinkBudget = 64;
+            var ridLinks = CollectHeuristicRidLinks(rawData, offset, length, recoveredByRid, ref ridLinkBudget);
+            if (ridLinks.Count > 0)
+            {
+                data["heuristicRidLinks"] = ridLinks;
+            }
+
+            var rawWordHints = CollectHeuristicRawWordHints(rawData, offset, length, maxCount: 64);
+            if (rawWordHints.Count > 0)
+            {
+                data["heuristicRawWordHints"] = rawWordHints;
+            }
+
+            return data;
+        }
         private static bool TryDecodeProjectileComponentData(
             ManagedReferenceHeader header,
             ManagedReferencePayloadReader reader,
@@ -4525,39 +4586,146 @@ namespace AnimeStudio.CLI
                 { "$partial", true },
                 { "relativeOffset", start },
                 { "moveModeDict", ReadProjectileMoveModeDictDiagnostic(reader, $"{fieldName}.moveModeDict") },
-                { "mainEffectFinishType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.mainEffectFinishType", "Beyond.Gameplay.ProjectileMainEffectFinishType") },
-                { "mainEffectFinishDistance", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.mainEffectFinishDistance") },
-                { "remainingMetadataFieldOrder", new[]
-                    {
-                        "mainEffects",
-                        "launchEffects",
-                        "showReachEffectOnlyWithTarget",
-                        "reachEffects",
-                        "hitEffects",
-                        "blockEffects",
-                        "showFinishEffectOnlyWhenUnblockAndNotHit",
-                        "finishEffects",
-                        "showAlertEffect",
-                        "alertEffect",
-                        "launchSound",
-                        "loopSound",
-                        "reachSound",
-                        "hitSound",
-                        "blockSound",
-                        "finishedSound",
-                        "sizzleSound",
-                        "sizzleSoundTriggerDistance",
-                        "ringProjectileSoundSmoothFactor",
-                    }
-                },
-                { "structuredRemainingTail", ReadProjectileComponentRemainingTailDiagnostic(reader.RawData, reader.Position, reader.Remaining, $"{fieldName}.structuredRemainingTail") },
-                { "remainingRawWords", ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192) },
-                { "layoutNote", "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, mainEffect finish fields, and guarded end-relative showAlertEffect/alertEffect view are decoded from current samples; effect-list assignment and separate audio/sound field bytes remain raw until validated." },
             };
+
+            ReadProjectileMainEffectFinishDiagnostics(reader, fieldName, data);
+            data["remainingMetadataFieldOrder"] = new[]
+            {
+                "mainEffects",
+                "launchEffects",
+                "showReachEffectOnlyWithTarget",
+                "reachEffects",
+                "hitEffects",
+                "blockEffects",
+                "showFinishEffectOnlyWhenUnblockAndNotHit",
+                "finishEffects",
+                "showAlertEffect",
+                "alertEffect",
+                "launchSound",
+                "loopSound",
+                "reachSound",
+                "hitSound",
+                "blockSound",
+                "finishedSound",
+                "sizzleSound",
+                "sizzleSoundTriggerDistance",
+                "ringProjectileSoundSmoothFactor",
+            };
+            data["structuredRemainingTail"] = ReadProjectileComponentRemainingTailDiagnostic(reader.RawData, reader.Position, reader.Remaining, $"{fieldName}.structuredRemainingTail");
+            data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192);
+            data["layoutNote"] = "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, guarded mainEffect finish fields, and guarded end-relative showAlertEffect/alertEffect view are decoded from current samples; effect-list assignment and separate audio/sound field bytes remain raw until validated.";
             data["length"] = reader.Position - start;
             return data;
         }
 
+        private static void ReadProjectileMainEffectFinishDiagnostics(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            OrderedDictionary data
+        )
+        {
+            var start = reader.Position;
+            if (TryReadProjectileMainEffectFinishWithType(reader, fieldName, out var finishType, out var finishDistance))
+            {
+                data["mainEffectFinishTypeSerialized"] = true;
+                data["mainEffectFinishType"] = finishType;
+                data["mainEffectFinishDistance"] = finishDistance;
+                return;
+            }
+
+            reader.SetPosition(start);
+            if (TryReadProjectileMainEffectFinishDistanceOnly(reader, fieldName, out finishDistance))
+            {
+                data["mainEffectFinishTypeSerialized"] = false;
+                data["mainEffectFinishType"] = new OrderedDictionary
+                {
+                    { "$omitted", true },
+                    { "enumType", "Beyond.Gameplay.ProjectileMainEffectFinishType" },
+                    { "layoutNote", "This payload starts mainEffectFinishDistance immediately after moveModeDict; the metadata-listed mainEffectFinishType word is not serialized in this observed variant." },
+                };
+                data["mainEffectFinishDistance"] = finishDistance;
+                return;
+            }
+
+            reader.SetPosition(start);
+            data["mainEffectFinishTypeSerialized"] = null;
+            data["mainEffectFinishType"] = new OrderedDictionary
+            {
+                { "$unparsed", true },
+                { "relativeOffset", start },
+                { "enumType", "Beyond.Gameplay.ProjectileMainEffectFinishType" },
+                { "layoutNote", "Neither the metadata-listed mainEffectFinishType + BlackboardDouble pair nor the observed distance-only variant could be validated; the remaining tail is preserved raw from this offset." },
+            };
+        }
+
+        private static bool TryReadProjectileMainEffectFinishWithType(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary finishType,
+            out OrderedDictionary finishDistance
+        )
+        {
+            finishType = null;
+            finishDistance = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var value = local.ReadInt32($"{fieldName}.mainEffectFinishType");
+                if (value < 0 || value > 2)
+                {
+                    throw new InvalidDataException($"invalid ProjectileMainEffectFinishType {value}");
+                }
+
+                finishDistance = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.mainEffectFinishDistance");
+                finishType = BuildProjectileMainEffectFinishType(value);
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static bool TryReadProjectileMainEffectFinishDistanceOnly(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary finishDistance
+        )
+        {
+            finishDistance = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                finishDistance = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.mainEffectFinishDistance");
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+        }
+
+        private static OrderedDictionary BuildProjectileMainEffectFinishType(int value)
+        {
+            var data = BuildPayloadHash32(value);
+            data["enumType"] = "Beyond.Gameplay.ProjectileMainEffectFinishType";
+            data["layoutNote"] = "Enum field type is known from IL2CPP metadata; observed constants are Default=0, ByTargetPosition=1, ByMaxDistance=2.";
+            switch (value)
+            {
+                case 0:
+                    data["name"] = "Default";
+                    break;
+                case 1:
+                    data["name"] = "ByTargetPosition";
+                    break;
+                case 2:
+                    data["name"] = "ByMaxDistance";
+                    break;
+            }
+            return data;
+        }
         private static OrderedDictionary ReadProjectileComponentRemainingTailDiagnostic(
             byte[] rawData,
             int offset,
@@ -12186,18 +12354,41 @@ namespace AnimeStudio.CLI
             string fieldName
         )
         {
-            var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", 3);
-            var rawValue = rawWords[1]["value"] is int word ? word : 0;
-            var value = BitConverter.Int32BitsToSingle(rawValue);
-            return new OrderedDictionary
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
             {
-                { "layout", "Beyond.Blackboard.BlackboardDouble" },
-                { "layoutNote", "serialized as three int32 words in AbilitySystemData ShapeData; middle word is exposed as a float candidate" },
-                { "rawWords", rawWords },
-                { "valueFloatCandidate", value },
-            };
+                var useBlackboardKey = local.ReadBool32($"{fieldName}.useBlackboardKey");
+                var value = local.ReadFloat($"{fieldName}.value");
+                var blackboardKey = local.ReadAlignedAsciiString($"{fieldName}.blackboardKey");
+                reader.SetPosition(local.Position);
+                return new OrderedDictionary
+                {
+                    { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                    { "serializationShape", "bool-float-key" },
+                    { "layoutNote", "IL2CPP metadata-backed shape: bool32 useBlackboardKey, float32 value, aligned blackboardKey string. Empty keys serialize as a three-word wrapper." },
+                    { "useBlackboardKey", useBlackboardKey },
+                    { "value", value },
+                    { "blackboardKey", blackboardKey },
+                    { "valueFloatCandidate", value },
+                };
+            }
+            catch (InvalidDataException)
+            {
+                reader.SetPosition(start);
+                var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", 3);
+                var rawValue = rawWords[1]["value"] is int word ? word : 0;
+                var value = BitConverter.Int32BitsToSingle(rawValue);
+                return new OrderedDictionary
+                {
+                    { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                    { "serializationShape", "raw-three-word" },
+                    { "layoutNote", "Fallback wrapper observed inside ProjectileComponentData MoveModeData records: three int32 words, with the middle word exposed as a float candidate. The metadata-backed bool-float-key shape did not validate at this offset." },
+                    { "rawWords", rawWords },
+                    { "valueFloatCandidate", value },
+                };
+            }
         }
-
         private static OrderedDictionary ReadAbilitySystemBlackboardInt(
             ManagedReferencePayloadReader reader,
             string fieldName
