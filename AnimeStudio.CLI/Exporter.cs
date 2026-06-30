@@ -1205,12 +1205,23 @@ namespace AnimeStudio.CLI
 
         private static bool IsKnownRawPayloadMergeCandidate(OrderedDictionary entry)
         {
-            return TryGetManagedReferenceTypeStrings(entry, out var className, out var namespaceName, out var assemblyName)
-                && string.Equals(assemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
-                && string.Equals(namespaceName, "Beyond.Gameplay", StringComparison.Ordinal)
+            if (!TryGetManagedReferenceTypeStrings(entry, out var className, out var namespaceName, out var assemblyName)
+                || !string.Equals(assemblyName, "Gameplay.Beyond", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (string.Equals(namespaceName, "Beyond.Gameplay", StringComparison.Ordinal)
                 && (string.Equals(className, "PlaySound", StringComparison.Ordinal)
                     || string.Equals(className, "PlaySingleSound", StringComparison.Ordinal)
-                    || string.Equals(className, "PlaySoundByParticleCount", StringComparison.Ordinal));
+                    || string.Equals(className, "PlaySoundByParticleCount", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            return string.Equals(namespaceName, "Beyond.Gameplay", StringComparison.Ordinal)
+                || string.Equals(namespaceName, "Beyond.Gameplay.Conditions", StringComparison.Ordinal)
+                || string.Equals(namespaceName, "Beyond.Gameplay.Actions", StringComparison.Ordinal);
         }
 
         private static bool ManagedReferenceTypesEqual(OrderedDictionary left, OrderedDictionary right)
@@ -4221,10 +4232,16 @@ namespace AnimeStudio.CLI
                 }
 
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
-                data = null;
-                return false;
+                data = BuildKnownManagedReferenceDecodeFailureData(
+                    rawData,
+                    offset,
+                    length,
+                    $"{header.Namespace}.{header.ClassName}",
+                    ex,
+                    recoveredByRid);
+                return true;
             }
 
             return false;
