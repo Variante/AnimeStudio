@@ -14022,13 +14022,32 @@ namespace AnimeStudio.CLI
             out OrderedDictionary data
         )
         {
+            if (TryReadAbilitySystemPostCameraFieldsWithoutOverride(reader, out data))
+            {
+                return true;
+            }
+
+            if (TryReadAbilitySystemPostCameraFieldsWithOverrideDeadEffect(reader, out data))
+            {
+                return true;
+            }
+
+            data = null;
+            return false;
+        }
+
+        private static bool TryReadAbilitySystemPostCameraFieldsWithoutOverride(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
             data = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
                 data = new OrderedDictionary
                 {
-                    { "layoutNote", "IL2CPP metadata lists overrideDeadEffect before deadEffect, but focused Unity payloads start directly with deadEffect; overrideDeadEffect is not emitted here until a validated payload variant proves it." },
+                    { "layoutNote", "IL2CPP metadata lists overrideDeadEffect before deadEffect, but most focused Unity payloads start directly with deadEffect." },
                     { "deadEffect", ReadAbilitySystemEffectActionCfg(local, "deadEffect") },
                     { "effectScale", local.ReadFloat("effectScale") },
                     { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
@@ -14045,6 +14064,93 @@ namespace AnimeStudio.CLI
                 data = null;
                 return false;
             }
+        }
+
+        private static bool TryReadAbilitySystemPostCameraFieldsWithOverrideDeadEffect(
+            ManagedReferencePayloadReader reader,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                data = new OrderedDictionary
+                {
+                    { "layoutNote", "Validated AbilitySystemData post-camera variant serializes overrideDeadEffect before deadEffect; the deadEffect body uses the 104-word post-name EffectActionCfg shape that omits useScaleBB and centerOffset." },
+                    { "overrideDeadEffect", local.ReadBool32("overrideDeadEffect") },
+                    { "deadEffect", ReadAbilitySystemEffectActionCfgOmitScaleFlagBody(local, "deadEffect") },
+                    { "effectScale", local.ReadFloat("effectScale") },
+                    { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
+                    { "hitFlashAsset", local.ReadAlignedAsciiString("hitFlashAsset") },
+                    { "healthType", ReadPayloadSparseNamedEnum32(local, "healthType", false, (0, "Normal"), (2, "Independent")) },
+                    { "preloadAbilityEntities", ReadPayloadStringIntDictionary(local, "preloadAbilityEntities", 8) },
+                    { "maxPotentialEffectBuffId", local.ReadAlignedAsciiString("maxPotentialEffectBuffId") },
+                };
+                local.EnsureComplete();
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilitySystemEffectActionCfgOmitScaleFlagBody(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            const int postNameWordCount = 104;
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.EffectActionCfg" },
+                { "layoutVariant", "omitUseScaleBBPostName104" },
+                { "layoutNote", "AbilitySystemData deadEffect variant: fxType/effectName followed by the 104-word post-name EffectActionCfg body seen in projectile alert effects; useScaleBB and centerOffset are not serialized in this body." },
+                { "observedPayloadStatus", "fixed 104-word post-name AbilitySystemData deadEffect variant consumed by this reader" },
+                { "partialReasons", new List<string>
+                    {
+                        "BlackboardDouble internals remain emitted as raw 3-word wrappers.",
+                        "IL2CPP metadata lists useScaleBB and centerOffset, but this focused AbilitySystemData deadEffect payload omits both fields.",
+                    }
+                },
+                { "omittedSerializedFields", new List<string> { "useScaleBB", "centerOffset" } },
+                { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
+                { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
+            };
+
+            if (reader.Remaining < postNameWordCount * 4)
+            {
+                throw new InvalidDataException($"not enough bytes for {fieldName} post-name EffectActionCfg body");
+            }
+
+            var postNameReader = new ManagedReferencePayloadReader(reader.RawData, reader.Position, postNameWordCount * 4);
+            if (!TryReadProjectileAlertEffectActionCfgPrefix(postNameReader, fieldName, out var prefix))
+            {
+                throw new InvalidDataException($"{fieldName} post-name prefix does not match the 24+80 word omit-useScaleBB shape");
+            }
+
+            data["prefixStatus"] = "decoded 24-word omit-useScaleBB prefix";
+            data["prefixWordCount"] = prefix.WordCount;
+            foreach (DictionaryEntry entry in prefix.Fields)
+            {
+                data[entry.Key] = entry.Value;
+            }
+
+            data["effectActionTailStatus"] = "decoded 80-word post-prefix EffectActionCfg tail";
+            var tail = ReadProjectileAlertEffectActionCfgTail(postNameReader, $"{fieldName}.effectActionTail");
+            tail["layout"] = "Beyond.Gameplay.EffectActionCfg/OmitUseScaleBBTail";
+            tail["layoutNote"] = "80-word tail after AbilitySystemData deadEffect.effectPosData; field order matches the proven EffectActionCfg tail while useScaleBB and centerOffset are omitted from the enclosing body.";
+            data["effectActionTail"] = tail;
+            postNameReader.EnsureComplete();
+            reader.SetPosition(postNameReader.Position);
+            data["serializedWordCount"] = (reader.Position - start) / 4;
+            return data;
         }
 
         private static OrderedDictionary ReadAbilitySystemEffectActionCfg(
