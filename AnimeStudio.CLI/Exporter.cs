@@ -4883,7 +4883,7 @@ namespace AnimeStudio.CLI
                 { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/RemainingTail" },
                 { "relativeOffset", offset },
                 { "wordCount", length / 4 },
-                { "layoutNote", "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix is still raw effect-list data; the stable suffix is showAlertEffect plus a projectile EffectActionCfg variant that consumes through the observed tail end." },
+                { "layoutNote", "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix is still raw effect-list data; the stable suffix is showAlertEffect, a projectile EffectActionCfg variant, and a 9-word projectile sound tail." },
             };
 
             if ((length % 4) != 0 || length < 116 * 4)
@@ -4908,6 +4908,7 @@ namespace AnimeStudio.CLI
                 data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(prefixReader, $"{fieldName}.effectListAndFinishPrefixRawWords", suffix.PrefixWordCount);
                 data["showAlertEffect"] = suffix.ShowAlertEffect;
                 data["alertEffect"] = suffix.AlertEffect;
+                data["postAlertEffectSoundTail"] = suffix.PostAlertEffectSoundTail;
                 data["alertEffectSuffixWordCount"] = suffix.SuffixWordCount;
                 data["alertEffectCandidateCount"] = suffix.CandidateCount;
                 data["structuredDecodeStatus"] = "decoded";
@@ -4931,6 +4932,7 @@ namespace AnimeStudio.CLI
             public int CandidateCount { get; set; }
             public bool ShowAlertEffect { get; set; }
             public OrderedDictionary AlertEffect { get; set; }
+            public OrderedDictionary PostAlertEffectSoundTail { get; set; }
         }
 
         private static ProjectileAlertEffectSuffix FindProjectileAlertEffectSuffix(
@@ -4952,15 +4954,29 @@ namespace AnimeStudio.CLI
                         offset + prefixWords * 4,
                         length - prefixWords * 4
                     );
+                    var suffixWords = totalWords - prefixWords;
+                    if (suffixWords < 13)
+                    {
+                        continue;
+                    }
+
                     var showAlertEffect = local.ReadBool32($"{fieldName}.showAlertEffect");
-                    var alertEffect = ReadProjectileAlertEffectActionCfgDiagnostic(local, $"{fieldName}.alertEffect");
+                    var alertEffectWords = suffixWords - 1 - 9;
+                    var alertEffectReader = new ManagedReferencePayloadReader(
+                        rawData,
+                        local.Position,
+                        alertEffectWords * 4
+                    );
+                    var alertEffect = ReadProjectileAlertEffectActionCfgDiagnostic(alertEffectReader, $"{fieldName}.alertEffect");
+                    alertEffectReader.EnsureComplete();
+                    local.SetPosition(alertEffectReader.Position);
+                    var postAlertEffectSoundTail = ReadProjectilePostAlertEffectSoundTail(local, $"{fieldName}.postAlertEffectSoundTail");
                     local.EnsureComplete();
                     if (!TryReadPayloadInt64(alertEffect, "fxType", "value", out var fxType) || fxType != 1)
                     {
                         continue;
                     }
 
-                    var suffixWords = totalWords - prefixWords;
                     var effectName = alertEffect.Contains("effectName") ? alertEffect["effectName"] as string : null;
                     if (!IsObservedProjectileAlertEffectSuffix(suffixWords, effectName))
                     {
@@ -4974,6 +4990,7 @@ namespace AnimeStudio.CLI
                         SuffixWordCount = suffixWords,
                         ShowAlertEffect = showAlertEffect,
                         AlertEffect = alertEffect,
+                        PostAlertEffectSoundTail = postAlertEffectSoundTail,
                     };
                 }
                 catch (InvalidDataException)
@@ -5025,6 +5042,117 @@ namespace AnimeStudio.CLI
             return TryConvertToInt64(child[valueKey], out value);
         }
 
+        private static OrderedDictionary ReadProjectilePostAlertEffectSoundTail(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/PostAlertEffectSoundTail" },
+                { "layoutNote", "Final 9 words after projectile alertEffect. Seven hash-like sound fields are named from ProjectileComponentData metadata; the last two words are float distances/factors proven by the 300-projectile focused slice." },
+                { "launchSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.launchSound")) },
+                { "loopSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.loopSound")) },
+                { "reachSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.reachSound")) },
+                { "hitSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.hitSound")) },
+                { "blockSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.blockSound")) },
+                { "finishedSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.finishedSound")) },
+                { "sizzleSound", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.sizzleSound")) },
+                { "sizzleSoundTriggerDistance", reader.ReadFloat($"{fieldName}.sizzleSoundTriggerDistance") },
+                { "ringProjectileSoundSmoothFactor", reader.ReadFloat($"{fieldName}.ringProjectileSoundSmoothFactor") },
+            };
+            var wordCount = (reader.Position - start) / 4;
+            if (wordCount != 9)
+            {
+                throw new InvalidDataException($"projectile post-alert sound tail consumed {wordCount} words instead of 9");
+            }
+            data["serializedWordCount"] = wordCount;
+            return data;
+        }
+
+        private static OrderedDictionary ReadProjectileAlertEffectActionCfgTail(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.EffectActionCfg/ProjectileAlertTail" },
+                { "layoutNote", "80-word tail after projectile alertEffect.effectPosData. Field order follows the proven AbilitySystem EffectActionCfg tail while omitting centerOffset, matching all 300 focused projectile samples." },
+                { "isShowInDialog", reader.ReadBool32($"{fieldName}.isShowInDialog") },
+                { "isLimitEffectCount", reader.ReadBool32($"{fieldName}.isLimitEffectCount") },
+                { "limitCount", reader.ReadInt32($"{fieldName}.limitCount") },
+                { "protectTime", reader.ReadFloat($"{fieldName}.protectTime") },
+                { "limitTime", reader.ReadFloat($"{fieldName}.limitTime") },
+                { "limitKey", reader.ReadAlignedAsciiString($"{fieldName}.limitKey") },
+                { "assetOnlyAffectModelRoot", reader.ReadBool32($"{fieldName}.assetOnlyAffectModelRoot") },
+                { "isUltimateShow", reader.ReadBool32($"{fieldName}.isUltimateShow") },
+                { "visibleWithEntity", reader.ReadBool32($"{fieldName}.visibleWithEntity") },
+                { "visibleWithEntityType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.visibleWithEntityType", true, (0, "Source"), (2, "Target")) },
+                { "moveType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.moveType", true, (0, "Stationary"), (2, "FollowTarget"), (4, "FollowCamera"), (6, "FollowSlot")) },
+                { "positionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.positionRef", true, (0, "Target"), (2, "Source")) },
+                { "grounded", reader.ReadBool32($"{fieldName}.grounded") },
+                { "followGrounded", reader.ReadBool32($"{fieldName}.followGrounded") },
+                { "followGroundedMaxDistance", reader.ReadFloat($"{fieldName}.followGroundedMaxDistance") },
+                { "followHideTarget", reader.ReadBool32($"{fieldName}.followHideTarget") },
+                { "visibleWhenHideTarget", reader.ReadBool32($"{fieldName}.visibleWhenHideTarget") },
+                { "slotIndex", reader.ReadInt32($"{fieldName}.slotIndex") },
+                { "useWeaponMountPoint", reader.ReadBool32($"{fieldName}.useWeaponMountPoint") },
+                { "mountPoint", ReadAbilitySystemEffectMountPoint(reader, $"{fieldName}.mountPoint") },
+                { "useAccurateMp", reader.ReadBool32($"{fieldName}.useAccurateMp") },
+                { "isClothMountPoint", reader.ReadBool32($"{fieldName}.isClothMountPoint") },
+                { "weaponIndex", reader.ReadInt32($"{fieldName}.weaponIndex") },
+                { "weaponMountPoint", ReadAbilitySystemWeaponMountPoint(reader, $"{fieldName}.weaponMountPoint") },
+                { "showHideWithWeapon", reader.ReadBool32($"{fieldName}.showHideWithWeapon") },
+                { "offsetDir", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.offsetDir", true, (0, "Self"), (2, "Source"), (4, "Target"), (6, "SelfToSource"), (8, "SelfToTarget"), (10, "SourceToTarget"), (12, "Camera")) },
+                { "offsetDirRevert", reader.ReadBool32($"{fieldName}.offsetDirRevert") },
+                { "usePositionOffsetBB", reader.ReadBool32($"{fieldName}.usePositionOffsetBB") },
+                { "positionOffset", ReadPayloadVector3(reader, $"{fieldName}.positionOffset") },
+                { "positionOffsetBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.positionOffsetBB") },
+                { "useTargetRotation", reader.ReadBool32($"{fieldName}.useTargetRotation") },
+                { "scaleWithTargetSize", reader.ReadBool32($"{fieldName}.scaleWithTargetSize") },
+                { "fxSize", reader.ReadFloat($"{fieldName}.fxSize") },
+                { "unpackPosDelayFrame", reader.ReadInt32($"{fieldName}.unpackPosDelayFrame") },
+                { "unpackFollowTargetOnRelease", reader.ReadBool32($"{fieldName}.unpackFollowTargetOnRelease") },
+                { "rotType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.rotType", true, (0, "Stationary"), (2, "FollowTarget")) },
+                { "rotRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.rotRef", true, (0, "Target"), (2, "Source")) },
+                { "directionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.directionRef", true, (1, "None"), (0, "Target"), (2, "Source"), (4, "SourceToTarget"), (6, "TargetToSource"), (8, "CurrentPosToTarget"), (10, "CurrentPosToInputTarget"), (12, "CurPosToCamera"), (14, "CameraForward")) },
+                { "rotUseWeaponMountPoint", reader.ReadBool32($"{fieldName}.rotUseWeaponMountPoint") },
+                { "rotMountPoint", ReadAbilitySystemEffectMountPoint(reader, $"{fieldName}.rotMountPoint") },
+                { "rotWeaponIndex", reader.ReadInt32($"{fieldName}.rotWeaponIndex") },
+                { "rotWeaponMountPoint", ReadAbilitySystemWeaponMountPoint(reader, $"{fieldName}.rotWeaponMountPoint") },
+                { "revertDir", reader.ReadBool32($"{fieldName}.revertDir") },
+                { "useSelfRotationBB", reader.ReadBool32($"{fieldName}.useSelfRotationBB") },
+                { "selfRotation", ReadPayloadVector3(reader, $"{fieldName}.selfRotation") },
+                { "selfRotationBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.selfRotationBB") },
+                { "lockYRotation", reader.ReadBool32($"{fieldName}.lockYRotation") },
+                { "unpackRotDelayFrame", reader.ReadInt32($"{fieldName}.unpackRotDelayFrame") },
+                { "unpackFollowTargetRotOnRelease", reader.ReadBool32($"{fieldName}.unpackFollowTargetRotOnRelease") },
+                { "weaponVfxKey", reader.ReadAlignedAsciiString($"{fieldName}.weaponVfxKey") },
+                { "weaponVfxIndex", reader.ReadInt32($"{fieldName}.weaponVfxIndex") },
+                { "weaponVfxPersistent", reader.ReadBool32($"{fieldName}.weaponVfxPersistent") },
+                { "alertType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.alertType", true, (0, "Decal"), (2, "Particle")) },
+                { "animateAlert", reader.ReadBool32($"{fieldName}.animateAlert") },
+                { "alertAnimateDuration", reader.ReadFloat($"{fieldName}.alertAnimateDuration") },
+                { "isAlertAnimateReverse", reader.ReadBool32($"{fieldName}.isAlertAnimateReverse") },
+                { "angle", reader.ReadFloat($"{fieldName}.angle") },
+                { "hollow", reader.ReadFloat($"{fieldName}.hollow") },
+                { "modifyType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.modifyType", true, (0, "StartLifeTime")) },
+                { "value", reader.ReadFloat($"{fieldName}.value") },
+            };
+            var wordCount = (reader.Position - start) / 4;
+            if (wordCount != 80)
+            {
+                throw new InvalidDataException($"projectile alertEffect tail consumed {wordCount} words instead of 80");
+            }
+            data["serializedWordCount"] = wordCount;
+            return data;
+        }
         private static OrderedDictionary ReadProjectileAlertEffectActionCfgDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
@@ -5037,29 +5165,31 @@ namespace AnimeStudio.CLI
                 { "$inferred", true },
                 { "layout", "Beyond.Gameplay.EffectActionCfg" },
                 { "relativeOffset", start },
-                { "layoutNote", "Projectile alertEffect is bounded as an end-relative EffectActionCfg variant. The 24-word prefix after effectName is decoded only for the byte-proven 113-word post-name shape; the remaining EffectActionCfg words are preserved raw because later variant fields are not fully proven." },
+                { "layoutNote", "Projectile alertEffect is bounded as an end-relative EffectActionCfg variant. The 24-word prefix after effectName and the following 80-word EffectActionCfg tail are decoded only for the byte-proven 104-word post-name shape." },
                 { "observedPayloadStatus", "projectile alertEffect suffix consumes through the observed ProjectileComponentData tail end" },
                 { "partialReasons", new List<string>
                     {
                         "Projectile alertEffect inner field variants differ from the focused AbilitySystemData deadEffect variant.",
-                        "The 300-sample projectile slice proves fxType, effectName, and the first 24 post-name words; later EffectActionCfg fields remain raw.",
-                        "ProjectileComponentData audio/sound metadata fields are not byte-proven as a separate suffix in the 300-sample projectile slice.",
+                        "The 300-sample projectile slice proves fxType, effectName, the 24-word post-name prefix, and the 80-word EffectActionCfg tail.",
+                        "BlackboardDouble internals and sound hash semantics remain diagnostic rather than fully named.",
                     }
                 },
                 { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (1, "Alert"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
                 { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
             };
 
-            if (reader.Remaining == 113 * 4
+            if (reader.Remaining == 104 * 4
                 && TryReadProjectileAlertEffectActionCfgPrefix(reader, fieldName, out var prefix))
             {
                 data["projectilePrefixStatus"] = "decoded 24-word projectile alertEffect prefix";
                 data["projectilePrefixWordCount"] = prefix.WordCount;
-                data["omittedSerializedFields"] = new List<string> { "useScaleBB" };
+                data["omittedSerializedFields"] = new List<string> { "useScaleBB", "centerOffset" };
                 foreach (DictionaryEntry entry in prefix.Fields)
                 {
                     data[entry.Key] = entry.Value;
                 }
+                data["projectileEffectActionTailStatus"] = "decoded 80-word projectile alertEffect tail";
+                data["effectActionTail"] = ReadProjectileAlertEffectActionCfgTail(reader, $"{fieldName}.effectActionTail");
             }
             else
             {
@@ -5067,7 +5197,10 @@ namespace AnimeStudio.CLI
             }
 
             data["remainingRawWordCount"] = reader.Remaining / 4;
-            data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", reader.Remaining / 4);
+            if (reader.Remaining > 0)
+            {
+                data["remainingRawWords"] = ReadPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", reader.Remaining / 4);
+            }
             data["serializedWordCount"] = (reader.Position - start) / 4;
             return data;
         }
@@ -5106,7 +5239,7 @@ namespace AnimeStudio.CLI
                     { "effectPosData", ReadAbilitySystemTerrainEffectDataArray(local, $"{fieldName}.effectPosData") },
                 };
                 var wordCount = (local.Position - start) / 4;
-                if (wordCount != 24 || local.Remaining != 89 * 4)
+                if (wordCount != 24 || local.Remaining != 80 * 4)
                 {
                     throw new InvalidDataException($"projectile alertEffect prefix consumed {wordCount} words with {local.Remaining / 4} words remaining");
                 }
