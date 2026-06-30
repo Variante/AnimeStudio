@@ -4256,6 +4256,11 @@ namespace AnimeStudio.CLI
                 }
 
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (TryDecodeProjectileComponentData(header, reader, offset, length, out data))
+                {
+                    return true;
+                }
+
                 if (TryDecodeCoreActionConditionManagedReferenceData(
                     header,
                     reader,
@@ -4317,6 +4322,157 @@ namespace AnimeStudio.CLI
             return false;
         }
 
+        private static bool TryDecodeProjectileComponentData(
+            ManagedReferenceHeader header,
+            ManagedReferencePayloadReader reader,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "ProjectileComponentData", StringComparison.Ordinal)
+                || length < 256)
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData" },
+                { "offset", offset },
+                { "length", length },
+                { "id", reader.ReadAlignedAsciiString("projectileComponent.id") },
+                { "finishDuration", ReadAbilitySystemBlackboardDouble(reader, "projectileComponent.finishDuration") },
+                { "finishDistance", ReadAbilitySystemBlackboardDouble(reader, "projectileComponent.finishDistance") },
+                { "finishOnReach", reader.ReadBool32("projectileComponent.finishOnReach") },
+                { "hitOnReach", reader.ReadBool32("projectileComponent.hitOnReach") },
+                { "colliderShapeData", ReadProjectileShapeData(reader, "projectileComponent.colliderShapeData") },
+                { "blockLayerDef", ReadPayloadSparseNamedEnum32(reader, "projectileComponent.blockLayerDef", true, (0, "Custom"), (1, "Nothing"), (2, "WallAndGround")) },
+                { "blockLayer", BuildPayloadHash32(reader.ReadInt32("projectileComponent.blockLayer")) },
+                { "targetFilter", ReadProjectileTargetFilter(reader, "projectileComponent.targetFilter") },
+                { "ignoreImmuneLevel", ReadPayloadSparseNamedEnum32(reader, "projectileComponent.ignoreImmuneLevel", true, (0, "Default"), (1, "IgnoreDashImmune")) },
+                { "maxHitCount", ReadAbilitySystemBlackboardInt(reader, "projectileComponent.maxHitCount") },
+                { "allowHitSameTarget", reader.ReadBool32("projectileComponent.allowHitSameTarget") },
+                { "hitIntervalPerTarget", reader.ReadFloat("projectileComponent.hitIntervalPerTarget") },
+                { "keepMoveOnReach", reader.ReadBool32("projectileComponent.keepMoveOnReach") },
+                { "presetPointKeys", ReadPayloadStringList(reader, "projectileComponent.presetPointKeys", 64) },
+                { "useSegmentMove", reader.ReadBool32("projectileComponent.useSegmentMove") },
+                { "moveSegments", ReadPayloadObjectList(reader, "projectileComponent.moveSegments", 64, ReadProjectileMoveSegment) },
+                { "tail", ReadProjectileComponentTailDiagnostic(reader, "projectileComponent.tail") },
+            };
+            data["layoutNote"] = "Installed IL2CPP metadata supplies ProjectileComponentData field order. The prefix through moveSegments is decoded from current byte evidence; moveModeDict, effect lists, sound fields, and final scalar fields remain raw metadata-ordered tail diagnostics until their nested collection shapes are proven across broader samples.";
+            reader.EnsureComplete();
+            return true;
+        }
+
+        private static OrderedDictionary ReadProjectileShapeData(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/ShapeData" },
+                { "shapeType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.shapeType", true, (0, "None"), (1, "Sphere"), (2, "Box"), (3, "Ring")) },
+                { "radius", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.radius") },
+                { "center", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.center") },
+                { "extent", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.extent") },
+                { "initOuterRadius", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.initOuterRadius") },
+                { "initInnerRadius", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.initInnerRadius") },
+                { "outerRadiusIncreaseSpeed", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.outerRadiusIncreaseSpeed") },
+                { "innerRadiusIncreaseSpeed", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.innerRadiusIncreaseSpeed") },
+                { "height", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.height") },
+                { "isSector", reader.ReadBool32($"{fieldName}.isSector") },
+                { "sectorDirection", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.sectorDirection", true, (0, "SelfForward"), (1, "StartPosToTarget"), (2, "SelfToTarget")) },
+                { "sectorAngle", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.sectorAngle") },
+            };
+        }
+
+        private static OrderedDictionary ReadProjectileTargetFilter(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", "Beyond.Gameplay.Core.TargetFilter" },
+                { "checkAlive", reader.ReadBool32($"{fieldName}.checkAlive") },
+                { "autoSetTargetFaction", reader.ReadBool32($"{fieldName}.autoSetTargetFaction") },
+                { "factionTarget", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.factionTarget")) },
+                { "targetFactionType", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.targetFactionType")) },
+                { "filterSlot", reader.ReadBool32($"{fieldName}.filterSlot") },
+                { "slotIndex", reader.ReadInt32($"{fieldName}.slotIndex") },
+                { "filterGameplayTag", reader.ReadBool32($"{fieldName}.filterGameplayTag") },
+                { "tagQuery", ReadPayloadGameplayTagQueryWithZeroPadding(reader, $"{fieldName}.tagQuery", 32, 256) },
+            };
+        }
+
+        private static OrderedDictionary ReadProjectileMoveSegment(
+            ManagedReferencePayloadReader reader)
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveSegment" },
+                { "startPointKey", reader.ReadAlignedAsciiString("projectileComponent.moveSegments.startPointKey") },
+                { "moveModeId", reader.ReadAlignedAsciiString("projectileComponent.moveSegments.moveModeId") },
+                { "endPointKey", reader.ReadAlignedAsciiString("projectileComponent.moveSegments.endPointKey") },
+                { "earlyNextByDuration", reader.ReadBool32("projectileComponent.moveSegments.earlyNextByDuration") },
+                { "segmentDuration", ReadAbilitySystemBlackboardDouble(reader, "projectileComponent.moveSegments.segmentDuration") },
+                { "speedLerpTime", ReadAbilitySystemBlackboardDouble(reader, "projectileComponent.moveSegments.speedLerpTime") },
+            };
+        }
+
+        private static OrderedDictionary ReadProjectileComponentTailDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var rawWordCount = reader.Remaining / 4;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "relativeOffset", start },
+                { "metadataFieldOrder", new[]
+                    {
+                        "moveModeDict",
+                        "mainEffectFinishType",
+                        "mainEffectFinishDistance",
+                        "mainEffects",
+                        "launchEffects",
+                        "showReachEffectOnlyWithTarget",
+                        "reachEffects",
+                        "hitEffects",
+                        "blockEffects",
+                        "showFinishEffectOnlyWhenUnblockAndNotHit",
+                        "finishEffects",
+                        "showAlertEffect",
+                        "alertEffect",
+                        "launchSound",
+                        "loopSound",
+                        "reachSound",
+                        "hitSound",
+                        "blockSound",
+                        "finishedSound",
+                        "sizzleSound",
+                        "sizzleSoundTriggerDistance",
+                        "ringProjectileSoundSmoothFactor",
+                    }
+                },
+                { "rawWords", ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", rawWordCount) },
+                { "layoutNote", "Raw tail begins at moveModeDict and follows the remaining IL2CPP ProjectileComponentData field order. It is intentionally preserved as words until nested dictionaries, effect arrays, and projectile sound structs are validated." },
+            };
+            data["length"] = reader.Position - start;
+            return data;
+        }
         private static bool TryDecodeCoreActionConditionManagedReferenceData(
             ManagedReferenceHeader header,
             ManagedReferencePayloadReader reader,
@@ -11425,6 +11581,22 @@ namespace AnimeStudio.CLI
                 { "layoutNote", "serialized as three int32 words in AbilitySystemData ShapeData; middle word is exposed as a float candidate" },
                 { "rawWords", rawWords },
                 { "valueFloatCandidate", value },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBlackboardInt(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var rawWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.rawWords", 3);
+            var value = rawWords[1]["value"] is int word ? word : 0;
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardInt" },
+                { "layoutNote", "serialized as three int32 words in observed ProjectileComponentData rows; middle word is exposed as an int candidate" },
+                { "rawWords", rawWords },
+                { "valueIntCandidate", value },
             };
         }
 
