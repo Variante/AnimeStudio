@@ -5040,7 +5040,7 @@ namespace AnimeStudio.CLI
                         "m_speedCurveInfo",
                     }
                 },
-                { "layoutNote", "Guarded structured view of the fixed MoveModeData suffix. Scalar, bool, AnimationCurve, and full 21-word BezierPoint records are decoded; truncated BezierPoint records stay bounded raw records." },
+                { "layoutNote", "Guarded structured view of the fixed MoveModeData suffix. Scalar, bool, AnimationCurve, complete BezierPoint records, and terminal BezierPoint prefixes are decoded; any unproven terminal bytes stay bounded raw records." },
             };
 
             try
@@ -5058,17 +5058,33 @@ namespace AnimeStudio.CLI
                 data["travelDuration"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.travelDuration");
                 data["vertexYOffset"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.vertexYOffset");
                 data["gravity"] = ReadAbilitySystemBlackboardDouble(local, $"{fieldName}.gravity");
-                data["bezierMidPoint1"] = ReadProjectileBezierPointRawRecord(local, $"{fieldName}.bezierMidPoint1", 21, true);
-
-                if (local.Remaining >= 21 * 4)
+                if (TryReadProjectileBezierPointDiagnostic(local, $"{fieldName}.bezierMidPoint1", out var bezierMidPoint1))
                 {
-                    data["bezierMidPoint2Status"] = "full 21-word record";
-                    data["bezierMidPoint2"] = ReadProjectileBezierPointRawRecord(local, $"{fieldName}.bezierMidPoint2", 21, true);
+                    data["bezierMidPoint1Status"] = GetProjectileBezierPointStatus(bezierMidPoint1);
+                    data["bezierMidPoint1"] = bezierMidPoint1;
+                }
+                else
+                {
+                    var remainingWords = Math.Min(21, local.Remaining / 4);
+                    data["bezierMidPoint1Status"] = $"raw fallback; {remainingWords} words preserved";
+                    data["bezierMidPoint1RawWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.bezierMidPoint1RawWords", remainingWords);
+                }
+
+                if (local.Remaining > 0 && TryReadProjectileBezierPointDiagnostic(local, $"{fieldName}.bezierMidPoint2", out var bezierMidPoint2))
+                {
+                    data["bezierMidPoint2Status"] = GetProjectileBezierPointStatus(bezierMidPoint2);
+                    data["bezierMidPoint2"] = bezierMidPoint2;
+                }
+                else if (local.Remaining > 0 && IsZeroFilled(local.RawData, local.Position, local.Remaining))
+                {
+                    var remainingWords = local.Remaining / 4;
+                    data["bezierMidPoint2Status"] = $"absent; {remainingWords} zero terminal words preserved";
+                    data["bezierMidPoint2PaddingWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.bezierMidPoint2PaddingWords", remainingWords);
                 }
                 else if (local.Remaining > 0)
                 {
                     var remainingWords = local.Remaining / 4;
-                    data["bezierMidPoint2Status"] = $"truncated; {remainingWords} raw words preserved";
+                    data["bezierMidPoint2Status"] = $"raw or truncated; {remainingWords} raw words preserved";
                     data["bezierMidPoint2RawWords"] = ReadPayloadRawInt32Words(local, $"{fieldName}.bezierMidPoint2RawWords", remainingWords);
                 }
                 else
@@ -5097,6 +5113,308 @@ namespace AnimeStudio.CLI
             return data;
         }
 
+        private static string GetProjectileBezierPointStatus(OrderedDictionary data)
+        {
+            if (data != null && data.Contains("decodeStatus") && data["decodeStatus"] is string status)
+            {
+                return status;
+            }
+            return "decoded";
+        }
+
+        private static bool TryReadProjectileBezierPointDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            var start = reader.Position;
+            if (TryReadProjectileBezierPointComplete(reader, fieldName, out data))
+            {
+                return true;
+            }
+
+            reader.SetPosition(start);
+            return TryReadProjectileBezierPointTerminalPrefix(reader, fieldName, out data);
+        }
+
+        private static bool TryReadProjectileBezierPointComplete(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var result = BuildProjectileBezierPointHeader(start);
+                result["usePresetPoint"] = local.ReadBool32($"{fieldName}.usePresetPoint");
+                result["presetPointKey"] = local.ReadAlignedAsciiString($"{fieldName}.presetPointKey");
+                result["xRatioRange"] = ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.xRatioRange");
+                result["yzAngleRange"] = ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.yzAngleRange");
+                result["yzRadiusRange"] = ReadProjectileBlackboardDoubleRange(local, $"{fieldName}.yzRadiusRange");
+                if (local.Remaining >= 4)
+                {
+                    result["scaledYzRadius"] = local.ReadBool32($"{fieldName}.scaledYzRadius");
+                    result["scaledYzRadiusSerialized"] = true;
+                    result["decodeStatus"] = "decoded";
+                }
+                else
+                {
+                    result["$partial"] = true;
+                    result["scaledYzRadiusSerialized"] = false;
+                    result["partialReasons"] = new[]
+                    {
+                        "scaledYzRadius is omitted at the terminal MoveModeData suffix boundary in this observed payload.",
+                    };
+                    result["decodeStatus"] = "decoded terminal BezierPoint; scaledYzRadius omitted";
+                }
+
+                reader.SetPosition(local.Position);
+                result["length"] = local.Position - start;
+                result["serializedWordCount"] = (local.Position - start) / 4;
+                result["layoutNote"] = "Decoded from IL2CPP BezierPoint field order. Range values use adaptive BlackboardDouble decoding, so records may be longer than the earlier 21-word empty-key shape; terminal payloads may omit scaledYzRadius.";
+                data = result;
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                reader.SetPosition(start);
+                return false;
+            }
+        }
+
+        private static bool TryReadProjectileBezierPointTerminalPrefix(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var result = BuildProjectileBezierPointHeader(start);
+                result["$partial"] = true;
+                result["usePresetPoint"] = local.ReadBool32($"{fieldName}.usePresetPoint");
+                result["presetPointKey"] = local.ReadAlignedAsciiString($"{fieldName}.presetPointKey");
+                if (!TryReadProjectileBlackboardDoubleRangeTerminalPrefix(local, $"{fieldName}.xRatioRange", out var xRatioRange))
+                {
+                    reader.SetPosition(start);
+                    return false;
+                }
+
+                result["xRatioRange"] = xRatioRange;
+                if (local.Remaining > 0 && TryReadProjectileBlackboardDoubleRangeTerminalPrefix(local, $"{fieldName}.yzAngleRange", out var yzAngleRange))
+                {
+                    result["yzAngleRange"] = yzAngleRange;
+                }
+                if (local.Remaining > 0 && TryReadProjectileBlackboardDoubleRangeTerminalPrefix(local, $"{fieldName}.yzRadiusRange", out var yzRadiusRange))
+                {
+                    result["yzRadiusRange"] = yzRadiusRange;
+                }
+
+                if (local.Remaining >= 4)
+                {
+                    var scaledStart = local.Position;
+                    try
+                    {
+                        result["scaledYzRadius"] = local.ReadBool32($"{fieldName}.scaledYzRadius");
+                        result["scaledYzRadiusSerialized"] = true;
+                    }
+                    catch (InvalidDataException)
+                    {
+                        local.SetPosition(scaledStart);
+                    }
+                }
+                if (!result.Contains("scaledYzRadiusSerialized"))
+                {
+                    result["scaledYzRadiusSerialized"] = false;
+                }
+                if (local.Remaining > 0)
+                {
+                    result["terminalRawWords"] = ReadRemainingPayloadRawInt32Words(local, $"{fieldName}.terminalRawWords", 128);
+                }
+
+                reader.SetPosition(local.Position);
+                result["length"] = local.Position - start;
+                result["serializedWordCount"] = (local.Position - start) / 4;
+                result["decodeStatus"] = "decoded terminal BezierPoint prefix";
+                result["partialReasons"] = new[]
+                {
+                    "The MoveModeData suffix ended before every metadata-listed BezierPoint field was serialized; decoded prefix fields are emitted and the bounded terminal tail is preserved when present.",
+                };
+                result["layoutNote"] = "Decoded as a terminal prefix of the IL2CPP BezierPoint field order. This handles observed MoveModeData suffixes that stop after xRatioRange, yzAngleRange, or a partial yzRadiusRange instead of serializing the full 21-word empty-key shape.";
+                data = result;
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                reader.SetPosition(start);
+                return false;
+            }
+        }
+
+        private static OrderedDictionary BuildProjectileBezierPointHeader(int relativeOffset)
+        {
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/BezierPoint" },
+                { "relativeOffset", relativeOffset },
+                { "metadataFieldOrder", new[]
+                    {
+                        "usePresetPoint",
+                        "presetPointKey",
+                        "xRatioRange",
+                        "yzAngleRange",
+                        "yzRadiusRange",
+                        "scaledYzRadius",
+                    }
+                },
+            };
+        }
+
+        private static bool TryReadProjectileBlackboardDoubleRangeTerminalPrefix(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            if (!TryReadAbilitySystemBlackboardDoubleTerminalPrefix(local, $"{fieldName}.min", out var min, out var minPartial))
+            {
+                reader.SetPosition(start);
+                return false;
+            }
+
+            OrderedDictionary max = null;
+            var maxPartial = false;
+            var maxSerialized = false;
+            if (local.Remaining > 0 && TryReadAbilitySystemBlackboardDoubleTerminalPrefix(local, $"{fieldName}.max", out max, out maxPartial))
+            {
+                maxSerialized = true;
+            }
+
+            reader.SetPosition(local.Position);
+            var result = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Blackboard.BlackboardDoubleRange" },
+                { "min", min },
+                { "maxSerialized", maxSerialized },
+            };
+            if (maxSerialized)
+            {
+                result["max"] = max;
+                result["valueCandidate"] = new OrderedDictionary
+                {
+                    { "min", min["valueFloatCandidate"] },
+                    { "max", max["valueFloatCandidate"] },
+                };
+            }
+            else
+            {
+                result["$partial"] = true;
+                result["partialReason"] = "Range max was not serialized before the terminal BezierPoint boundary.";
+                result["valueCandidate"] = new OrderedDictionary
+                {
+                    { "min", min["valueFloatCandidate"] },
+                };
+            }
+            if (minPartial || maxPartial)
+            {
+                result["$partial"] = true;
+                result["terminalBlackboardKeyNote"] = "At least one terminal BlackboardDouble ended after useBlackboardKey/value before an aligned blackboardKey string length was serialized.";
+            }
+            result["length"] = local.Position - start;
+            result["serializedWordCount"] = (local.Position - start) / 4;
+            data = result;
+            return true;
+        }
+
+        private static bool TryReadAbilitySystemBlackboardDoubleTerminalPrefix(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            out OrderedDictionary data,
+            out bool partial
+        )
+        {
+            data = null;
+            partial = false;
+            var start = reader.Position;
+            try
+            {
+                if (reader.Remaining < 8)
+                {
+                    reader.SetPosition(start);
+                    return false;
+                }
+
+                var useBlackboardKey = reader.ReadBool32($"{fieldName}.useBlackboardKey");
+                var value = reader.ReadFloat($"{fieldName}.value");
+                var result = new OrderedDictionary
+                {
+                    { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                    { "serializationShape", "bool-float-key-terminal" },
+                    { "useBlackboardKey", useBlackboardKey },
+                    { "value", value },
+                    { "valueFloatCandidate", value },
+                };
+
+                if (reader.Remaining >= 4)
+                {
+                    var keyStart = reader.Position;
+                    try
+                    {
+                        result["blackboardKey"] = reader.ReadAlignedAsciiString($"{fieldName}.blackboardKey");
+                        result["blackboardKeySerialized"] = true;
+                    }
+                    catch (InvalidDataException)
+                    {
+                        reader.SetPosition(keyStart);
+                        result["blackboardKeySerialized"] = false;
+                        result["terminalRawWords"] = ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.terminalRawWords", 128);
+                        partial = true;
+                    }
+                }
+                else
+                {
+                    result["blackboardKeySerialized"] = false;
+                    partial = true;
+                }
+
+                if (partial)
+                {
+                    result["$partial"] = true;
+                    result["layoutNote"] = "Terminal BlackboardDouble prefix decoded from useBlackboardKey and value; the aligned blackboardKey string length was not serialized before the BezierPoint boundary.";
+                }
+                else
+                {
+                    result["layoutNote"] = "IL2CPP metadata-backed shape: bool32 useBlackboardKey, float32 value, aligned blackboardKey string.";
+                }
+                result["length"] = reader.Position - start;
+                result["serializedWordCount"] = (reader.Position - start) / 4;
+                data = result;
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                partial = false;
+                reader.SetPosition(start);
+                return false;
+            }
+        }
         private static OrderedDictionary ReadProjectileBezierPointRawRecord(
             ManagedReferencePayloadReader reader,
             string fieldName,
