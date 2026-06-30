@@ -5222,6 +5222,13 @@ namespace AnimeStudio.CLI
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
                 data["$partial"] = true;
+                data["observedPayloadStatus"] = "all serialized CheckBuffStackNumAdvanced/Data bytes consumed by this reader; parent remains partial because buffSettings variants are not fully proven";
+                data["partialReasons"] = new List<string>
+                {
+                    "Nested TargetSettings carries its own partial marker for selector/post-selector semantics.",
+                    "BuffFindSettings generic list type names remain unresolved locally.",
+                    "Only Id and Tag checkType variants are observed; Environment and Context variants are not byte-proven.",
+                };
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumAdvanced.checkTarget", offset, recoveredByRid);
                 data["buffSettings"] = ReadDiagnosticBuffFindSettingsCandidate(reader, "checkBuffStackNumAdvanced.buffSettings");
@@ -5242,12 +5249,12 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["hpOwner"] = ReadDiagnosticTargetSettings(reader, "checkHp.hpOwner", offset, recoveredByRid);
                 data["compare"] = ReadPayloadNamedEnum32(reader, "checkHp.compare", new[] { "LT", "LE", "GT", "GE", "Equals" });
                 data["isRatio"] = reader.ReadBool32("checkHp.isRatio");
                 data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkHp.value", 128);
+                data["observedPayloadStatus"] = "all serialized CheckHp/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes hpOwner, compare, isRatio, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but hpOwner is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5262,10 +5269,10 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkTagMatch.checkTarget", offset, recoveredByRid);
                 data["query"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkTagMatch.query", 16, 256);
+                data["observedPayloadStatus"] = "all serialized CheckTagMatch/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget and GameplayTagQuery after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5298,6 +5305,13 @@ namespace AnimeStudio.CLI
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
                 data["$partial"] = true;
+                data["observedPayloadStatus"] = "all serialized CreateBuffAction/Data bytes consumed by this reader; parent remains partial because buffs and post-context default tail variants are not fully proven";
+                data["partialReasons"] = new List<string>
+                {
+                    "Nested TargetSettings carries its own partial marker for selector/post-selector semantics.",
+                    "The buffs list is observed as a count-prefixed buff-id list with reserved zeros, but the exact generic field type remains unresolved locally.",
+                    "The post-context field order is metadata-known, but inheritSkillIdList and BuffIconDurationSourceSetting byte boundaries are not proven by non-default samples.",
+                };
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["buffs"] = ReadDiagnosticCreateBuffActionBuffs(reader, "createBuffAction.buffs");
                 data["count"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "createBuffAction.count", 128);
@@ -5318,7 +5332,6 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["key"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "modifyDynamicBlackboard.key", 128);
                 data["operation"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.operation", new[] { "Assign", "Add", "Multiply", "Divide" });
@@ -5326,6 +5339,7 @@ namespace AnimeStudio.CLI
                 data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "modifyDynamicBlackboard.value", 128);
                 data["calculationTarget"] = ReadDiagnosticTargetSettings(reader, "modifyDynamicBlackboard.calculationTarget", offset, recoveredByRid);
                 data["calculateType"] = ReadPayloadNamedEnum32(reader, "modifyDynamicBlackboard.calculateType", new[] { "HpRatio" });
+                data["observedPayloadStatus"] = "all serialized ModifyDynamicBlackboard/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes key, operation, directValue, BlackboardDouble value, calculationTarget, and calculateType after the inherited AbilityActionData prefix. The payload is consumed completely, but calculationTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5339,12 +5353,12 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["useCurrentBuff"] = reader.ReadBool32("storeBuffCount.useCurrentBuff");
                 data["buffOwners"] = ReadDiagnosticTargetSettings(reader, "storeBuffCount.buffOwners", offset, recoveredByRid);
                 data["buffId"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.buffId", 128);
                 data["blackboardKey"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "storeBuffCount.blackboardKey", 128);
+                data["observedPayloadStatus"] = "all serialized StoreBuffCount/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes useCurrentBuff, buffOwners, buffId, and blackboardKey after the inherited AbilityActionData prefix. The payload is consumed completely, but buffOwners is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
