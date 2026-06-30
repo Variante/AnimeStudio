@@ -5018,9 +5018,9 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkMainCharacterCondition.checkTarget", offset, recoveredByRid);
+                data["observedPayloadStatus"] = "all serialized CheckMainCharacterCondition/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5035,10 +5035,10 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["target"] = ReadDiagnosticTargetSettings(reader, "checkObjectTypeMatch.target", offset, recoveredByRid);
                 data["objectTypeMask"] = BuildPayloadHash32(reader.ReadInt32("checkObjectTypeMatch.objectTypeMask"));
+                data["observedPayloadStatus"] = "all serialized CheckObjectTypeMatch/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes target and objectTypeMask after the inherited AbilityActionData prefix. The payload is consumed completely, but target is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5053,10 +5053,10 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["firstTargetSettings"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.firstTargetSettings", offset, recoveredByRid);
                 data["secondTargetSettings"] = ReadDiagnosticTargetSettings(reader, "checkTargetsEqual.secondTargetSettings", offset, recoveredByRid);
+                data["observedPayloadStatus"] = "all serialized CheckTargetsEqual/Data bytes consumed by this reader; nested TargetSettings entries carry their own partial markers";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes firstTargetSettings and secondTargetSettings after the inherited AbilityActionData prefix. The payload is consumed completely, but both TargetSettings objects are emitted with partial diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5070,12 +5070,12 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNum.checkTarget", offset, recoveredByRid);
                 data["buffId"] = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, "checkBuffStackNum.buffId", 128);
                 data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNum.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
                 data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNum.value", 128);
+                data["observedPayloadStatus"] = "all serialized CheckBuffStackNum/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget, buffId, compareType, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
@@ -5090,13 +5090,13 @@ namespace AnimeStudio.CLI
                 }
 
                 data = CreateCoreManagedReferenceData(header, offset, length);
-                data["$partial"] = true;
                 ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
                 data["checkTarget"] = ReadDiagnosticTargetSettings(reader, "checkBuffStackNumByTag.checkTarget", offset, recoveredByRid);
                 data["tagQuery"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkBuffStackNumByTag.tagQuery", 16, 256);
                 data["buffStackNumType"] = ReadPayloadEnum32(reader, "checkBuffStackNumByTag.buffStackNumType", 0, 16);
                 data["compareType"] = ReadPayloadNamedEnum32(reader, "checkBuffStackNumByTag.compareType", new[] { "LT", "LE", "GT", "GE", "Equals" });
                 data["value"] = ReadPayloadBlackboardDoubleWithZeroPadding(reader, "checkBuffStackNumByTag.value", 128);
+                data["observedPayloadStatus"] = "all serialized CheckBuffStackNumByTag/Data bytes consumed by this reader; nested TargetSettings carries its own partial marker";
                 data["layoutNote"] = "Installed IL2CPP/MemoryPack metadata exposes checkTarget, tagQuery, buffStackNumType, compareType, and BlackboardDouble value after the inherited AbilityActionData prefix. The payload is consumed completely, but checkTarget is emitted with partial TargetSettings diagnostics because selector/suffix semantics are still unresolved.";
                 reader.EnsureComplete();
                 return true;
