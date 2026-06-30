@@ -11029,6 +11029,25 @@ namespace AnimeStudio.CLI
                 }
 
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "FootRippleComponentData", StringComparison.Ordinal))
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.FootRippleComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "entries", ReadFootRippleEntryList(reader, "entries", 16) },
+                        { "footWeightThreshold", reader.ReadFloat("footWeightThreshold") },
+                        { "speedToRippleIntervalCurve", ReadPayloadAnimationCurveFloat(reader, "speedToRippleIntervalCurve") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AbilitySystemData", StringComparison.Ordinal))
                 {
@@ -13275,6 +13294,38 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadFootRippleEntryList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            const int recordByteCount = 12;
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount || count > reader.Remaining / recordByteCount)
+            {
+                throw new InvalidDataException($"invalid FootRippleEntry count {count} for {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(new OrderedDictionary
+                {
+                    { "layout", "Beyond.Gameplay.View.FootRippleEntry" },
+                    { "mountPoint", BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}].mountPoint")) },
+                    { "footWeightCurveHash", BuildPayloadHash32(reader.ReadInt32($"{fieldName}[{i}].footWeightCurveHash")) },
+                    { "rippleSize", reader.ReadFloat($"{fieldName}[{i}].rippleSize") },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "List<Beyond.Gameplay.View.FootRippleEntry>" },
+                { "count", count },
+                { "entries", entries },
+            };
+        }
         private static OrderedDictionary ReadAbilitySystemBakedMeshPointsDictionary(
             ManagedReferencePayloadReader reader,
             string fieldName,
