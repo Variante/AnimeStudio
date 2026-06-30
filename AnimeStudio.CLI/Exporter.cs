@@ -448,6 +448,7 @@ namespace AnimeStudio.CLI
                 HashSet<long> expectedManagedReferenceRids = null;
                 var recoveredManagedReferencesTail = false;
                 var recoveredManagedReferencesFullyDecoded = false;
+                var recoveredManagedReferencesStatus = "notRecovered";
                 string partialTypeTreeSourceLabel = null;
 
                 if (Studio.MonoBehaviourTypeTreePriorityMode == MonoBehaviourTypeTreePriority.ScriptFirst && Studio.assemblyLoader.Loaded)
@@ -562,7 +563,8 @@ namespace AnimeStudio.CLI
                         recoveredManagedReferences = recoveredReferences;
                         type["references"] = recoveredReferences;
                         recoveredManagedReferencesTail = true;
-                        recoveredManagedReferencesFullyDecoded = !ContainsManagedReferenceRecoveryMarker(recoveredReferences);
+                        recoveredManagedReferencesStatus = GetManagedReferenceRecoveryStatus(recoveredReferences);
+                        recoveredManagedReferencesFullyDecoded = string.Equals(recoveredManagedReferencesStatus, "fullyDecoded", StringComparison.Ordinal);
                     }
                 }
 
@@ -630,18 +632,35 @@ namespace AnimeStudio.CLI
                         {
                             { "field", "references" },
                             { "type", "ManagedReferencesRegistry" },
-                            { "status", recoveredManagedReferencesFullyDecoded ? "fullyDecoded" : "heuristic" },
+                            { "status", recoveredManagedReferencesStatus },
                             { "source", partialTypeTreeSourceLabel ?? typeTreeSource },
                             { "bytesReadBeforeRecovery", partialTypeTreeBytesRead },
+                            { "preRegistryRidCount", expectedManagedReferenceRids?.Count ?? 0 },
                             { "expectedRidCount", expectedManagedReferenceRids?.Count ?? 0 },
                         };
-                        if (!recoveredManagedReferencesFullyDecoded)
+                        if (string.Equals(recoveredManagedReferencesStatus, "heuristic", StringComparison.Ordinal))
                         {
                             recovery["decodeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
+                        }
+                        else if (!recoveredManagedReferencesFullyDecoded)
+                        {
+                            recovery["typeTreeDecodeError"] = $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}";
                         }
                         if (partialTypeTreeStoppedAt != null && !recoveredManagedReferencesFullyDecoded)
                         {
                             recovery["stoppedAt"] = partialTypeTreeStoppedAt;
+                            if (partialTypeTreeStoppedAt.Contains("startOffset"))
+                            {
+                                recovery["registryStartOffset"] = partialTypeTreeStoppedAt["startOffset"];
+                            }
+                            if (partialTypeTreeStoppedAt.Contains("offset"))
+                            {
+                                recovery["typeTreeFailureOffset"] = partialTypeTreeStoppedAt["offset"];
+                            }
+                        }
+                        if (recoveredManagedReferences?.Contains("count") == true)
+                        {
+                            recovery["registryCount"] = recoveredManagedReferences["count"];
                         }
                         if (recoveredManagedReferences?["RefIds"] is ICollection recoveredRefIds)
                         {
@@ -922,14 +941,20 @@ namespace AnimeStudio.CLI
                 { "count", count },
                 { "RefIds", entries },
             };
-            if (headers.Any(header => !header.IsNullSentinel && !IsStrongManagedReferenceHeader(header))
-                || entries.Any(ContainsManagedReferenceRecoveryMarker))
+            var hasWeakHeader = headers.Any(header => !header.IsNullSentinel && !IsStrongManagedReferenceHeader(header));
+            var hasHeuristicPayload = entries.Any(ContainsManagedReferenceHeuristicMarker);
+            var hasPartialPayload = entries.Any(ContainsManagedReferencePartialMarker);
+            if (hasWeakHeader || hasHeuristicPayload)
             {
                 references["$heuristic"] = true;
                 references["stringHintLimitPerReference"] = MaxHeuristicStringHintsPerReference;
                 references["stringHintLimitPerObject"] = MaxHeuristicStringHintsPerObject;
                 references["ridLinkLimitPerReference"] = MaxHeuristicRidLinksPerReference;
                 references["ridLinkLimitPerObject"] = MaxHeuristicRidLinksPerObject;
+            }
+            else if (hasPartialPayload)
+            {
+                references["$partial"] = true;
             }
             else
             {
@@ -938,7 +963,36 @@ namespace AnimeStudio.CLI
             return true;
         }
 
+        private static string GetManagedReferenceRecoveryStatus(object value)
+        {
+            if (ContainsManagedReferenceHeuristicMarker(value))
+            {
+                return "heuristic";
+            }
+            if (ContainsManagedReferencePartialMarker(value))
+            {
+                return "partialDecoded";
+            }
+            return "fullyDecoded";
+        }
+
         private static bool ContainsManagedReferenceRecoveryMarker(object value)
+        {
+            return ContainsManagedReferenceHeuristicMarker(value)
+                || ContainsManagedReferencePartialMarker(value);
+        }
+
+        private static bool ContainsManagedReferenceHeuristicMarker(object value)
+        {
+            return ContainsManagedReferenceMarker(value, includeHeuristic: true, includePartial: false);
+        }
+
+        private static bool ContainsManagedReferencePartialMarker(object value)
+        {
+            return ContainsManagedReferenceMarker(value, includeHeuristic: false, includePartial: true);
+        }
+
+        private static bool ContainsManagedReferenceMarker(object value, bool includeHeuristic, bool includePartial)
         {
             if (value == null)
             {
@@ -947,16 +1001,23 @@ namespace AnimeStudio.CLI
 
             if (value is OrderedDictionary dictionary)
             {
-                if ((dictionary.Contains("$heuristic") && dictionary["$heuristic"] is bool heuristic && heuristic)
-                    || (dictionary.Contains("$unparsed") && dictionary["$unparsed"] is bool unparsed && unparsed)
-                    || (dictionary.Contains("$partial") && dictionary["$partial"] is bool partial && partial))
+                if (includeHeuristic
+                    && ((dictionary.Contains("$heuristic") && dictionary["$heuristic"] is bool heuristic && heuristic)
+                        || (dictionary.Contains("$unparsed") && dictionary["$unparsed"] is bool unparsed && unparsed)))
+                {
+                    return true;
+                }
+                if (includePartial
+                    && dictionary.Contains("$partial")
+                    && dictionary["$partial"] is bool partial
+                    && partial)
                 {
                     return true;
                 }
 
                 foreach (DictionaryEntry entry in dictionary)
                 {
-                    if (ContainsManagedReferenceRecoveryMarker(entry.Value))
+                    if (ContainsManagedReferenceMarker(entry.Value, includeHeuristic, includePartial))
                     {
                         return true;
                     }
@@ -968,7 +1029,7 @@ namespace AnimeStudio.CLI
             {
                 foreach (var item in enumerable)
                 {
-                    if (ContainsManagedReferenceRecoveryMarker(item))
+                    if (ContainsManagedReferenceMarker(item, includeHeuristic, includePartial))
                     {
                         return true;
                     }
