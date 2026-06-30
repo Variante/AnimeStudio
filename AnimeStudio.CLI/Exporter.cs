@@ -14759,9 +14759,6 @@ namespace AnimeStudio.CLI
 
         public static bool ExportAnimator(AssetItem item, string exportPath, List<AssetItem> animationList = null)
         {
-            if (!TryExportFolder(exportPath, item, out var exportFullPath))
-                return false;
-
             var m_Animator = (Animator)item.Asset;
             var options = new ModelConverter.Options()
             {
@@ -14776,19 +14773,15 @@ namespace AnimeStudio.CLI
             var convert = animationList != null
                 ? new ModelConverter(m_Animator, options, animationList.Select(x => (AnimationClip)x.Asset).ToArray())
                 : new ModelConverter(m_Animator, options);
-            var fbxExportPath = exportFullPath + ".fbx";
-            if (File.Exists(fbxExportPath))
-            {
-                File.Delete(fbxExportPath);
-            }
+            if (!TryExportFile(exportPath, item, ".fbx", out var fbxExportPath))
+                return false;
             if (convert.MeshList.Count == 0)
             {
-                Directory.Delete(exportFullPath, true);
                 return ExportEmptyAnimatorMarker(item, m_Animator, convert, exportPath, "no_mesh");
             }
             if (options.exportMaterials)
             {
-                var materialExportPath = Path.Combine(Path.GetDirectoryName(exportFullPath), "Materials");
+                var materialExportPath = Path.Combine(Path.GetDirectoryName(fbxExportPath), "Materials");
                 Directory.CreateDirectory(materialExportPath);
                 foreach (var material in options.materials)
                 {
