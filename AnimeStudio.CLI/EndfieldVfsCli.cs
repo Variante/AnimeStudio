@@ -654,7 +654,7 @@ namespace AnimeStudio.CLI
                         "  -f, --format <FORMAT>",
                         "          [default: wav] [possible values: wem, wav]",
                         "  -b, --block <BLOCK>",
-                        "          [default: all] [possible values: all, voice, audio, initial-audio, audit-audio]",
+                        "          [default: all] [possible values: all, voice, audio, initial-audio, audit-audio, hotfix-audio]",
                         "  -h, --help",
                         "          Print help");
                     break;

@@ -321,6 +321,8 @@ namespace AnimeStudio.CLI
             "initialaudio" => AudioBlockMode.InitialAudio,
             "audit-audio" => AudioBlockMode.AuditAudio,
             "auditaudio" => AudioBlockMode.AuditAudio,
+            "hotfix-audio" => AudioBlockMode.HotfixAudio,
+            "hotfixaudio" => AudioBlockMode.HotfixAudio,
             _ => throw new ArgumentException($"unknown audio block: {value}"),
         };
 
@@ -364,6 +366,7 @@ namespace AnimeStudio.CLI
                 AudioBlockMode.Audio => new[] { EndfieldVfsBlockType.Audio },
                 AudioBlockMode.InitialAudio => new[] { EndfieldVfsBlockType.InitialAudio },
                 AudioBlockMode.AuditAudio => new[] { EndfieldVfsBlockType.AuditAudio },
+                AudioBlockMode.HotfixAudio => new[] { EndfieldVfsBlockType.HotfixAudio },
                 _ => Array.Empty<EndfieldVfsBlockType>(),
             };
 
@@ -390,6 +393,7 @@ namespace AnimeStudio.CLI
             Audio,
             InitialAudio,
             AuditAudio,
+            HotfixAudio,
         }
     }
 
