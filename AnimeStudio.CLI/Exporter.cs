@@ -5736,31 +5736,183 @@ namespace AnimeStudio.CLI
                 throw new InvalidDataException($"mismatched key/value counts {keys.Count}/{valueCount} for {fieldName}");
             }
 
+            var valuesStart = reader.Position;
             var values = new List<OrderedDictionary>(valueCount);
-            for (var i = 0; i < valueCount; i++)
+            var valueBoundaryMode = "fixedWordCount";
+            var nestedPartialReasons = new List<string>();
+            if (TryReadProjectileMoveModeDataVariableValues(reader, fieldName, keys, out var variableValues))
             {
-                values.Add(ReadProjectileMoveModeDataDiagnostic(reader, $"{fieldName}.values[{i}]", keys[i]));
+                values = variableValues;
+                valueBoundaryMode = "metadataVariableLength";
+                nestedPartialReasons.Add("MoveModeData value boundaries were recovered by reading the metadata-ordered scalar/curve/BezierPoint fields and validating that the following ProjectileComponentData tail still decodes.");
+                nestedPartialReasons.Add("The m_parabolaSpeedInfo, m_bezierSpeedInfo, and m_speedCurveInfo metadata fields are still treated as omitted in current Unity payload samples.");
+            }
+            else
+            {
+                reader.SetPosition(valuesStart);
+                nestedPartialReasons.Add("Nested MoveModeData records still contain raw speed-info, animation-curve, and BezierPoint internals.");
+                nestedPartialReasons.Add("The enclosing ProjectileComponentData tail still contains effect/sound/scalar collections after moveModeDict.");
+                for (var i = 0; i < valueCount; i++)
+                {
+                    values.Add(ReadProjectileMoveModeDataDiagnostic(reader, $"{fieldName}.values[{i}]", keys[i]));
+                }
             }
 
             return new OrderedDictionary
             {
                 { "$decoded", true },
                 { "layout", "Dictionary<string, Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData>" },
-                { "observedPayloadStatus", "dictionary key/value counts and fixed-size value boundaries are fully consumed by this reader" },
-                { "nestedPartialReasons", new List<string>
-                    {
-                        "Nested MoveModeData records still contain raw speed-info, animation-curve, and BezierPoint internals.",
-                        "The enclosing ProjectileComponentData tail still contains effect/sound/scalar collections after moveModeDict.",
-                    }
-                },
+                { "observedPayloadStatus", valueBoundaryMode == "metadataVariableLength"
+                    ? "dictionary key/value counts and metadata-ordered variable value boundaries are fully consumed by this reader"
+                    : "dictionary key/value counts and fixed-size value boundaries are fully consumed by this reader" },
+                { "valueBoundaryMode", valueBoundaryMode },
+                { "nestedPartialReasons", nestedPartialReasons },
                 { "relativeOffset", start },
                 { "keyCount", keys.Count },
                 { "keys", keys },
                 { "valueCount", valueCount },
                 { "values", values },
                 { "length", reader.Position - start },
-                { "layoutNote", "Dictionary header and current fixed-size MoveModeData records are decoded. The first MoveModeData fields are named from IL2CPP metadata; speed-info, animation-curve, and BezierPoint internals remain raw inside each value record." },
+                { "layoutNote", valueBoundaryMode == "metadataVariableLength"
+                    ? "Dictionary header and MoveModeData values are decoded with metadata-ordered variable boundaries. The following ProjectileComponentData tail is used as the boundary guard."
+                    : "Dictionary header and current fixed-size MoveModeData records are decoded. The first MoveModeData fields are named from IL2CPP metadata; speed-info, animation-curve, and BezierPoint internals remain raw inside each value record." },
             };
+        }
+
+        private static bool TryReadProjectileMoveModeDataVariableValues(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            IReadOnlyList<string> keys,
+            out List<OrderedDictionary> values
+        )
+        {
+            values = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var parsed = new List<OrderedDictionary>(keys.Count);
+                for (var i = 0; i < keys.Count; i++)
+                {
+                    parsed.Add(ReadProjectileMoveModeDataVariableDiagnostic(local, $"{fieldName}.values[{i}]", keys[i]));
+                }
+
+                if (!CanDecodeProjectileTailAfterMoveModeDict(local, fieldName))
+                {
+                    reader.SetPosition(start);
+                    return false;
+                }
+
+                reader.SetPosition(local.Position);
+                values = parsed;
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                reader.SetPosition(start);
+                values = null;
+                return false;
+            }
+        }
+
+        private static bool CanDecodeProjectileTailAfterMoveModeDict(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            var start = local.Position;
+            var data = new OrderedDictionary();
+            ReadProjectileMainEffectFinishDiagnostics(local, fieldName, data);
+            if (local.Position == start)
+            {
+                return false;
+            }
+
+            if ((local.Remaining % 4) != 0 || local.Remaining < 116 * 4)
+            {
+                return false;
+            }
+
+            return FindProjectileAlertEffectSuffix(local.RawData, local.Position, local.Remaining, $"{fieldName}.structuredRemainingTail") != null;
+        }
+
+        private static OrderedDictionary BuildProjectileOmittedMetadataField(
+            string typeName,
+            string layoutNote
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "$omitted", true },
+                { "typeName", typeName },
+                { "layoutNote", layoutNote },
+            };
+        }
+
+        private static OrderedDictionary ReadProjectileMoveModeDataVariableDiagnostic(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string key
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.Core.ProjectileComponentData/MoveModeData" },
+                { "observedPayloadStatus", "metadata-ordered variable-length MoveModeData value consumed by this reader" },
+                { "partialReasons", new List<string>
+                    {
+                        "IL2CPP metadata lists m_parabolaSpeedInfo, m_bezierSpeedInfo, and m_speedCurveInfo, but current payload samples validate only the omitted-field shape.",
+                        "BlackboardDouble internals remain diagnostic wrappers.",
+                        "Enum numeric values are emitted with enum type names, but member names are withheld until independently validated.",
+                    }
+                },
+                { "key", key },
+                { "relativeOffset", start },
+                { "traceType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.traceType", "Beyond.Gameplay.ProjectileTraceType") },
+                { "traceTime", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceTime") },
+                { "traceUntilDistance", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.traceUntilDistance") },
+                { "moveType", ReadPayloadEnum32Candidate(reader, $"{fieldName}.moveType", "Beyond.Gameplay.ProjectileMoveType") },
+                { "parabolaDef", ReadPayloadEnum32Candidate(reader, $"{fieldName}.parabolaDef", "Beyond.Gameplay.ProjectileParabolaDef") },
+            };
+
+            const string omittedSpeedInfoType = "inferred string / unresolved typeIndex 157142";
+            const string omittedSpeedInfoNote = "Metadata lists this speed-info name/string field before the curve/value fields, but the byte-validated ProjectileComponentData payloads observed here serialize the following BlackboardDouble/AnimationCurve fields directly.";
+            data["m_parabolaSpeedInfo"] = BuildProjectileOmittedMetadataField(omittedSpeedInfoType, omittedSpeedInfoNote);
+            data["m_bezierSpeedInfo"] = BuildProjectileOmittedMetadataField(omittedSpeedInfoType, omittedSpeedInfoNote);
+            data["speed"] = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.speed");
+            data["m_speedCurveInfo"] = BuildProjectileOmittedMetadataField(omittedSpeedInfoType, omittedSpeedInfoNote);
+            data["speedCurve"] = ReadPayloadAnimationCurveFloat(reader, $"{fieldName}.speedCurve");
+            data["useSpeedScaleWithDistance"] = reader.ReadBool32($"{fieldName}.useSpeedScaleWithDistance");
+            data["speedScaleWithDistance"] = ReadPayloadAnimationCurveFloat(reader, $"{fieldName}.speedScaleWithDistance");
+            data["lockVelocityToXZ"] = reader.ReadBool32($"{fieldName}.lockVelocityToXZ");
+            data["groundedMove"] = reader.ReadBool32($"{fieldName}.groundedMove");
+            data["limitAngularSpeed"] = reader.ReadBool32($"{fieldName}.limitAngularSpeed");
+            data["angularSpeed"] = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.angularSpeed");
+            data["angularSpeedCurve"] = ReadPayloadAnimationCurveFloat(reader, $"{fieldName}.angularSpeedCurve");
+            data["travelDuration"] = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.travelDuration");
+            data["vertexYOffset"] = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.vertexYOffset");
+            data["gravity"] = ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.gravity");
+            if (!TryReadProjectileBezierPointDiagnostic(reader, $"{fieldName}.bezierMidPoint1", out var bezierMidPoint1))
+            {
+                throw new InvalidDataException($"could not decode {fieldName}.bezierMidPoint1");
+            }
+            data["bezierMidPoint1Status"] = GetProjectileBezierPointStatus(bezierMidPoint1);
+            data["bezierMidPoint1"] = bezierMidPoint1;
+
+            if (!TryReadProjectileBezierPointDiagnostic(reader, $"{fieldName}.bezierMidPoint2", out var bezierMidPoint2))
+            {
+                throw new InvalidDataException($"could not decode {fieldName}.bezierMidPoint2");
+            }
+            data["bezierMidPoint2Status"] = GetProjectileBezierPointStatus(bezierMidPoint2);
+            data["bezierMidPoint2"] = bezierMidPoint2;
+            data["serializedWordCount"] = (reader.Position - start) / 4;
+            data["length"] = reader.Position - start;
+            data["layoutNote"] = "MoveModeData is decoded in IL2CPP field order with variable AnimationCurve and BezierPoint boundaries. The enclosing dictionary accepts this value only when the following ProjectileComponentData tail still validates.";
+            return data;
         }
 
         private static OrderedDictionary ReadProjectileMoveModeDataDiagnostic(
