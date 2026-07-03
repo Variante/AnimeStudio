@@ -15768,13 +15768,13 @@ namespace AnimeStudio.CLI
             {
                 keyframes.Add(new OrderedDictionary
                 {
-                    { "time", reader.ReadFloat($"{fieldName}.keyframes[{i}].time") },
-                    { "value", reader.ReadFloat($"{fieldName}.keyframes[{i}].value") },
-                    { "inSlope", reader.ReadFloat($"{fieldName}.keyframes[{i}].inSlope") },
-                    { "outSlope", reader.ReadFloat($"{fieldName}.keyframes[{i}].outSlope") },
+                    { "time", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].time") },
+                    { "value", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].value") },
+                    { "inSlope", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].inSlope") },
+                    { "outSlope", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].outSlope") },
                     { "weightedMode", ReadPayloadNamedEnum32(reader, $"{fieldName}.keyframes[{i}].weightedMode", new[] { "None", "In", "Out", "Both" }) },
-                    { "inWeight", reader.ReadFloat($"{fieldName}.keyframes[{i}].inWeight") },
-                    { "outWeight", reader.ReadFloat($"{fieldName}.keyframes[{i}].outWeight") },
+                    { "inWeight", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].inWeight") },
+                    { "outWeight", ReadPayloadFloat32AllowNonFinite(reader, $"{fieldName}.keyframes[{i}].outWeight") },
                 });
             }
 
