@@ -325,7 +325,13 @@ namespace AnimeStudio.CLI
             if (!TryExportFile(exportPath, item, ".shader", out var exportFullPath))
                 return false;
             var m_Shader = (Shader)item.Asset;
-            var str = m_Shader.Convert();
+            var bytecodeSidecarRoot = exportFullPath + ".bytecode";
+            ResetShaderBytecodeSidecarRoot(bytecodeSidecarRoot);
+            if (!ShouldExportShaderBytecodeSidecars())
+            {
+                bytecodeSidecarRoot = null;
+            }
+            var str = m_Shader.Convert(bytecodeSidecarRoot);
             File.WriteAllText(exportFullPath, str);
             return true;
         }
@@ -17315,6 +17321,19 @@ namespace AnimeStudio.CLI
         private static bool ShouldExportJsonRawSidecars()
         {
             return Properties.Settings.Default.exportJsonRawSidecars || IsEnabledEnvironmentFlag("ANIMESTUDIO_EXPORT_JSON_RAW");
+        }
+
+        private static bool ShouldExportShaderBytecodeSidecars()
+        {
+            return IsEnabledEnvironmentFlag("ANIMESTUDIO_EXPORT_SHADER_BYTECODE_SIDECARS");
+        }
+
+        private static void ResetShaderBytecodeSidecarRoot(string path)
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, true);
+            }
         }
 
         private static bool IsEnabledEnvironmentFlag(string name)

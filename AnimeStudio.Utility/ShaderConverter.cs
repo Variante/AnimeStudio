@@ -1,5 +1,6 @@
 ﻿using AnimeStudio.PInvoke;
 using SharpGen.Runtime;
+using Smolv;
 using SpirV;
 using System;
 using System.Collections.Generic;
@@ -28,6 +29,16 @@ namespace AnimeStudio
         {
             private int m_programBodyChars;
 
+            private readonly string m_bytecodeSidecarRoot;
+            private int m_sidecarIndex;
+
+            internal ShaderExportContext(string bytecodeSidecarRoot)
+            {
+                m_bytecodeSidecarRoot = bytecodeSidecarRoot;
+            }
+
+            internal bool HasBytecodeSidecarRoot => !string.IsNullOrEmpty(m_bytecodeSidecarRoot);
+
             internal bool CanAppendProgramBody => m_programBodyChars < MaxShaderProgramBodyChars;
 
             internal void AppendProgramBody(StringBuilder sb, string body, string bodyKind)
@@ -54,16 +65,40 @@ namespace AnimeStudio
                 sb.Append($"{MaxShaderProgramBodyChars.ToString(CultureInfo.InvariantCulture)} chars was reached.\n");
                 sb.Append("// AnimeStudio: bytecode was parsed; hash, offset, and size comments above preserve identity.\n");
             }
+
+            internal void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data)
+            {
+                if (string.IsNullOrEmpty(m_bytecodeSidecarRoot) || data.IsEmpty)
+                {
+                    return;
+                }
+
+                try
+                {
+                    Directory.CreateDirectory(m_bytecodeSidecarRoot);
+                    var fileName = $"{m_sidecarIndex.ToString("D4", CultureInfo.InvariantCulture)}_{SanitizeFileNamePart(kind)}{extension}";
+                    m_sidecarIndex++;
+                    var path = Path.Combine(m_bytecodeSidecarRoot, fileName);
+                    File.WriteAllBytes(path, data.ToArray());
+                    sb.Append($"// AnimeStudio bytecode sidecar: {fileName}\n");
+                }
+                catch (Exception ex)
+                {
+                    var reason = SanitizeComment(ex.Message);
+                    sb.Append($"// AnimeStudio bytecode sidecar write failed: {reason}\n");
+                    Logger.Warning($"Shader bytecode sidecar write failed: {reason}");
+                }
+            }
         }
 
         internal static bool IsEndfieldD3D11ProgramType(ShaderGpuProgramType programType)
         {
             return (int)programType == EndfieldD3D11ProgramType;
         }
-        public static string Convert(this Shader shader)
+        public static string Convert(this Shader shader, string bytecodeSidecarRoot = null)
         {
             var previousContext = s_currentExportContext;
-            s_currentExportContext = new ShaderExportContext();
+            s_currentExportContext = new ShaderExportContext(bytecodeSidecarRoot);
             try
             {
                 if (shader.platformInfos != null)
@@ -197,6 +232,14 @@ namespace AnimeStudio
         private static string SanitizeComment(string value)
         {
             return (value ?? "unknown").Replace('\r', ' ').Replace('\n', ' ');
+        }
+
+        private static string SanitizeFileNamePart(string value)
+        {
+            var input = string.IsNullOrWhiteSpace(value) ? "shader_bytecode" : value;
+            var chars = input.Select(ch => char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' ? ch : '_').ToArray();
+            var sanitized = new string(chars).Trim('_');
+            return string.IsNullOrEmpty(sanitized) ? "shader_bytecode" : sanitized;
         }
 
         private static string EscapeShaderName(string value)
@@ -1409,6 +1452,16 @@ namespace AnimeStudio
             context.AppendProgramBody(sb, body, bodyKind);
         }
 
+        private static void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data)
+        {
+            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data);
+        }
+
+        private static bool HasBytecodeSidecarRoot()
+        {
+            return ShaderConverter.CurrentExportContext?.HasBytecodeSidecarRoot == true;
+        }
+
         public string Export()
         {
             var sb = new StringBuilder();
@@ -1530,6 +1583,7 @@ namespace AnimeStudio
                                 var (offset, size) = snippets[i];
                                 var snippet = m_ProgramCode.AsSpan(offset, size);
                                 sb.Append($"// Endfield DXBC snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
+                                WriteBytecodeSidecar(sb, $"endfield_dxbc_{i}", ".dxbc", snippet);
                                 AppendD3D11Disassembly(sb, snippet);
                             }
                             break;
@@ -1559,10 +1613,20 @@ namespace AnimeStudio
                                 {
                                     var (offset, size) = snippets[i];
                                     sb.Append($"// Endfield SMOL-V snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
+                                    var smolvSnippet = m_ProgramCode.AsSpan(offset, size);
+                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet);
                                     try
                                     {
                                         var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
                                         sb.Append($"// hash: {ComputeHash64(snippetProgram):x8}\n");
+                                        if (HasBytecodeSidecarRoot())
+                                        {
+                                            var spirvSnippet = SmolvDecoder.Decode(smolvSnippet.ToArray());
+                                            if (spirvSnippet != null && spirvSnippet.Length > 0)
+                                            {
+                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet);
+                                            }
+                                        }
                                         if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
                                         {
                                             AppendProgramBody(sb, SpirVShaderConverter.Convert(snippetProgram), "SPIR-V disassembly");
