@@ -11199,9 +11199,12 @@ namespace AnimeStudio.CLI
             }
 
             if (!string.Equals(header.ClassName, "FastAnimationEventHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "BattleCustomEventHandler", StringComparison.Ordinal)
                 && !string.Equals(header.ClassName, "CharPerformHandler", StringComparison.Ordinal)
                 && !string.Equals(header.ClassName, "FootStepHandler", StringComparison.Ordinal)
                 && !string.Equals(header.ClassName, "PostAudioHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "RendererVisibilityHandler", StringComparison.Ordinal)
+                && !string.Equals(header.ClassName, "SpawnEntityHandler", StringComparison.Ordinal)
                 && !string.Equals(header.ClassName, "WeaponVisibleHandler", StringComparison.Ordinal))
             {
                 return false;
@@ -12161,6 +12164,11 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeCharacterHeightDataManagedReferenceData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+
             if (TryDecodeLineFollowerManagedReferenceData(header, rawData, offset, length, out data))
             {
                 return true;
@@ -12208,6 +12216,65 @@ namespace AnimeStudio.CLI
             return string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                 && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckRpgEquipCount", StringComparison.Ordinal);
+        }
+
+        private static bool TryDecodeCharacterHeightDataManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "CharacterHeightData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length != 24
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.CharacterHeightData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "isShadowFadeInCharInfo", reader.ReadBool32("isShadowFadeInCharInfo") },
+                    { "charInfoShadowFadeConfig", ReadCharacterShadowFadeConfig(reader, "charInfoShadowFadeConfig") },
+                    { "isShadowFadeInFormation", reader.ReadBool32("isShadowFadeInFormation") },
+                    { "formationShadowFadeConfig", ReadCharacterShadowFadeConfig(reader, "formationShadowFadeConfig") },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadCharacterShadowFadeConfig(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "circleFadeDistance", ReadPayloadFloatRange(reader, $"{fieldName}.circleFadeDistance", 0f, 10000f) },
+                { "circleFadeSmoothness", ReadPayloadFloatRange(reader, $"{fieldName}.circleFadeSmoothness", 0f, 10000f) },
+            };
         }
 
         private static bool TryDecodeLineFollowerManagedReferenceData(
