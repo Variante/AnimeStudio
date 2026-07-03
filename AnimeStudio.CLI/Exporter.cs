@@ -9485,8 +9485,10 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/BasePositionMovementData" },
                         { "offset", offset },
                         { "length", length },
-                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 3) },
-                        { "layoutNote", "Observed ability-entity BasePositionMovementData payloads serialize as three int32 enum/flag words; field names are not exposed by the current DummyDll metadata." },
+                        { "surroundingBaseType", ReadPayloadEnum32(reader, "basePositionMovementData.surroundingBaseType", 0, 16) },
+                        { "rotationType", ReadPayloadEnum32(reader, "basePositionMovementData.rotationType", 0, 16) },
+                        { "mountPoint", BuildPayloadHash32(reader.ReadInt32("basePositionMovementData.mountPoint")) },
+                        { "layoutNote", "IL2CPP metadata names surroundingBaseType, rotationType, and mountPoint; observed ability-entity payloads serialize them as three int32 words." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -9503,8 +9505,10 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/BaseRotationData" },
                         { "offset", offset },
                         { "length", length },
-                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 3) },
-                        { "layoutNote", "Observed ability-entity BaseRotationData payloads serialize as three int32 enum/flag words; field names are not exposed by the current DummyDll metadata." },
+                        { "baseType", ReadPayloadEnum32(reader, "baseRotationData.baseType", 0, 16) },
+                        { "mountPoint", BuildPayloadHash32(reader.ReadInt32("baseRotationData.mountPoint")) },
+                        { "followSelfRotation", reader.ReadBool32("baseRotationData.followSelfRotation") },
+                        { "layoutNote", "IL2CPP metadata names baseType, mountPoint, and followSelfRotation; observed ability-entity payloads serialize them as three int32 words." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -9521,8 +9525,18 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/SurroundingMovementData" },
                         { "offset", offset },
                         { "length", length },
-                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 21) },
-                        { "layoutNote", "Observed ability-entity SurroundingMovementData payloads serialize as a fixed 21-word numeric block; retained as raw int32/float32-compatible words until IL2CPP field names are proven." },
+                        { "centerOffset", ReadPayloadVector3(reader, "surroundingMovementData.centerOffset") },
+                        { "normalVector", ReadPayloadVector3(reader, "surroundingMovementData.normalVector") },
+                        { "radius", ReadPayloadFloatRange(reader, "surroundingMovementData.radius", -10000f, 10000f) },
+                        { "radiusBB", ReadPayloadRawInt32Words(reader, "surroundingMovementData.radiusBB", 3) },
+                        { "angleSpeed", ReadPayloadFloatRange(reader, "surroundingMovementData.angleSpeed", -10000f, 10000f) },
+                        { "angleSpeedBB", ReadPayloadRawInt32Words(reader, "surroundingMovementData.angleSpeedBB", 3) },
+                        { "rotationClockwise", reader.ReadBool32("surroundingMovementData.rotationClockwise") },
+                        { "initAngleType", ReadPayloadEnum32(reader, "surroundingMovementData.initAngleType", 0, 16) },
+                        { "initAngle", ReadPayloadFloatRange(reader, "surroundingMovementData.initAngle", -3600f, 3600f) },
+                        { "initAngleBB", ReadPayloadRawInt32Words(reader, "surroundingMovementData.initAngleBB", 3) },
+                        { "followSelfRotation", reader.ReadBool32("surroundingMovementData.followSelfRotation") },
+                        { "layoutNote", "IL2CPP metadata names the fixed SurroundingMovementData field order; Blackboard-backed radius/angle fields are kept as raw three-word blocks until their key/value layout is promoted." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -11373,11 +11387,26 @@ namespace AnimeStudio.CLI
                     var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                     var rawFloat32 = ReadPayloadFloatArray(reader, "rawFloat32", 10);
                     var overrideMoveMode = reader.ReadInt32("overrideMoveMode");
+                    if (overrideMoveMode != 13)
+                    {
+                        throw new InvalidDataException($"unexpected CharacterMovementComponentData overrideMoveMode {overrideMoveMode}");
+                    }
                     var abilityEntityMovementDataCount = reader.ReadInt32("abilityEntityMovementDataCount");
                     if (abilityEntityMovementDataCount != 2)
                     {
                         throw new InvalidDataException("CharacterMovementComponentData 64-byte payload must contain two movement-data RID links");
                     }
+                    var movementData = ReadPayloadRequiredRidLink(
+                        reader,
+                        "movementData",
+                        recoveredByRid,
+                        "AbilityEntityTemplateData/BasePositionMovementData");
+                    var proxyShape = ReadPayloadRequiredRidLink(
+                        reader,
+                        "proxyShape",
+                        recoveredByRid,
+                        "AbilityEntityTemplateData/BaseRotationData",
+                        "AbilityEntityTemplateData/SurroundingMovementData");
                     data = new OrderedDictionary
                     {
                         { "$decoded", true },
@@ -11388,8 +11417,8 @@ namespace AnimeStudio.CLI
                         { "rawFloat32", rawFloat32 },
                         { "overrideMoveMode", overrideMoveMode },
                         { "abilityEntityMovementDataCount", abilityEntityMovementDataCount },
-                        { "movementData", ReadPayloadRidLink(reader, "movementData", recoveredByRid) },
-                        { "proxyShape", ReadPayloadRidLink(reader, "proxyShape", recoveredByRid) },
+                        { "movementData", movementData },
+                        { "proxyShape", proxyShape },
                         { "layoutNote", "Observed ability-entity movement payloads extend the 48-byte scalar movement block with overrideMoveMode, a two-entry movement-data count, and two managed-reference RID links." },
                     };
                     reader.EnsureComplete();
@@ -12560,6 +12589,33 @@ namespace AnimeStudio.CLI
             var ridOffset = reader.Position;
             var rid = reader.ReadInt64(fieldName);
             return BuildManagedReferenceRidValue(rid, recoveredByRid, ridOffset);
+        }
+
+        private static OrderedDictionary ReadPayloadRequiredRidLink(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            params string[] allowedClassNames
+        )
+        {
+            var ridOffset = reader.Position;
+            var rid = reader.ReadInt64(fieldName);
+            if (recoveredByRid == null || !recoveredByRid.TryGetValue(rid, out var target))
+            {
+                throw new InvalidDataException($"unresolved managed-reference RID {rid} for {fieldName}");
+            }
+
+            var classAllowed = allowedClassNames == null
+                || allowedClassNames.Length == 0
+                || allowedClassNames.Any(className => string.Equals(target.ClassName, className, StringComparison.Ordinal));
+            if (!string.Equals(target.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(target.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !classAllowed)
+            {
+                throw new InvalidDataException($"unexpected managed-reference RID target {target.Namespace}.{target.ClassName} for {fieldName}");
+            }
+
+            return BuildManagedReferenceRidLink(rid, target, ridOffset);
         }
 
         private static List<OrderedDictionary> ReadLuaCustomUIStyleInfoList(
