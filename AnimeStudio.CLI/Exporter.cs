@@ -4933,6 +4933,20 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "RemoteFactoryRootComponentData", StringComparison.Ordinal)
+                    && length == 32)
+                {
+                    data = BuildReservedZeroWordsManagedReferenceData(
+                        header,
+                        rawData,
+                        offset,
+                        length,
+                        8,
+                        "Current installed remote-factory data serializes this root component payload as eight reserved zero int32 words; no nonzero field bytes are present to decode.");
+                    return true;
+                }
+
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                 if (TryDecodeProjectileComponentData(header, reader, offset, length, out data))
                 {
@@ -9355,6 +9369,17 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeRemoteFactoryEntityTemplateData(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                out data))
+            {
+                return true;
+            }
+
             if (TryDecodeSoundGameplayManagedReferenceData(
                 header,
                 rawData,
@@ -10189,6 +10214,102 @@ namespace AnimeStudio.CLI
                 return false;
             }
         }
+
+        private static bool TryDecodeRemoteFactoryEntityTemplateData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (!string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "RemoteFactoryEntityTemplateData", StringComparison.Ordinal)
+                || length != 64)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var headerZeroWords = ReadPayloadReservedZeroWords(reader, "remoteFactoryEntityTemplateData.headerZeroWords", 8);
+                var floatWordAfterHeaderRaw = reader.ReadInt32("remoteFactoryEntityTemplateData.floatWordAfterHeader.raw");
+                if (floatWordAfterHeaderRaw != 0x3f800000)
+                {
+                    throw new InvalidDataException($"unexpected RemoteFactoryEntityTemplateData float word 0x{floatWordAfterHeaderRaw:x8} after header");
+                }
+
+                var floatWordAfterHeader = BitConverter.Int32BitsToSingle(floatWordAfterHeaderRaw);
+                if (float.IsNaN(floatWordAfterHeader) || float.IsInfinity(floatWordAfterHeader))
+                {
+                    throw new InvalidDataException("RemoteFactoryEntityTemplateData float word after header is not finite");
+                }
+
+                var componentCount = reader.ReadInt32("remoteFactoryEntityTemplateData.componentRefs.count");
+                if (componentCount != 3 || componentCount > reader.Remaining / 8)
+                {
+                    throw new InvalidDataException($"invalid RemoteFactoryEntityTemplateData component count {componentCount}");
+                }
+
+                var componentRefs = new List<OrderedDictionary>(componentCount);
+                var expectedComponents = new (string Namespace, string ClassName)[]
+                {
+                    ("Beyond.Gameplay.Core", "RemoteFactoryRootComponentData"),
+                    ("Beyond.Gameplay.Core", "RemoteFactoryMineComponentData"),
+                    ("Beyond.Gameplay.View", "ModelComponentData"),
+                };
+                for (var i = 0; i < componentCount; i++)
+                {
+                    var ridOffset = reader.Position;
+                    var rid = reader.ReadInt64($"remoteFactoryEntityTemplateData.componentRefs[{i}]");
+                    if (recoveredByRid == null || !recoveredByRid.TryGetValue(rid, out var target))
+                    {
+                        throw new InvalidDataException($"unresolved RemoteFactoryEntityTemplateData component RID {rid}");
+                    }
+
+                    var expected = expectedComponents[i];
+                    if (!string.Equals(target.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                        || !string.Equals(target.Namespace, expected.Namespace, StringComparison.Ordinal)
+                        || !string.Equals(target.ClassName, expected.ClassName, StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException($"unexpected RemoteFactoryEntityTemplateData component target {target.Namespace}.{target.ClassName}");
+                    }
+
+                    componentRefs.Add(BuildManagedReferenceRidLink(rid, target, ridOffset));
+                }
+
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$partial", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.RemoteFactoryEntityTemplateData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "headerZeroWords", headerZeroWords },
+                    { "floatWordAfterHeader", floatWordAfterHeader },
+                    { "floatWordAfterHeaderRaw", BuildPayloadHash32(floatWordAfterHeaderRaw) },
+                    { "componentRefs", new OrderedDictionary
+                        {
+                            { "count", componentCount },
+                            { "entries", componentRefs },
+                        }
+                    },
+                    { "layoutNote", "Installed IL2CPP metadata does not expose instance fields for this type. Current payloads share a structural layout of eight zero int32 words, one finite float word, and three managed-reference component RIDs to root, mine, and model component data." },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
         private static bool TryDecodeSoundGameplayManagedReferenceData(
             ManagedReferenceHeader header,
             byte[] rawData,
@@ -12519,16 +12640,7 @@ namespace AnimeStudio.CLI
         )
         {
             var reader = new ManagedReferencePayloadReader(rawData, offset, length);
-            var words = new List<OrderedDictionary>(wordCount);
-            for (var i = 0; i < wordCount; i++)
-            {
-                var value = reader.ReadInt32($"reservedZeroWords[{i}]");
-                if (value != 0)
-                {
-                    throw new InvalidDataException($"nonzero reserved word {value} at index {i}");
-                }
-                words.Add(BuildPayloadHash32(value));
-            }
+            var words = ReadPayloadReservedZeroWords(reader, "reservedZeroWords", wordCount);
             reader.EnsureComplete();
             return new OrderedDictionary
             {
@@ -12539,6 +12651,31 @@ namespace AnimeStudio.CLI
                 { "length", length },
                 { "reservedZeroWords", words },
             };
+        }
+
+        private static List<OrderedDictionary> ReadPayloadReservedZeroWords(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int wordCount
+        )
+        {
+            if (wordCount < 0 || wordCount > 1024)
+            {
+                throw new InvalidDataException($"invalid reserved word count {wordCount} for {fieldName}");
+            }
+
+            var words = new List<OrderedDictionary>(wordCount);
+            for (var i = 0; i < wordCount; i++)
+            {
+                var value = reader.ReadInt32($"{fieldName}[{i}]");
+                if (value != 0)
+                {
+                    throw new InvalidDataException($"nonzero reserved word {value} at index {i} for {fieldName}");
+                }
+                words.Add(BuildPayloadHash32(value));
+            }
+
+            return words;
         }
 
         private static bool IsKnownEmptyCoreGameplayManagedReferenceData(ManagedReferenceHeader header)
