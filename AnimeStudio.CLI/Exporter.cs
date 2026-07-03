@@ -9168,6 +9168,39 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityAnimationComponentData", StringComparison.Ordinal))
+                {
+                    if (length < 4 || (length % 4) != 0)
+                    {
+                        return false;
+                    }
+                    var animationConfigPath = ReadPayloadAlignedUtf8StringWithZeroPadding(
+                        reader,
+                        "abilityEntityAnimationComponentData.animationConfigPath",
+                        256);
+                    if (!string.IsNullOrEmpty(animationConfigPath)
+                        && (!animationConfigPath.StartsWith("Data/Json/AnimationConfig/", StringComparison.Ordinal)
+                            || !animationConfigPath.EndsWith(".json", StringComparison.Ordinal)))
+                    {
+                        throw new InvalidDataException($"unexpected ability-entity animation config path '{animationConfigPath}'");
+                    }
+
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.AbilityEntityAnimationComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "animationConfigPath", animationConfigPath },
+                        { "animationConfigPathPresent", !string.IsNullOrEmpty(animationConfigPath) },
+                        { "layoutNote", "Installed IL2CPP metadata identifies AbilityEntityAnimationComponentData; current payloads serialize only one aligned animation config path, with empty-string rows represented by a zero length word." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.ClassName, "ModelViewStateControllerBase/AnimationParamChangePack", StringComparison.Ordinal))
                 {
                     data = new OrderedDictionary
