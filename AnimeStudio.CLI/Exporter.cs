@@ -11651,6 +11651,7 @@ namespace AnimeStudio.CLI
                             "headBarDeltaTowardCamera", "headBar2DOffset", "useHeadBarGuideLine"
                         }
                     );
+                    AddAbilityEntityTemplatePrefixDiagnostics(data, rawData, offset, length);
                     return true;
                 }
 
@@ -11658,6 +11659,11 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AbilityEntityRootComponentData", StringComparison.Ordinal))
                 {
+                    if (TryDecodeAbilityEntityRootComponentData(rawData, offset, length, out data))
+                    {
+                        return true;
+                    }
+
                     data = BuildPartialAbilityEntityPayloadData(
                         rawData,
                         offset,
@@ -12350,6 +12356,148 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static void AddAbilityEntityTemplatePrefixDiagnostics(
+            OrderedDictionary data,
+            byte[] rawData,
+            int offset,
+            int length
+        )
+        {
+            if (data == null
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var abilityEntityKey = reader.ReadAlignedAsciiString("abilityEntityTemplate.abilityEntityKey");
+                var abilityEntityKeyMirror = reader.ReadAlignedAsciiString("abilityEntityTemplate.abilityEntityKeyMirror");
+                if (string.IsNullOrEmpty(abilityEntityKey)
+                    || !abilityEntityKey.StartsWith("abilityentity_", StringComparison.Ordinal)
+                    || !string.Equals(abilityEntityKey, abilityEntityKeyMirror, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                data.Insert(7, "abilityEntityKey", abilityEntityKey);
+                data.Insert(8, "abilityEntityKeyMirror", abilityEntityKeyMirror);
+                data.Insert(9, "abilityEntityKeyPrefixBytes", reader.Position - offset);
+            }
+            catch (InvalidDataException)
+            {
+            }
+        }
+
+        private static bool TryDecodeAbilityEntityRootComponentData(
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (rawData == null
+                || offset < 0
+                || length <= 0
+                || (length % 4) != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.AbilityEntityRootComponentData" },
+                    { "layoutNote", "Decoded from observed Unity managed-reference payloads and MemoryPack setter metadata. The first eight words are a reserved zero prefix before the ten AbilityEntity root fields." },
+                    { "offset", offset },
+                    { "length", length },
+                    { "reservedZeroWords", ReadAbilityEntityRootReservedZeroWords(reader) },
+                    { "maxStackingCnt", reader.ReadInt32("abilityEntityRoot.maxStackingCnt") },
+                    { "maxStackingCntBB", ReadAbilityEntityRootBlackboardInt(reader, "abilityEntityRoot.maxStackingCntBB") },
+                    { "lifeType", ReadPayloadSparseNamedEnum32(reader, "abilityEntityRoot.lifeType", true, (0, "Limited"), (1, "Infinity")) },
+                    { "duration", reader.ReadFloat("abilityEntityRoot.duration") },
+                    { "durationBB", ReadAbilityEntityRootBlackboardDouble(reader, "abilityEntityRoot.durationBB") },
+                    { "isEnergySource", reader.ReadBool32("abilityEntityRoot.isEnergySource") },
+                    { "maxIgniteNum", reader.ReadInt32("abilityEntityRoot.maxIgniteNum") },
+                    { "maxIgniteNumBB", ReadAbilityEntityRootBlackboardInt(reader, "abilityEntityRoot.maxIgniteNumBB") },
+                    { "moveUseFrameTick", reader.ReadBool32("abilityEntityRoot.moveUseFrameTick") },
+                    { "headBarType", ReadPayloadSparseNamedEnum32(reader, "abilityEntityRoot.headBarType", true, (0, "Mob"), (1, "Elite"), (2, "EnemyPart")) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadAbilityEntityRootReservedZeroWords(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var words = new List<OrderedDictionary>(8);
+            for (var i = 0; i < 8; i++)
+            {
+                var value = reader.ReadInt32($"abilityEntityRoot.reservedZeroWords[{i}]");
+                if (value != 0)
+                {
+                    throw new InvalidDataException($"invalid nonzero reserved word {value} in abilityEntityRoot.reservedZeroWords[{i}]");
+                }
+                words.Add(BuildPayloadHash32(value));
+            }
+            return words;
+        }
+
+        private static OrderedDictionary ReadAbilityEntityRootBlackboardInt(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardInt" },
+                { "serializationShape", "bool-int-key" },
+                { "layoutNote", "IL2CPP/MemoryPack metadata-backed shape: bool32 useBlackboardKey, int32 value, aligned blackboardKey string. Empty keys serialize as a three-word wrapper." },
+                { "useBlackboardKey", reader.ReadBool32($"{fieldName}.useBlackboardKey") },
+                { "value", reader.ReadInt32($"{fieldName}.value") },
+                { "blackboardKey", reader.ReadAlignedAsciiString($"{fieldName}.blackboardKey") },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilityEntityRootBlackboardDouble(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var useBlackboardKey = reader.ReadBool32($"{fieldName}.useBlackboardKey");
+            var value = reader.ReadFloat($"{fieldName}.value");
+            var blackboardKey = reader.ReadAlignedAsciiString($"{fieldName}.blackboardKey");
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                { "serializationShape", "bool-float-key" },
+                { "layoutNote", "IL2CPP/MemoryPack metadata-backed shape: bool32 useBlackboardKey, float32 value, aligned blackboardKey string. Empty keys serialize as a three-word wrapper." },
+                { "useBlackboardKey", useBlackboardKey },
+                { "value", value },
+                { "blackboardKey", blackboardKey },
+                { "valueFloatCandidate", value },
+            };
         }
 
         private static OrderedDictionary BuildPartialAbilityEntityPayloadData(
