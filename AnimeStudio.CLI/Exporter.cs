@@ -1790,6 +1790,7 @@ namespace AnimeStudio.CLI
                 rawData,
                 offset,
                 length,
+                recoveredByRid,
                 out decodedData))
             {
                 return decodedData;
@@ -10702,6 +10703,7 @@ namespace AnimeStudio.CLI
             byte[] rawData,
             int offset,
             int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             out OrderedDictionary data
         )
         {
@@ -10857,6 +10859,60 @@ namespace AnimeStudio.CLI
                         { "layoutNote", "Observed ExitThrowMode payloads serialize one aligned skill id string; current samples are common_character_throw and common_character_watergun." },
                     };
                     reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "AttachToInstigator", StringComparison.Ordinal)
+                    && (length % 4) == 0
+                    && length <= 4096)
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.InteractiveEvent.AttachToInstigator",
+                        "IL2CPP metadata names mountPoint and followData, but AbilityEntityFollowData byte boundaries are not yet field-proven; payload is preserved with diagnostic hints.",
+                        new[] { "mountPoint", "followData" },
+                        recoveredByRid
+                    );
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "EnterThrowMode", StringComparison.Ordinal)
+                    && (length % 4) == 0
+                    && length <= 4096)
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.InteractiveEvent.EnterThrowMode",
+                        "IL2CPP metadata field order is known, and current samples expose skill/effect strings, but nested curve, effect-action, layer, and SkillData sections are preserved until byte boundaries are proven.",
+                        new[]
+                        {
+                            "skillId", "aimMountPoint", "aimOffset", "aimRightOffset", "angleCurve",
+                            "layers", "speed", "fallSpeed", "radius", "bombRadius", "maxDistance",
+                            "bombLineEffectActionCfg", "ignoreColliderOptions", "secondCheckLayerMask",
+                            "overlapRadius", "m_skillData"
+                        },
+                        recoveredByRid
+                    );
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "InteractiveEventComponentData", StringComparison.Ordinal)
+                    && (length % 4) == 0
+                    && length <= 4096)
+                {
+                    data = BuildPartialAbilityEntityPayloadData(
+                        rawData,
+                        offset,
+                        length,
+                        "Beyond.Gameplay.InteractiveEvent.InteractiveEventComponentData",
+                        "IL2CPP metadata names maxPickUpTime and interactiveActions; current payloads contain managed-reference action links, but the list header/count encoding is still preserved as raw words.",
+                        new[] { "maxPickUpTime", "interactiveActions" },
+                        recoveredByRid
+                    );
                     return true;
                 }
             }
@@ -11615,6 +11671,35 @@ namespace AnimeStudio.CLI
 
                 if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "PhysicsComponentData", StringComparison.Ordinal)
+                    && length == 16)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.PhysicsComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "physicalData", new OrderedDictionary
+                            {
+                                { "$decoded", true },
+                                { "layout", "Beyond.Gameplay.Core.PhysicalData" },
+                                { "mass", reader.ReadFloat("physicalData.mass") },
+                                { "drag", reader.ReadFloat("physicalData.drag") },
+                                { "angularDrag", reader.ReadFloat("physicalData.angularDrag") },
+                                { "collisionDetectionMode", ReadPayloadNamedEnum32(reader, "physicalData.collisionDetectionMode", new[] { "Discrete", "Continuous", "ContinuousDynamic", "ContinuousSpeculative" }) },
+                            }
+                        },
+                        { "layoutNote", "IL2CPP metadata exposes PhysicsComponentData.physicalData as mass, drag, angularDrag, and Unity CollisionDetectionMode; current ability-entity samples serialize exactly those four words." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "RotatorComponentData", StringComparison.Ordinal)
                     && length == 4)
                 {
@@ -11997,7 +12082,8 @@ namespace AnimeStudio.CLI
             int length,
             string layout,
             string layoutNote,
-            string[] metadataFieldOrder = null
+            string[] metadataFieldOrder = null,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid = null
         )
         {
             var reader = new ManagedReferencePayloadReader(rawData, offset, length);
@@ -12021,6 +12107,12 @@ namespace AnimeStudio.CLI
             if (stringHints.Count > 0)
             {
                 data["stringHints"] = stringHints;
+            }
+            var ridLinkBudget = MaxHeuristicRidLinksPerReference;
+            var ridLinks = CollectHeuristicRidLinks(rawData, offset, length, recoveredByRid, ref ridLinkBudget);
+            if (ridLinks.Count > 0)
+            {
+                data["ridLinks"] = ridLinks;
             }
             data["rawWords"] = ReadRemainingPayloadRawInt32Words(reader, "rawWords", 8192);
             reader.EnsureComplete();
@@ -15393,6 +15485,13 @@ namespace AnimeStudio.CLI
             IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
         )
         {
+            var variantStart = reader.Position;
+            if (TryReadNavMeshObstacleConfigDataWithEmbeddedName(reader, recoveredByRid, out var variant))
+            {
+                return variant;
+            }
+            reader.SetPosition(variantStart);
+
             var item = new OrderedDictionary
             {
                 { "unknownName", reader.ReadAlignedAsciiString("configList.unknownName") },
@@ -15403,6 +15502,67 @@ namespace AnimeStudio.CLI
             var shapeRid = reader.ReadInt64("configList.shapeRid");
             item["shape"] = BuildManagedReferenceRidValue(shapeRid, recoveredByRid, shapeRidOffset);
             return item;
+        }
+
+        private static bool TryReadNavMeshObstacleConfigDataWithEmbeddedName(
+            ManagedReferencePayloadReader reader,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary item
+        )
+        {
+            item = null;
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
+            try
+            {
+                var unknownName = local.ReadAlignedAsciiString("configList.unknownName");
+                var name = local.ReadAlignedAsciiString("configList.name");
+                var rawFloat32 = ReadPayloadFloatArray(local, "configList.rawFloat32", 9);
+                var embeddedName = local.ReadAlignedAsciiString("configList.embeddedName");
+                if (string.IsNullOrEmpty(embeddedName) || local.Remaining < 8)
+                {
+                    reader.SetPosition(start);
+                    return false;
+                }
+
+                var shapeRidOffset = local.Position;
+                var shapeRid = local.ReadInt64("configList.shapeRid");
+                if (!IsNavMeshObstacleShapeRid(shapeRid, recoveredByRid))
+                {
+                    reader.SetPosition(start);
+                    return false;
+                }
+                item = new OrderedDictionary
+                {
+                    { "unknownName", unknownName },
+                    { "name", name },
+                    { "rawFloat32", rawFloat32 },
+                    { "embeddedName", embeddedName },
+                    { "shape", BuildManagedReferenceRidValue(shapeRid, recoveredByRid, shapeRidOffset) },
+                    { "layoutNote", "Observed ability-entity NavMesh obstacle variant stores a non-empty embedded config name after nine numeric words, before the shape RID." },
+                };
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                reader.SetPosition(start);
+                item = null;
+                return false;
+            }
+        }
+
+        private static bool IsNavMeshObstacleShapeRid(
+            long rid,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            return recoveredByRid != null
+                && recoveredByRid.TryGetValue(rid, out var target)
+                && string.Equals(target.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                && string.Equals(target.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && (string.Equals(target.ClassName, "NavMeshObstacleCapsuleData", StringComparison.Ordinal)
+                    || string.Equals(target.ClassName, "NavMeshObstacleBoxData", StringComparison.Ordinal));
         }
 
         private static List<OrderedDictionary> ReadPayloadRidLinkList(
