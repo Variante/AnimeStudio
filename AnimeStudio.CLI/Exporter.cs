@@ -10748,11 +10748,7 @@ namespace AnimeStudio.CLI
                 if (string.Equals(header.ClassName, "ClearAddedTag", StringComparison.Ordinal)
                     && length == 4)
                 {
-                    var reserved = reader.ReadInt32("clearAddedTag.reservedZero");
-                    if (reserved != 0)
-                    {
-                        throw new InvalidDataException($"ClearAddedTag expected zero reserved word, found {reserved}");
-                    }
+                    var target = ReadPayloadZeroWord(reader, "clearAddedTag.target");
                     data = new OrderedDictionary
                     {
                         { "$decoded", true },
@@ -10760,8 +10756,8 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.InteractiveEvent.ClearAddedTag" },
                         { "offset", offset },
                         { "length", length },
-                        { "reservedZero", BuildPayloadHash32(reserved) },
-                        { "layoutNote", "Observed ClearAddedTag payloads serialize as one reserved zero int32 word." },
+                        { "target", BuildPayloadHash32(target) },
+                        { "layoutNote", "Observed ClearAddedTag payloads serialize the metadata `target` selector as one zero int32 word." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -10786,8 +10782,8 @@ namespace AnimeStudio.CLI
                 if (string.Equals(header.ClassName, "PlaySoundAction", StringComparison.Ordinal)
                     && length == 28)
                 {
-                    var soundName = reader.ReadAlignedAsciiString("playSoundAction.soundName");
-                    ReadPayloadZeroWord(reader, "playSoundAction.trailingZero");
+                    var soundEvent = reader.ReadAlignedAsciiString("playSoundAction.soundEvent");
+                    var target = ReadPayloadZeroWord(reader, "playSoundAction.target");
                     data = new OrderedDictionary
                     {
                         { "$decoded", true },
@@ -10795,8 +10791,10 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.InteractiveEvent.PlaySoundAction" },
                         { "offset", offset },
                         { "length", length },
-                        { "soundName", soundName },
-                        { "layoutNote", "Observed PlaySoundAction payloads serialize an aligned sound event string followed by one zero word." },
+                        { "soundEvent", soundEvent },
+                        { "soundName", soundEvent },
+                        { "target", BuildPayloadHash32(target) },
+                        { "layoutNote", "Observed PlaySoundAction payloads serialize metadata fields `soundEvent` then `target`." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -10805,8 +10803,8 @@ namespace AnimeStudio.CLI
                 if (string.Equals(header.ClassName, "CastSkill", StringComparison.Ordinal)
                     && length == 40)
                 {
-                    ReadPayloadZeroWord(reader, "castSkill.prefixZero0");
-                    ReadPayloadZeroWord(reader, "castSkill.prefixZero1");
+                    var sourceSelector = ReadPayloadZeroWord(reader, "castSkill.source");
+                    var target = ReadPayloadZeroWord(reader, "castSkill.target");
                     var skillId = reader.ReadAlignedAsciiString("castSkill.skillId");
                     data = new OrderedDictionary
                     {
@@ -10815,8 +10813,10 @@ namespace AnimeStudio.CLI
                         { "layout", "Beyond.Gameplay.InteractiveEvent.CastSkill" },
                         { "offset", offset },
                         { "length", length },
+                        { "source", BuildPayloadHash32(sourceSelector) },
+                        { "target", BuildPayloadHash32(target) },
                         { "skillId", skillId },
-                        { "layoutNote", "Observed CastSkill payloads serialize two zero prefix words followed by an aligned skill id string." },
+                        { "layoutNote", "Observed CastSkill payloads serialize metadata fields `source`, `target`, then `skillId`." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -10826,7 +10826,7 @@ namespace AnimeStudio.CLI
                     && length == 60)
                 {
                     var skillDataPath = reader.ReadAlignedAsciiString("attachSkill.skillDataPath");
-                    ReadPayloadZeroWord(reader, "attachSkill.trailingZero");
+                    var target = ReadPayloadZeroWord(reader, "attachSkill.target");
                     data = new OrderedDictionary
                     {
                         { "$decoded", true },
@@ -10835,7 +10835,8 @@ namespace AnimeStudio.CLI
                         { "offset", offset },
                         { "length", length },
                         { "skillDataPath", skillDataPath },
-                        { "layoutNote", "Observed AttachSkill payloads serialize an aligned SkillData JSON path followed by one zero word." },
+                        { "target", BuildPayloadHash32(target) },
+                        { "layoutNote", "Observed AttachSkill payloads serialize an aligned SkillData JSON path followed by metadata field `target`." },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -10874,13 +10875,13 @@ namespace AnimeStudio.CLI
             int offset,
             int length,
             string fieldPrefix,
-            int expectedMode
+            int expectedTarget
         )
         {
-            var mode = reader.ReadInt32($"{fieldPrefix}.mode");
-            if (mode != expectedMode)
+            var target = reader.ReadInt32($"{fieldPrefix}.target");
+            if (target != expectedTarget)
             {
-                throw new InvalidDataException($"unexpected {fieldPrefix} mode {mode}");
+                throw new InvalidDataException($"unexpected {fieldPrefix} target {target}");
             }
             var count = reader.ReadInt32($"{fieldPrefix}.tagCount");
             if (count < 0 || count > 32)
@@ -10908,10 +10909,10 @@ namespace AnimeStudio.CLI
                 { "layout", layout },
                 { "offset", offset },
                 { "length", length },
-                { "mode", BuildPayloadHash32(mode) },
+                { "target", BuildPayloadHash32(target) },
                 { "tagCount", count },
                 { "tags", tags },
-                { "layoutNote", "Observed InteractiveEvent tag actions serialize an operation mode, tag count, then repeated aligned tag strings with one hash word per tag." },
+                { "layoutNote", "Observed InteractiveEvent tag actions serialize metadata fields `target` and `tags`; tags are aligned strings with one hash word per tag." },
             };
         }
 
@@ -10923,12 +10924,12 @@ namespace AnimeStudio.CLI
             string fieldPrefix
         )
         {
-            var mode = reader.ReadInt32($"{fieldPrefix}.mode");
-            if (mode < 0 || mode > 16)
+            var target = reader.ReadInt32($"{fieldPrefix}.target");
+            if (target < 0 || target > 16)
             {
-                throw new InvalidDataException($"invalid {fieldPrefix} mode {mode}");
+                throw new InvalidDataException($"invalid {fieldPrefix} target {target}");
             }
-            var animationName = reader.ReadAlignedAsciiString($"{fieldPrefix}.animationName");
+            var animationName = reader.ReadAlignedAsciiString($"{fieldPrefix}.name");
             if (string.IsNullOrEmpty(animationName))
             {
                 throw new InvalidDataException($"empty animation name in {fieldPrefix}");
@@ -10940,19 +10941,21 @@ namespace AnimeStudio.CLI
                 { "layout", layout },
                 { "offset", offset },
                 { "length", length },
-                { "mode", BuildPayloadHash32(mode) },
+                { "target", BuildPayloadHash32(target) },
+                { "name", animationName },
                 { "animationName", animationName },
-                { "layoutNote", "Observed InteractiveEvent animation actions serialize one mode word followed by an aligned animation name." },
+                { "layoutNote", "Observed InteractiveEvent animation actions serialize metadata fields `target` and `name`." },
             };
         }
 
-        private static void ReadPayloadZeroWord(ManagedReferencePayloadReader reader, string fieldName)
+        private static int ReadPayloadZeroWord(ManagedReferencePayloadReader reader, string fieldName)
         {
             var value = reader.ReadInt32(fieldName);
             if (value != 0)
             {
                 throw new InvalidDataException($"expected zero word in {fieldName}, found {value}");
             }
+            return value;
         }
 
         private static bool TryDecodeSkeletalMorphMappingData(
