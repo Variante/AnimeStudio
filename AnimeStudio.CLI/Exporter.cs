@@ -9474,6 +9474,60 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityTemplateData/BasePositionMovementData", StringComparison.Ordinal)
+                    && length == 12)
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/BasePositionMovementData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 3) },
+                        { "layoutNote", "Observed ability-entity BasePositionMovementData payloads serialize as three int32 enum/flag words; field names are not exposed by the current DummyDll metadata." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityTemplateData/BaseRotationData", StringComparison.Ordinal)
+                    && length == 12)
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/BaseRotationData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 3) },
+                        { "layoutNote", "Observed ability-entity BaseRotationData payloads serialize as three int32 enum/flag words; field names are not exposed by the current DummyDll metadata." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilityEntityTemplateData/SurroundingMovementData", StringComparison.Ordinal)
+                    && length == 84)
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/SurroundingMovementData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawWords", ReadPayloadRawInt32Words(reader, "rawWords", 21) },
+                        { "layoutNote", "Observed ability-entity SurroundingMovementData payloads serialize as a fixed 21-word numeric block; retained as raw int32/float32-compatible words until IL2CPP field names are proven." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "ForceSet", StringComparison.Ordinal))
                 {
@@ -11306,6 +11360,37 @@ namespace AnimeStudio.CLI
                         { "offset", offset },
                         { "length", length },
                         { "rawFloat32", ReadPayloadFloatArray(reader, "rawFloat32", 12) },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CharacterMovementComponentData", StringComparison.Ordinal)
+                    && length == 64)
+                {
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    var rawFloat32 = ReadPayloadFloatArray(reader, "rawFloat32", 10);
+                    var overrideMoveMode = reader.ReadInt32("overrideMoveMode");
+                    var abilityEntityMovementDataCount = reader.ReadInt32("abilityEntityMovementDataCount");
+                    if (abilityEntityMovementDataCount != 2)
+                    {
+                        throw new InvalidDataException("CharacterMovementComponentData 64-byte payload must contain two movement-data RID links");
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Core.CharacterMovementComponentData" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "rawFloat32", rawFloat32 },
+                        { "overrideMoveMode", overrideMoveMode },
+                        { "abilityEntityMovementDataCount", abilityEntityMovementDataCount },
+                        { "movementData", ReadPayloadRidLink(reader, "movementData", recoveredByRid) },
+                        { "proxyShape", ReadPayloadRidLink(reader, "proxyShape", recoveredByRid) },
+                        { "layoutNote", "Observed ability-entity movement payloads extend the 48-byte scalar movement block with overrideMoveMode, a two-entry movement-data count, and two managed-reference RID links." },
                     };
                     reader.EnsureComplete();
                     return true;
