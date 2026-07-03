@@ -12169,6 +12169,11 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeWeaponExhibitDataManagedReferenceData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+
             if (TryDecodeLineFollowerManagedReferenceData(header, rawData, offset, length, out data))
             {
                 return true;
@@ -12275,6 +12280,73 @@ namespace AnimeStudio.CLI
                 { "circleFadeDistance", ReadPayloadFloatRange(reader, $"{fieldName}.circleFadeDistance", 0f, 10000f) },
                 { "circleFadeSmoothness", ReadPayloadFloatRange(reader, $"{fieldName}.circleFadeSmoothness", 0f, 10000f) },
             };
+        }
+
+        private static bool TryDecodeWeaponExhibitDataManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "WeaponExhibitData", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.WeaponExhibitData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "cameraGroup", reader.ReadAlignedAsciiString("cameraGroup") },
+                    { "boothPosition", ReadPayloadVector3(reader, "boothPosition") },
+                    { "spawnDataList", ReadWeaponExhibitSpawnDataList(reader) },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadWeaponExhibitSpawnDataList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("spawnDataList.count");
+            if (count < 0 || count > 16 || reader.Remaining != count * 36)
+            {
+                throw new InvalidDataException($"invalid WeaponExhibit spawnDataList count {count}");
+            }
+
+            var rows = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                rows.Add(new OrderedDictionary
+                {
+                    { "generateOffset", ReadPayloadVector3(reader, $"spawnDataList[{i}].generateOffset") },
+                    { "generateRotationEuler", ReadPayloadVector3(reader, $"spawnDataList[{i}].generateRotationEuler") },
+                    { "generateScale", ReadPayloadVector3(reader, $"spawnDataList[{i}].generateScale") },
+                });
+            }
+            return rows;
         }
 
         private static bool TryDecodeLineFollowerManagedReferenceData(
