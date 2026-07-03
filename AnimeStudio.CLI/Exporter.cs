@@ -1958,6 +1958,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeLowVolumeDiagnosticManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             var data = new OrderedDictionary
             {
                 { "$unparsed", true },
@@ -11586,6 +11596,85 @@ namespace AnimeStudio.CLI
                 { "offset", offset },
                 { "length", length },
             };
+        }
+
+        private static bool TryDecodeLowVolumeDiagnosticManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || rawData == null
+                || offset < 0
+                || length < 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            if (length == 0 && IsKnownEmptyDiagnosticManagedReferenceData(header))
+            {
+                data = BuildEmptyManagedReferenceData(header, offset, length);
+                data["$inferred"] = true;
+                return true;
+            }
+
+            if (!IsKnownLowVolumeDiagnosticManagedReferenceData(header)
+                || length <= 0
+                || length > 4096
+                || (length % 4) != 0)
+            {
+                return false;
+            }
+
+            data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", string.IsNullOrEmpty(header.Namespace) ? header.ClassName : $"{header.Namespace}.{header.ClassName}" },
+                { "offset", offset },
+                { "length", length },
+                { "wordCount", length / 4 },
+                { "rawWords", CollectDiagnosticRawWordTrace(rawData, offset, length) },
+                { "layoutNote", "Typed low-volume managed-reference payload preserved as word-aligned int32/float32 diagnostics after all semantic decoders declined it." },
+            };
+            return true;
+        }
+
+        private static bool IsKnownLowVolumeDiagnosticManagedReferenceData(ManagedReferenceHeader header)
+        {
+            if (header == null)
+            {
+                return false;
+            }
+
+            if (string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                && string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal))
+            {
+                return string.Equals(header.ClassName, "CharacterHeightData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "WeaponExhibitData", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "LineFollower", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "PlayLineSound", StringComparison.Ordinal);
+            }
+
+            return string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckRpgEquipCount", StringComparison.Ordinal);
+        }
+
+        private static bool IsKnownEmptyDiagnosticManagedReferenceData(ManagedReferenceHeader header)
+        {
+            return header != null
+                && string.Equals(header.AssemblyName, "Unity.ProBuilder", StringComparison.Ordinal)
+                && string.Equals(header.Namespace, "UnityEngine.ProBuilder.Shapes", StringComparison.Ordinal)
+                && (string.Equals(header.ClassName, "Cube", StringComparison.Ordinal)
+                    || string.Equals(header.ClassName, "Prism", StringComparison.Ordinal));
         }
 
         private static OrderedDictionary BuildReservedZeroWordsManagedReferenceData(
