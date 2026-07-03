@@ -6394,6 +6394,32 @@ namespace AnimeStudio.CLI
             }
 
             if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
+                && string.Equals(header.ClassName, "CheckBuffIdInContextAdvanced/Data", StringComparison.Ordinal))
+            {
+                if (length != 92)
+                {
+                    return false;
+                }
+
+                data = CreateCoreManagedReferenceData(header, offset, length);
+                data["$partial"] = true;
+                ReadPayloadAbilityActionDataPrefix(data, reader, "abilityActionData");
+                data["checkType"] = ReadPayloadNamedEnum32(reader, "checkBuffIdInContextAdvanced.checkType", new[] { "Id", "Tag", "Environment", "Context" });
+                data["buffIdList"] = ReadPayloadStringListWithZeroPadding(reader, "checkBuffIdInContextAdvanced.buffIdList", 16, 128);
+                data["query"] = ReadPayloadGameplayTagQueryWithZeroPadding(reader, "checkBuffIdInContextAdvanced.query", 16, 256);
+                data["tailRawWords"] = ReadPayloadRawInt32Words(reader, "checkBuffIdInContextAdvanced.tailRawWords", 1);
+                data["observedPayloadStatus"] = "serialized CheckBuffIdInContextAdvanced/Data bytes are consumed by this reader; parent remains partial because the final one-word advanced tail is not semantically named";
+                data["partialReasons"] = new List<string>
+                {
+                    "The observed advanced condition shares the CheckBuffIdInContext checkType, buffIdList, and GameplayTagQuery field order.",
+                    "The final int32 word after the query is byte-bounded but its field name is not proven by local metadata evidence.",
+                };
+                data["layoutNote"] = "Current installed data has two 92-byte CheckBuffIdInContextAdvanced/Data payloads in data_chr_0033_camille. The decoder is exact-length and falls closed for any other variant.";
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.Namespace, "Beyond.Gameplay.Core.Conditions", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckMainCharacterCondition/Data", StringComparison.Ordinal))
             {
                 if (length < 112 || length > 160 || (length % 4) != 0)
