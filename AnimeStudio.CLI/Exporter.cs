@@ -12161,6 +12161,11 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeLineFollowerManagedReferenceData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+
             if (!IsKnownLowVolumeDiagnosticManagedReferenceData(header)
                 || length <= 0
                 || length > 4096
@@ -12203,6 +12208,83 @@ namespace AnimeStudio.CLI
             return string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                 && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckRpgEquipCount", StringComparison.Ordinal);
+        }
+
+        private static bool TryDecodeLineFollowerManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "LineFollower", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var rows = ReadLineFollowerDataList(reader);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$partial", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.LineFollower" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "data", rows },
+                    { "layoutNote", "IL2CPP metadata exposes LineFollower.data as LineFollowerData rows. The row field boundaries are decoded, while the nested `line` value is preserved as three raw words because its type index is still unresolved." },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadLineFollowerDataList(ManagedReferencePayloadReader reader)
+        {
+            var count = reader.ReadInt32("data.count");
+            if (count < 0 || count > 64 || reader.Remaining != count * 32)
+            {
+                throw new InvalidDataException($"invalid LineFollower data count {count}");
+            }
+
+            var rows = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                rows.Add(new OrderedDictionary
+                {
+                    { "line", new OrderedDictionary
+                        {
+                            { "rawWords", ReadPayloadRawInt32Words(reader, $"data[{i}].line.rawWords", 3) },
+                            { "layoutNote", "Metadata field `line` has unresolved type index 143013; current samples occupy three int32 words." },
+                        }
+                    },
+                    { "useConfigSourceMountPoint", reader.ReadBool32($"data[{i}].useConfigSourceMountPoint") },
+                    { "source", BuildPayloadHash32(reader.ReadInt32($"data[{i}].source")) },
+                    { "useConfigTargetMountPoint", reader.ReadBool32($"data[{i}].useConfigTargetMountPoint") },
+                    { "target", BuildPayloadHash32(reader.ReadInt32($"data[{i}].target")) },
+                    { "positionNum", ReadPayloadEnum32(reader, $"data[{i}].positionNum", 0, 128) },
+                });
+            }
+
+            return rows;
         }
 
         private static bool IsKnownEmptyDiagnosticManagedReferenceData(ManagedReferenceHeader header)
