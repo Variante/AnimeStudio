@@ -9045,6 +9045,26 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (IsKnownCameraControlViewConfigData(header)
+                    && length > 0
+                    && length <= 4096
+                    && (length % 4) == 0)
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$partial", true },
+                        { "$inferred", true },
+                        { "layout", $"Beyond.Gameplay.View.{header.ClassName}" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "wordCount", length / 4 },
+                        { "rawWords", CollectDiagnosticRawWordTrace(rawData, offset, length) },
+                        { "layoutNote", "Typed CameraControl config payload preserved as word-aligned int32/float32 diagnostics; DummyDll metadata does not expose field names in this checkout." },
+                    };
+                    return true;
+                }
+
                 var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                 if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "WeaponComponentData", StringComparison.Ordinal))
@@ -11618,6 +11638,23 @@ namespace AnimeStudio.CLI
             return header != null
                 && string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "LookAtComponentData", StringComparison.Ordinal);
+        }
+
+        private static bool IsKnownCameraControlViewConfigData(ManagedReferenceHeader header)
+        {
+            if (header == null
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return string.Equals(header.ClassName, "CameraControlAutoPitchConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlWaterLimitConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlAutoYawConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlFightOrbitConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlAutoZoomConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlLockEnemyConfig", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "CameraControlWaterDroneConfig", StringComparison.Ordinal);
         }
 
         private static bool IsKnownEmptyGeneralGameplayManagedReferenceData(ManagedReferenceHeader header)
