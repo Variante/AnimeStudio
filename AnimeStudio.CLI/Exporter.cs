@@ -12164,6 +12164,11 @@ namespace AnimeStudio.CLI
                 return true;
             }
 
+            if (TryDecodeCheckRpgEquipCountManagedReferenceData(header, rawData, offset, length, out data))
+            {
+                return true;
+            }
+
             if (TryDecodeCharacterHeightDataManagedReferenceData(header, rawData, offset, length, out data))
             {
                 return true;
@@ -12221,6 +12226,75 @@ namespace AnimeStudio.CLI
             return string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
                 && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                 && string.Equals(header.ClassName, "CheckRpgEquipCount", StringComparison.Ordinal);
+        }
+
+        private static bool TryDecodeCheckRpgEquipCountManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                || !string.Equals(header.ClassName, "CheckRpgEquipCount", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.CheckRpgEquipCount" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "tierConditions", ReadRpgEquipCompareWrapperList(reader, "tierConditions") },
+                    { "countConditions", ReadRpgEquipCompareWrapperList(reader, "countConditions") },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadRpgEquipCompareWrapperList(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > 16)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var rows = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                rows.Add(new OrderedDictionary
+                {
+                    { "layout", "Beyond.Gameplay.Core.CheckRpgEquipCount.CompareWrapper" },
+                    { "compareType", ReadPayloadEnum32(reader, $"{fieldName}[{i}].compareType", 0, 16) },
+                    { "value", ReadPayloadBlackboardDouble(reader, $"{fieldName}[{i}].value") },
+                });
+            }
+            return rows;
         }
 
         private static bool TryDecodeCharacterHeightDataManagedReferenceData(
