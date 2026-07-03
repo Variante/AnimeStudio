@@ -1785,6 +1785,16 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeInteractiveEventManagedReferenceData(
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData))
+            {
+                return decodedData;
+            }
+
             if (TryDecodeUIManagedReferenceData(
                 header,
                 rawData,
@@ -10686,6 +10696,265 @@ namespace AnimeStudio.CLI
                 return false;
             }
         }
+
+        private static bool TryDecodeInteractiveEventManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay.InteractiveEvent", StringComparison.Ordinal)
+                || rawData == null
+                || offset < 0
+                || length <= 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.ClassName, "AddTag", StringComparison.Ordinal)
+                    && (length == 32 || length == 56 || length == 176))
+                {
+                    data = ReadInteractiveEventTagAction(reader, "Beyond.Gameplay.InteractiveEvent.AddTag", offset, length, "addTag", 1);
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "RemoveAddedTag", StringComparison.Ordinal)
+                    && (length == 32 || length == 56 || length == 100))
+                {
+                    data = ReadInteractiveEventTagAction(reader, "Beyond.Gameplay.InteractiveEvent.RemoveAddedTag", offset, length, "removeAddedTag", 2);
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "RemoveTag", StringComparison.Ordinal)
+                    && length == 192)
+                {
+                    data = ReadInteractiveEventTagAction(reader, "Beyond.Gameplay.InteractiveEvent.RemoveTag", offset, length, "removeTag", 0);
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "ClearAddedTag", StringComparison.Ordinal)
+                    && length == 4)
+                {
+                    var reserved = reader.ReadInt32("clearAddedTag.reservedZero");
+                    if (reserved != 0)
+                    {
+                        throw new InvalidDataException($"ClearAddedTag expected zero reserved word, found {reserved}");
+                    }
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.InteractiveEvent.ClearAddedTag" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "reservedZero", BuildPayloadHash32(reserved) },
+                        { "layoutNote", "Observed ClearAddedTag payloads serialize as one reserved zero int32 word." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "PlayAnimationAction", StringComparison.Ordinal)
+                    && length == 16)
+                {
+                    data = ReadInteractiveEventAnimationAction(reader, "Beyond.Gameplay.InteractiveEvent.PlayAnimationAction", offset, length, "playAnimationAction");
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "StopAnimationAction", StringComparison.Ordinal)
+                    && length == 16)
+                {
+                    data = ReadInteractiveEventAnimationAction(reader, "Beyond.Gameplay.InteractiveEvent.StopAnimationAction", offset, length, "stopAnimationAction");
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "PlaySoundAction", StringComparison.Ordinal)
+                    && length == 28)
+                {
+                    var soundName = reader.ReadAlignedAsciiString("playSoundAction.soundName");
+                    ReadPayloadZeroWord(reader, "playSoundAction.trailingZero");
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.InteractiveEvent.PlaySoundAction" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "soundName", soundName },
+                        { "layoutNote", "Observed PlaySoundAction payloads serialize an aligned sound event string followed by one zero word." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "CastSkill", StringComparison.Ordinal)
+                    && length == 40)
+                {
+                    ReadPayloadZeroWord(reader, "castSkill.prefixZero0");
+                    ReadPayloadZeroWord(reader, "castSkill.prefixZero1");
+                    var skillId = reader.ReadAlignedAsciiString("castSkill.skillId");
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.InteractiveEvent.CastSkill" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "skillId", skillId },
+                        { "layoutNote", "Observed CastSkill payloads serialize two zero prefix words followed by an aligned skill id string." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "AttachSkill", StringComparison.Ordinal)
+                    && length == 60)
+                {
+                    var skillDataPath = reader.ReadAlignedAsciiString("attachSkill.skillDataPath");
+                    ReadPayloadZeroWord(reader, "attachSkill.trailingZero");
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.InteractiveEvent.AttachSkill" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "skillDataPath", skillDataPath },
+                        { "layoutNote", "Observed AttachSkill payloads serialize an aligned SkillData JSON path followed by one zero word." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "ExitThrowMode", StringComparison.Ordinal)
+                    && (length == 28 || length == 32))
+                {
+                    var skillId = reader.ReadAlignedAsciiString("exitThrowMode.skillId");
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.InteractiveEvent.ExitThrowMode" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "skillId", skillId },
+                        { "layoutNote", "Observed ExitThrowMode payloads serialize one aligned skill id string; current samples are common_character_throw and common_character_watergun." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+
+            return false;
+        }
+
+        private static OrderedDictionary ReadInteractiveEventTagAction(
+            ManagedReferencePayloadReader reader,
+            string layout,
+            int offset,
+            int length,
+            string fieldPrefix,
+            int expectedMode
+        )
+        {
+            var mode = reader.ReadInt32($"{fieldPrefix}.mode");
+            if (mode != expectedMode)
+            {
+                throw new InvalidDataException($"unexpected {fieldPrefix} mode {mode}");
+            }
+            var count = reader.ReadInt32($"{fieldPrefix}.tagCount");
+            if (count < 0 || count > 32)
+            {
+                throw new InvalidDataException($"invalid {fieldPrefix} tag count {count}");
+            }
+            var tags = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var tag = reader.ReadAlignedAsciiString($"{fieldPrefix}.tags[{i}].tag");
+                if (string.IsNullOrEmpty(tag))
+                {
+                    throw new InvalidDataException($"empty tag in {fieldPrefix}.tags[{i}]");
+                }
+                tags.Add(new OrderedDictionary
+                {
+                    { "tag", tag },
+                    { "tagHash", BuildPayloadHash32(reader.ReadInt32($"{fieldPrefix}.tags[{i}].tagHash")) },
+                });
+            }
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "offset", offset },
+                { "length", length },
+                { "mode", BuildPayloadHash32(mode) },
+                { "tagCount", count },
+                { "tags", tags },
+                { "layoutNote", "Observed InteractiveEvent tag actions serialize an operation mode, tag count, then repeated aligned tag strings with one hash word per tag." },
+            };
+        }
+
+        private static OrderedDictionary ReadInteractiveEventAnimationAction(
+            ManagedReferencePayloadReader reader,
+            string layout,
+            int offset,
+            int length,
+            string fieldPrefix
+        )
+        {
+            var mode = reader.ReadInt32($"{fieldPrefix}.mode");
+            if (mode < 0 || mode > 16)
+            {
+                throw new InvalidDataException($"invalid {fieldPrefix} mode {mode}");
+            }
+            var animationName = reader.ReadAlignedAsciiString($"{fieldPrefix}.animationName");
+            if (string.IsNullOrEmpty(animationName))
+            {
+                throw new InvalidDataException($"empty animation name in {fieldPrefix}");
+            }
+            return new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", layout },
+                { "offset", offset },
+                { "length", length },
+                { "mode", BuildPayloadHash32(mode) },
+                { "animationName", animationName },
+                { "layoutNote", "Observed InteractiveEvent animation actions serialize one mode word followed by an aligned animation name." },
+            };
+        }
+
+        private static void ReadPayloadZeroWord(ManagedReferencePayloadReader reader, string fieldName)
+        {
+            var value = reader.ReadInt32(fieldName);
+            if (value != 0)
+            {
+                throw new InvalidDataException($"expected zero word in {fieldName}, found {value}");
+            }
+        }
+
         private static bool TryDecodeSkeletalMorphMappingData(
             ManagedReferenceHeader header,
             byte[] rawData,
