@@ -5367,9 +5367,22 @@ namespace AnimeStudio.CLI
                     throw new InvalidDataException("no end-relative showAlertEffect + projectile EffectActionCfg suffix candidate consumed the tail exactly");
                 }
 
-                var prefixReader = new ManagedReferencePayloadReader(rawData, offset, length);
                 data["effectListAndFinishPrefixWordCount"] = suffix.PrefixWordCount;
-                data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(prefixReader, $"{fieldName}.effectListAndFinishPrefixRawWords", suffix.PrefixWordCount);
+                if (TryReadProjectileEffectListAndFinishPrefix(rawData, offset, suffix.PrefixWordCount * 4, $"{fieldName}.effectListAndFinishPrefix", out var effectListPrefix))
+                {
+                    data["effectListAndFinishPrefixStatus"] = "decoded";
+                    data["layoutNote"] = "Guarded end-relative view of the ProjectileComponentData tail after mainEffectFinishDistance. The variable prefix decodes the six EffectActionCfg effect lists and their two show flags under an exact-consumption byte guard; the stable suffix is showAlertEffect, a projectile EffectActionCfg variant, and a 9-word projectile sound tail.";
+                    foreach (DictionaryEntry entry in effectListPrefix)
+                    {
+                        data[entry.Key] = entry.Value;
+                    }
+                }
+                else
+                {
+                    var prefixReader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data["effectListAndFinishPrefixStatus"] = "rawFallback";
+                    data["effectListAndFinishPrefixRawWords"] = ReadPayloadRawInt32Words(prefixReader, $"{fieldName}.effectListAndFinishPrefixRawWords", suffix.PrefixWordCount);
+                }
                 data["showAlertEffect"] = suffix.ShowAlertEffect;
                 data["alertEffect"] = suffix.AlertEffect;
                 data["postAlertEffectSoundTail"] = suffix.PostAlertEffectSoundTail;
@@ -5678,7 +5691,8 @@ namespace AnimeStudio.CLI
         private static bool TryReadProjectileAlertEffectActionCfgPrefix(
             ManagedReferencePayloadReader reader,
             string fieldName,
-            out ProjectileAlertEffectPrefix prefix
+            out ProjectileAlertEffectPrefix prefix,
+            bool requireExactTailRemaining = true
         )
         {
             prefix = null;
@@ -5703,7 +5717,10 @@ namespace AnimeStudio.CLI
                     { "effectPosData", ReadAbilitySystemTerrainEffectDataArray(local, $"{fieldName}.effectPosData") },
                 };
                 var wordCount = (local.Position - start) / 4;
-                if (wordCount != 24 || local.Remaining != 80 * 4)
+                var remainingWordsValid = requireExactTailRemaining
+                    ? local.Remaining == 80 * 4
+                    : local.Remaining >= 80 * 4;
+                if (wordCount != 24 || !remainingWordsValid)
                 {
                     throw new InvalidDataException($"projectile alertEffect prefix consumed {wordCount} words with {local.Remaining / 4} words remaining");
                 }
@@ -5720,6 +5737,119 @@ namespace AnimeStudio.CLI
             {
                 reader.SetPosition(start);
                 prefix = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadProjectileEffectListEffectActionCfg(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var data = new OrderedDictionary
+            {
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.EffectActionCfg" },
+                { "relativeOffset", start },
+                { "layoutNote", "Projectile effect-list entry decoded as the byte-proven EffectActionCfg variant: fxType, effectName, the 24-word post-name prefix omitting useScaleBB, and the 80-word EffectActionCfg tail." },
+                { "observedPayloadStatus", "projectile effect-list entry consumed as fxType + effectName + 24-word prefix + 80-word tail" },
+                { "partialReasons", new List<string>
+                    {
+                        "BlackboardDouble internals and enum value names remain diagnostic rather than fully named.",
+                        "IL2CPP metadata lists useScaleBB and centerOffset, but observed projectile effect-list entries omit both.",
+                        "Only the 104-word post-name body (empty inner strings, empty effectPosData) is byte-proven across the focused projectile slice; other bodies fall back to raw prefix words.",
+                    }
+                },
+                { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", false, (0, "Normal"), (1, "Alert"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
+                { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
+            };
+
+            if (!TryReadProjectileAlertEffectActionCfgPrefix(reader, fieldName, out var prefix, requireExactTailRemaining: false))
+            {
+                throw new InvalidDataException($"projectile effect-list entry post-name prefix did not validate for {fieldName}");
+            }
+
+            data["projectilePrefixStatus"] = "decoded 24-word projectile effect prefix";
+            data["projectilePrefixWordCount"] = prefix.WordCount;
+            data["omittedSerializedFields"] = new List<string> { "useScaleBB", "centerOffset" };
+            foreach (DictionaryEntry entry in prefix.Fields)
+            {
+                data[entry.Key] = entry.Value;
+            }
+
+            var tail = ReadProjectileAlertEffectActionCfgTail(reader, $"{fieldName}.effectActionTail");
+            tail["layout"] = "Beyond.Gameplay.EffectActionCfg/ProjectileEffectListTail";
+            tail["layoutNote"] = "80-word tail after projectile effect-list entry effectPosData; field order matches the proven projectile alertEffect tail while useScaleBB and centerOffset are omitted from the enclosing body.";
+            data["projectileEffectActionTailStatus"] = "decoded 80-word projectile effect tail";
+            data["effectActionTail"] = tail;
+            data["serializedWordCount"] = (reader.Position - start) / 4;
+            return data;
+        }
+
+        private static OrderedDictionary ReadProjectileEffectActionCfgList(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var start = reader.Position;
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > 64)
+            {
+                throw new InvalidDataException($"invalid EffectActionCfg list count {count} in {fieldName}");
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadProjectileEffectListEffectActionCfg(reader, $"{fieldName}[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "layout", "System.Collections.Generic.List<Beyond.Gameplay.EffectActionCfg>" },
+                { "relativeOffset", start },
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static bool TryReadProjectileEffectListAndFinishPrefix(
+            byte[] rawData,
+            int offset,
+            int length,
+            string fieldName,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (length < 0 || (length % 4) != 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var local = new ManagedReferencePayloadReader(rawData, offset, length);
+                var fields = new OrderedDictionary
+                {
+                    { "mainEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.mainEffects") },
+                    { "launchEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.launchEffects") },
+                    { "showReachEffectOnlyWithTarget", local.ReadBool32($"{fieldName}.showReachEffectOnlyWithTarget") },
+                    { "reachEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.reachEffects") },
+                    { "hitEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.hitEffects") },
+                    { "blockEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.blockEffects") },
+                    { "showFinishEffectOnlyWhenUnblockAndNotHit", local.ReadBool32($"{fieldName}.showFinishEffectOnlyWhenUnblockAndNotHit") },
+                    { "finishEffects", ReadProjectileEffectActionCfgList(local, $"{fieldName}.finishEffects") },
+                };
+                local.EnsureComplete();
+                data = fields;
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
                 return false;
             }
         }
