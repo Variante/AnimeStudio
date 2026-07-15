@@ -14,6 +14,7 @@ namespace AnimeStudio
         private int[] version;
         private BuildTarget platform;
         private int outPutSize;
+        private byte[] suppliedData;
 
         public Texture2DConverter(Texture2D m_Texture2D)
         {
@@ -26,17 +27,36 @@ namespace AnimeStudio
             outPutSize = m_Width * m_Height * 4;
         }
 
+        public Texture2DConverter(TextureFormat textureFormat, int width, int height, byte[] data)
+        {
+            m_TextureFormat = textureFormat;
+            m_Width = width;
+            m_Height = height;
+            suppliedData = data ?? Array.Empty<byte>();
+            version = new[] { 2021, 3, 34, 5 };
+            platform = BuildTarget.StandaloneWindows64;
+            outPutSize = m_Width * m_Height * 4;
+        }
+
         public bool DecodeTexture2D(byte[] bytes)
         {
-            if (reader.Size == 0 || m_Width == 0 || m_Height == 0)
+            var inputSize = suppliedData?.Length ?? reader?.Size ?? 0;
+            if (inputSize == 0 || m_Width == 0 || m_Height == 0)
             {
                 return false;
             }
             var flag = false;
-            var buff = ArrayPool<byte>.Shared.Rent(reader.Size);
+            var buff = ArrayPool<byte>.Shared.Rent(inputSize);
             try
             {
-                reader.GetData(buff);
+                if (suppliedData != null)
+                {
+                    suppliedData.CopyTo(buff, 0);
+                }
+                else
+                {
+                    reader.GetData(buff);
+                }
                 switch (m_TextureFormat)
                 {
                     case TextureFormat.Alpha8: //test pass
@@ -232,7 +252,8 @@ namespace AnimeStudio
         {
             if (platform == BuildTarget.XBOX360)
             {
-                for (var i = 0; i < reader.Size / 2; i++)
+                var inputSize = suppliedData?.Length ?? reader.Size;
+                for (var i = 0; i < inputSize / 2; i++)
                 {
                     var b = image_data[i * 2];
                     image_data[i * 2] = image_data[i * 2 + 1];

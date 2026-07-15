@@ -107,6 +107,7 @@ namespace AnimeStudio
         public byte stream;
         public byte offset;
         public byte format;
+        public byte rawDimension;
         public byte dimension;
 
         public ChannelInfo() { }
@@ -116,7 +117,8 @@ namespace AnimeStudio
             stream = reader.ReadByte();
             offset = reader.ReadByte();
             format = reader.ReadByte();
-            dimension = (byte)(reader.ReadByte() & 0xF);
+            rawDimension = reader.ReadByte();
+            dimension = (byte)(rawDimension & 0xF);
         }
     }
 
@@ -1013,10 +1015,14 @@ namespace AnimeStudio
 
                         int[] componentsIntArray = null;
                         float[] componentsFloatArray = null;
-                        if (reader.Game.Type.IsArknightsEndfieldGroup() && chn == 1 && m_Channel.dimension == 1)
+                        if (reader.Game.Type.IsArknightsEndfieldGroup() && chn == 1 && m_Channel.rawDimension == 0x31 && m_Channel.dimension == 1)
                         {
-                            //componentsFloatArray = MeshHelper.BytesToFloatArray(componentBytes, vertexFormat);
-                            componentsFloatArray = MeshHelper.DecompressEndfieldNormal(componentBytes, vertexFormat);
+                            MeshHelper.DecompressEndfieldNormalAndTangent(
+                                componentBytes,
+                                vertexFormat,
+                                out componentsFloatArray,
+                                out m_Tangents
+                            );
                         }
                         else
                         {
@@ -1664,67 +1670,115 @@ namespace AnimeStudio
             return result;
         }
 
-        // From: https://github.com/Hororiya/YarikStudio/blob/main/AssetStudio/Classes/Mesh.cs#L1535
-        public static float[] DecompressEndfieldNormal(byte[] inputBytes, VertexFormat format) // 8bits per component
+        public static void DecompressEndfieldNormalAndTangent(
+            byte[] inputBytes,
+            VertexFormat format,
+            out float[] normals,
+            out float[] tangents
+        )
         {
-            var size = checked((int)GetFormatSize(format));
-            var len = inputBytes.Length / size;
-            var result = new float[checked(len * 3)];
-            var readFloat = BytesToFloatArray(inputBytes, format);
+            if (format != VertexFormat.Float)
+            {
+                throw new InvalidDataException($"Endfield packed normal/tangent channel must use Float format, not {format}.");
+            }
+            if (inputBytes.Length % sizeof(uint) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Endfield packed normal/tangent channel has {inputBytes.Length} bytes; expected a multiple of {sizeof(uint)}."
+                );
+            }
+
+            var len = inputBytes.Length / sizeof(uint);
+            normals = new float[checked(len * 3)];
+            tangents = new float[checked(len * 4)];
+            const float signed10Scale = 1.0f / 511.0f;
 
             for (int i = 0; i < len; i++)
             {
-                float value = readFloat[i];
+                uint packed = BinaryPrimitives.ReadUInt32LittleEndian(inputBytes.AsSpan(i * sizeof(uint)));
+                if ((packed & 0x40000000u) == 0)
+                {
+                    throw new InvalidDataException(
+                        $"Endfield packed normal/tangent vertex {i} does not set the bit-30 packed selector."
+                    );
+                }
 
-                float r0x = BitConverter.ToInt32(BitConverter.GetBytes(value)) & 0x40000000;
-                r0x = (BitConverter.ToUInt32(BitConverter.GetBytes(r0x)) > 0) ? 1.0f : 0.0f;
+                int packedNormalX = SignExtend10(packed, 0);
+                int packedNormalY = SignExtend10(packed, 10);
+                int packedTangentAngle = SignExtend10(packed, 20);
 
-                // (((int3)v2.xxx << (32 - int3(10,10,10) - int3(0,10,20))) >> (32 - int3(10,10,10)))
-                float r0y = (BitConverter.ToInt32(BitConverter.GetBytes(value)) << 22) >> 22;
-                float r0z = (BitConverter.ToInt32(BitConverter.GetBytes(value)) << 12) >> 22;
-                float r0w = (BitConverter.ToInt32(BitConverter.GetBytes(value)) << 2) >> 22;
+                float normalX = packedNormalX * signed10Scale;
+                float normalY = packedNormalY * signed10Scale;
+                float normalZ = 1.0f - Math.Abs(normalX) - Math.Abs(normalY);
+                if (normalZ < 0.0f)
+                {
+                    float unfoldedX = normalX;
+                    float unfoldedY = normalY;
+                    normalX = (1.0f - Math.Abs(unfoldedY)) * SignNotZero(unfoldedX);
+                    normalY = (1.0f - Math.Abs(unfoldedX)) * SignNotZero(unfoldedY);
+                }
+                Normalize(ref normalX, ref normalY, ref normalZ, i, "normal");
 
-                float r1x = (BitConverter.ToUInt32(BitConverter.GetBytes(value))) >> 31;
+                normals[i * 3] = normalX;
+                normals[i * 3 + 1] = normalY;
+                normals[i * 3 + 2] = normalZ;
 
-                float r1y = 0.00195694715f * r0y;
-                float r1z = 0.00195694715f * r0z;
-                float r1w = 0.00195694715f * r0w;
+                // This is the tangent basis used by Endfield's shipped CharacterNPR vertex shader.
+                float tangentZeroX = normalY - normalZ;
+                float tangentZeroY = normalZ - normalX;
+                float tangentZeroZ = normalX - normalY;
+                float projection = tangentZeroX * normalX + tangentZeroY * normalY + tangentZeroZ * normalZ;
+                tangentZeroX -= projection * normalX;
+                tangentZeroY -= projection * normalY;
+                tangentZeroZ -= projection * normalZ;
+                Normalize(ref tangentZeroX, ref tangentZeroY, ref tangentZeroZ, i, "tangent basis");
 
-                float leng = r1x * r1x + r1y * r1y + r1z * r1z + r1w * r1w;
+                float tangentQuarterX = normalY * tangentZeroZ - normalZ * tangentZeroY;
+                float tangentQuarterY = normalZ * tangentZeroX - normalX * tangentZeroZ;
+                float tangentQuarterZ = normalX * tangentZeroY - normalY * tangentZeroX;
+                Normalize(ref tangentQuarterX, ref tangentQuarterY, ref tangentQuarterZ, i, "tangent quarter basis");
 
-                float r2x = 1.0f - Math.Abs(r1y);
-                float r2y = 1.0f - Math.Abs(r1z);
-                float r2z = 1.0f - Math.Abs(r1y);
+                float signedAngle = packedTangentAngle * signed10Scale;
+                float tangentWeightZero = 1.0f - 2.0f * Math.Abs(signedAngle);
+                float tangentWeightQuarter = SignNotZero(signedAngle) * (1.0f - Math.Abs(tangentWeightZero));
 
-                float r3z = r2x - Math.Abs(r1z);
+                float tangentX = tangentWeightZero * tangentZeroX + tangentWeightQuarter * tangentQuarterX;
+                float tangentY = tangentWeightZero * tangentZeroY + tangentWeightQuarter * tangentQuarterY;
+                float tangentZ = tangentWeightZero * tangentZeroZ + tangentWeightQuarter * tangentQuarterZ;
+                Normalize(ref tangentX, ref tangentY, ref tangentZ, i, "tangent");
 
-                r2x = r3z < 0.0f ? 1.0f : 0.0f;
-
-                r0y = r0y >= 0.0f ? 1.0f : 0.0f;
-                r0z = r0z >= 0.0f ? 1.0f : 0.0f;
-
-                r0y = r0y * 2.0f - 1.0f;
-                r0z = r0z * 2.0f - 1.0f;
-
-                r0y = r2y * r0y;
-                r0z = r2z * r0z;
-
-                float r3x = (r2x == 1.0f) ? r0y : r1y;
-                float r3y = (r2x == 1.0f) ? r0z : r1z;
-
-                r0y = r3x * r3x + r3y * r3y + r3z * r3z;
-                r0y = 1.0f / (float)Math.Sqrt(r0y);
-
-                r2x = r3x * r0y;
-                r2y = r3y * r0y;
-                r2z = r3z * r0y;
-
-                // 计算result[i * 3]的值
-                result[i * 3] = r2x;
-                result[i * 3 + 1] = r2y;
-                result[i * 3 + 2] = r2z;
+                tangents[i * 4] = tangentX;
+                tangents[i * 4 + 1] = tangentY;
+                tangents[i * 4 + 2] = tangentZ;
+                tangents[i * 4 + 3] = (packed & 0x80000000u) != 0 ? 1.0f : -1.0f;
             }
-            return result;
+        }
+
+        private static int SignExtend10(uint packed, int shift)
+        {
+            int value = (int)((packed >> shift) & 0x3FFu);
+            return value >= 0x200 ? value - 0x400 : value;
+        }
+
+        private static float SignNotZero(float value)
+        {
+            return value >= 0.0f ? 1.0f : -1.0f;
+        }
+
+        private static void Normalize(ref float x, ref float y, ref float z, int vertexIndex, string valueName)
+        {
+            float lengthSquared = x * x + y * y + z * z;
+            if (!(lengthSquared > 0.0f) || float.IsInfinity(lengthSquared) || float.IsNaN(lengthSquared))
+            {
+                throw new InvalidDataException(
+                    $"Endfield packed normal/tangent vertex {vertexIndex} has an invalid {valueName}."
+                );
+            }
+
+            float inverseLength = 1.0f / (float)Math.Sqrt(lengthSquared);
+            x *= inverseLength;
+            y *= inverseLength;
+            z *= inverseLength;
         }
     }
 }

@@ -18,15 +18,19 @@ namespace AnimeStudio
 
     public class StructParameter
     {
+        public int m_NameIndex;
+        public int m_Index;
+        public int m_ArraySize;
+        public int m_StructSize;
         public List<MatrixParameter> m_MatrixParams;
         public List<VectorParameter> m_VectorParams;
 
         public StructParameter(EndianBinaryReader reader)
         {
-            var m_NameIndex = reader.ReadInt32();
-            var m_Index = reader.ReadInt32();
-            var m_ArraySize = reader.ReadInt32();
-            var m_StructSize = reader.ReadInt32();
+            m_NameIndex = reader.ReadInt32();
+            m_Index = reader.ReadInt32();
+            m_ArraySize = reader.ReadInt32();
+            m_StructSize = reader.ReadInt32();
 
             int numVectorParams = reader.ReadInt32Count(fieldName: "numVectorParams");
             m_VectorParams = new List<VectorParameter>();
@@ -55,7 +59,7 @@ namespace AnimeStudio
             bindPoint = reader.ReadInt32();
         }
     }
-    
+
     public class DescriptorSetParam
     {
         public int m_NameIndex;
@@ -416,6 +420,7 @@ namespace AnimeStudio
         public int m_Index;
         public int m_SamplerIndex;
         public int m_SamplerSpace;
+        public bool m_MultiSampled;
         public sbyte m_Dim;
 
         public TextureParameter(ObjectReader reader)
@@ -438,7 +443,7 @@ namespace AnimeStudio
                 }
                 if (version[0] > 2017 || (version[0] == 2017 && version[1] >= 3)) //2017.3 and up
                 {
-                    var m_MultiSampled = reader.ReadBoolean();
+                    m_MultiSampled = reader.ReadBoolean();
                 }
                 m_Dim = reader.ReadSByte();
                 reader.AlignStream();
@@ -679,7 +684,7 @@ namespace AnimeStudio
         public SerializedSubProgram(ObjectReader reader)
         {
             var version = reader.version;
-            
+
             if (reader.Game.Type.IsLoveAndDeepspace())
             {
                 var m_CodeHash = new Hash128(reader);

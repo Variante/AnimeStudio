@@ -758,6 +758,7 @@ namespace AnimeStudio
                             ClassIDType.AssetBundle when ClassIDType.AssetBundle.CanParse() => new AssetBundle(objectReader),
                             ClassIDType.AudioClip when ClassIDType.AudioClip.CanParse() => new AudioClip(objectReader),
                             ClassIDType.Avatar when ClassIDType.Avatar.CanParse() => new Avatar(objectReader),
+                            ClassIDType.Cubemap when ClassIDType.Cubemap.CanParse() => new Cubemap(objectReader),
                             ClassIDType.Font when ClassIDType.Font.CanParse() => new Font(objectReader),
                             ClassIDType.GameObject when ClassIDType.GameObject.CanParse() => new GameObject(objectReader),
                             ClassIDType.IndexObject when ClassIDType.IndexObject.CanParse() => new IndexObject(objectReader),

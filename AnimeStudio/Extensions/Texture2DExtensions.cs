@@ -69,6 +69,29 @@ namespace AnimeStudio
             }
         }
 
+        public static Image<Bgra32> ConvertRawToImage(TextureFormat textureFormat, int width, int height, byte[] data, bool flip)
+        {
+            var converter = new Texture2DConverter(textureFormat, width, height, data);
+            byte[] buff = ArrayPool<byte>.Shared.Rent(width * height * 4);
+            try
+            {
+                if (converter.DecodeTexture2D(buff))
+                {
+                    var image = Image.LoadPixelData<Bgra32>(_configuration, buff, width, height);
+                    if (flip)
+                    {
+                        image.Mutate(x => x.Flip(FlipMode.Vertical));
+                    }
+                    return image;
+                }
+                return null;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buff, true);
+            }
+        }
+
         public static MemoryStream ConvertToStream(this Texture2D m_Texture2D, ImageFormat imageFormat, bool flip)
         {
             var image = ConvertToImage(m_Texture2D, flip);

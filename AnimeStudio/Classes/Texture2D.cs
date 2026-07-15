@@ -65,13 +65,17 @@ namespace AnimeStudio
         }
     }
 
-    public sealed class Texture2D : Texture
+    public class Texture2D : Texture
     {
         public int m_Width;
         public int m_Height;
+        public int m_CompleteImageSize;
+        public int m_MipsStripped;
         public TextureFormat m_TextureFormat;
         public bool m_MipMap;
         public int m_MipCount;
+        public int m_ImageCount;
+        public int m_TextureDimension;
         public GLTextureSettings m_TextureSettings;
         public ResourceReader image_data;
         public StreamingInfo m_StreamData;
@@ -82,10 +86,10 @@ namespace AnimeStudio
         {
             m_Width = reader.ReadInt32();
             m_Height = reader.ReadInt32();
-            var m_CompleteImageSize = reader.ReadInt32();
+            m_CompleteImageSize = reader.ReadInt32();
             if (version[0] >= 2020) //2020.1 and up
             {
-                var m_MipsStripped = reader.ReadInt32();
+                m_MipsStripped = reader.ReadInt32();
             }
             m_TextureFormat = (TextureFormat)reader.ReadInt32();
   
@@ -155,8 +159,8 @@ namespace AnimeStudio
             {
                 reader.AlignStream();
             }
-            var m_ImageCount = reader.ReadInt32();
-            var m_TextureDimension = reader.ReadInt32();
+            m_ImageCount = reader.ReadInt32();
+            m_TextureDimension = reader.ReadInt32();
             m_TextureSettings = new GLTextureSettings(reader);
             if (version[0] >= 3) //3.0 and up
             {

@@ -295,6 +295,165 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static int GetBC6HMipByteSize(int width, int height)
+        {
+            var blocksWide = Math.Max(1, (width + 3) / 4);
+            var blocksHigh = Math.Max(1, (height + 3) / 4);
+            return checked(blocksWide * blocksHigh * 16);
+        }
+
+        public static bool ExportCubemap(AssetItem item, string exportPath)
+        {
+            var cubemap = (Cubemap)item.Asset;
+            var extension = cubemap.m_TextureFormat == TextureFormat.BC6H
+                ? ".cubemap.bc6h"
+                : ".cubemap.raw";
+            if (!TryExportFile(exportPath, item, extension, out var payloadPath))
+            {
+                return false;
+            }
+
+            var payload = cubemap.image_data.GetData();
+            File.WriteAllBytes(payloadPath, payload);
+
+            var faceNames = new[]
+            {
+                "PositiveX",
+                "NegativeX",
+                "PositiveY",
+                "NegativeY",
+                "PositiveZ",
+                "NegativeZ",
+            };
+            var faceCount = cubemap.m_ImageCount;
+            var mipCount = cubemap.m_MipCount;
+            var mipSizes = new List<int>();
+            var mipDimensions = new List<object>();
+            var width = cubemap.m_Width;
+            var height = cubemap.m_Height;
+            for (var mip = 0; mip < mipCount; mip++)
+            {
+                var mipWidth = Math.Max(1, width >> mip);
+                var mipHeight = Math.Max(1, height >> mip);
+                var mipSize = cubemap.m_TextureFormat == TextureFormat.BC6H
+                    ? GetBC6HMipByteSize(mipWidth, mipHeight)
+                    : 0;
+                mipSizes.Add(mipSize);
+                mipDimensions.Add(new
+                {
+                    mip,
+                    width = mipWidth,
+                    height = mipHeight,
+                    byteSize = mipSize,
+                });
+            }
+
+            var calculatedFaceSize = mipSizes.Sum();
+            var layoutValidated = cubemap.m_TextureFormat == TextureFormat.BC6H
+                && faceCount == faceNames.Length
+                && calculatedFaceSize == cubemap.m_CompleteImageSize
+                && payload.Length == checked(calculatedFaceSize * faceCount);
+            var sliceEntries = new List<object>();
+            var sliceRoot = payloadPath + ".faces";
+            if (layoutValidated)
+            {
+                Directory.CreateDirectory(sliceRoot);
+                for (var face = 0; face < faceCount; face++)
+                {
+                    var offset = face * calculatedFaceSize;
+                    for (var mip = 0; mip < mipCount; mip++)
+                    {
+                        var mipWidth = Math.Max(1, width >> mip);
+                        var mipHeight = Math.Max(1, height >> mip);
+                        var byteSize = mipSizes[mip];
+                        var slice = new byte[byteSize];
+                        Buffer.BlockCopy(payload, offset, slice, 0, byteSize);
+                        var stem = $"face{face}_{faceNames[face]}_mip{mip}_{mipWidth}x{mipHeight}";
+                        var rawSlicePath = Path.Combine(sliceRoot, stem + ".bc6h");
+                        File.WriteAllBytes(rawSlicePath, slice);
+
+                        var previewPath = Path.Combine(sliceRoot, stem + ".png");
+                        var previewWritten = false;
+                        using (var image = Texture2DExtensions.ConvertRawToImage(
+                            cubemap.m_TextureFormat,
+                            mipWidth,
+                            mipHeight,
+                            slice,
+                            true))
+                        {
+                            if (image != null)
+                            {
+                                using var stream = File.Create(previewPath);
+                                image.WriteToStream(stream, ImageFormat.Png);
+                                previewWritten = true;
+                            }
+                        }
+
+                        sliceEntries.Add(new
+                        {
+                            face,
+                            faceName = faceNames[face],
+                            mip,
+                            width = mipWidth,
+                            height = mipHeight,
+                            offset,
+                            byteSize,
+                            rawFile = Path.GetFileName(rawSlicePath),
+                            rawSha256 = Convert.ToHexString(SHA256.HashData(slice)).ToLowerInvariant(),
+                            previewFile = previewWritten ? Path.GetFileName(previewPath) : null,
+                            previewVerticalFlip = previewWritten,
+                        });
+                        offset += byteSize;
+                    }
+                }
+            }
+            else
+            {
+                Logger.Warning(
+                    $"Cubemap raw layout was preserved but not sliced: name={QuoteLogField(item.Text)} " +
+                    $"PathID={item.m_PathID} Format={cubemap.m_TextureFormat} Width={width} Height={height} " +
+                    $"MipCount={mipCount} ImageCount={faceCount} CompleteImageSize={cubemap.m_CompleteImageSize} " +
+                    $"CalculatedFaceSize={calculatedFaceSize} PayloadSize={payload.Length}");
+            }
+
+            var manifest = new
+            {
+                animeStudio = new
+                {
+                    kind = "unity_cubemap_payload",
+                    note = "The top-level payload and every .bc6h slice are exact serialized bytes. PNG files are vertically flipped 8-bit decoder previews only.",
+                },
+                type = item.TypeString,
+                name = item.Text,
+                pathId = item.m_PathID,
+                sourceFile = item.SourceFile?.fileName,
+                sourceOriginalPath = item.SourceFile?.originalPath,
+                sourceOffset = item.SourceFile?.offset ?? -1,
+                width,
+                height,
+                format = cubemap.m_TextureFormat.ToString(),
+                formatValue = (int)cubemap.m_TextureFormat,
+                mipCount,
+                imageCount = faceCount,
+                completeImageSize = cubemap.m_CompleteImageSize,
+                payloadSize = payload.Length,
+                payloadFile = Path.GetFileName(payloadPath),
+                payloadSha256 = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
+                layout = "face-major; each face stores mip 0 through mip N-1",
+                layoutValidated,
+                mipDimensions,
+                slices = sliceEntries,
+                streamData = new
+                {
+                    offset = cubemap.m_StreamData?.offset,
+                    size = cubemap.m_StreamData?.size,
+                    path = cubemap.m_StreamData?.path,
+                },
+            };
+            File.WriteAllText(payloadPath + ".manifest.json", JsonConvert.SerializeObject(manifest, Formatting.Indented));
+            return true;
+        }
+
         public static bool ExportAudioClip(AssetItem item, string exportPath)
         {
             var m_AudioClip = (AudioClip)item.Asset;
@@ -19379,6 +19538,8 @@ namespace AnimeStudio.CLI
                     return ExportGameObject(item, exportPath);
                 case ClassIDType.Texture2D:
                     return ExportTexture2D(item, exportPath);
+                case ClassIDType.Cubemap:
+                    return ExportCubemap(item, exportPath);
                 case ClassIDType.AudioClip:
                     return ExportAudioClip(item, exportPath);
                 case ClassIDType.Shader:

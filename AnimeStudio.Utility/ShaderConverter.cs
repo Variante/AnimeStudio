@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Vortice.D3DCompiler;
 
@@ -32,12 +33,14 @@ namespace AnimeStudio
             private readonly string m_bytecodeSidecarRoot;
             private int m_sidecarIndex;
 
-            internal ShaderExportContext(string bytecodeSidecarRoot)
+            internal ShaderExportContext(string bytecodeSidecarRoot, bool isEndfield)
             {
                 m_bytecodeSidecarRoot = bytecodeSidecarRoot;
+                IsEndfield = isEndfield;
             }
 
             internal bool HasBytecodeSidecarRoot => !string.IsNullOrEmpty(m_bytecodeSidecarRoot);
+            internal bool IsEndfield { get; }
 
             internal bool CanAppendProgramBody => m_programBodyChars < MaxShaderProgramBodyChars;
 
@@ -66,7 +69,7 @@ namespace AnimeStudio
                 sb.Append("// AnimeStudio: bytecode was parsed; hash, offset, and size comments above preserve identity.\n");
             }
 
-            internal void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data)
+            internal void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data, string metadataJson = null)
             {
                 if (string.IsNullOrEmpty(m_bytecodeSidecarRoot) || data.IsEmpty)
                 {
@@ -81,6 +84,12 @@ namespace AnimeStudio
                     var path = Path.Combine(m_bytecodeSidecarRoot, fileName);
                     File.WriteAllBytes(path, data.ToArray());
                     sb.Append($"// AnimeStudio bytecode sidecar: {fileName}\n");
+                    if (!string.IsNullOrEmpty(metadataJson))
+                    {
+                        var metadataFileName = fileName + ".metadata.json";
+                        File.WriteAllText(Path.Combine(m_bytecodeSidecarRoot, metadataFileName), metadataJson, new UTF8Encoding(false));
+                        sb.Append($"// AnimeStudio shader metadata sidecar: {metadataFileName}\n");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -91,6 +100,25 @@ namespace AnimeStudio
             }
         }
 
+        private sealed class RuriDescriptorBindingMetadata
+        {
+            public string Name { get; set; } = string.Empty;
+            public int NameIndex { get; set; }
+            public int BindingIndex { get; set; }
+            public int DescriptorType { get; set; }
+            public uint PackedBinding { get; set; }
+            public uint PackedInfo { get; set; }
+        }
+
+        private sealed class RuriDescriptorSetMetadata
+        {
+            public string Name { get; set; } = string.Empty;
+            public int NameIndex { get; set; } = -1;
+            public int SetId { get; set; }
+            public int MaxBindingIndex { get; set; }
+            public List<RuriDescriptorBindingMetadata> Bindings { get; set; } = new List<RuriDescriptorBindingMetadata>();
+        }
+
         internal static bool IsEndfieldD3D11ProgramType(ShaderGpuProgramType programType)
         {
             return (int)programType == EndfieldD3D11ProgramType;
@@ -98,7 +126,9 @@ namespace AnimeStudio
         public static string Convert(this Shader shader, string bytecodeSidecarRoot = null)
         {
             var previousContext = s_currentExportContext;
-            s_currentExportContext = new ShaderExportContext(bytecodeSidecarRoot);
+            var isEndfield = shader.assetsFile.game.Type.IsArknightsEndfieldCB3()
+                || shader.assetsFile.game.Type.IsArknightsEndfield();
+            s_currentExportContext = new ShaderExportContext(bytecodeSidecarRoot, isEndfield);
             try
             {
                 if (shader.platformInfos != null)
@@ -246,6 +276,338 @@ namespace AnimeStudio
         {
             return (value ?? "Unnamed Shader").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
+
+        private static string BuildRuriProgramMetadataJson(
+            SerializedProgramParameters commonParameters,
+            SerializedProgramParameters variantParameters,
+            IReadOnlyList<KeyValuePair<string, int>> nameIndices,
+            int subShaderIndex,
+            int passIndex,
+            string passName,
+            string stage,
+            uint blobIndex,
+            ShaderGpuProgramType gpuProgramType,
+            string compilerPlatform,
+            int shaderHardwareTier,
+            IReadOnlyList<string> compiledKeywords,
+            IReadOnlyList<string> localKeywords)
+        {
+            if ((commonParameters == null && variantParameters == null)
+                || CurrentExportContext?.HasBytecodeSidecarRoot != true)
+            {
+                return null;
+            }
+
+            IEnumerable<T> MergeParameters<T>(Func<SerializedProgramParameters, List<T>> selector)
+            {
+                if (commonParameters != null)
+                {
+                    foreach (var value in selector(commonParameters) ?? new List<T>())
+                    {
+                        yield return value;
+                    }
+                }
+                if (variantParameters != null && !ReferenceEquals(commonParameters, variantParameters))
+                {
+                    foreach (var value in selector(variantParameters) ?? new List<T>())
+                    {
+                        yield return value;
+                    }
+                }
+            }
+
+            var namesByIndex = new Dictionary<int, string>();
+            if (nameIndices != null)
+            {
+                foreach (var pair in nameIndices)
+                {
+                    if (!string.IsNullOrEmpty(pair.Key) && !namesByIndex.ContainsKey(pair.Value))
+                    {
+                        namesByIndex.Add(pair.Value, pair.Key);
+                    }
+                }
+            }
+
+            string ResolveName(int nameIndex)
+            {
+                return namesByIndex.TryGetValue(nameIndex, out var name) ? name : string.Empty;
+            }
+
+            var isEndfield = CurrentExportContext?.IsEndfield == true;
+
+            (int Set, int Binding) DecodeBinding(int packedIndex)
+            {
+                if (!isEndfield || packedIndex == -1)
+                {
+                    return (0, packedIndex);
+                }
+
+                var packed = unchecked((uint)packedIndex);
+                if ((packed & 0xFF000000u) == 0)
+                {
+                    return (0, packedIndex);
+                }
+                return ((int)((packed >> 16) & 0xFFu), (int)(packed & 0xFFFFu));
+            }
+
+            int DecodeBindingIndex(int packedIndex)
+            {
+                return DecodeBinding(packedIndex).Binding;
+            }
+
+            int NormalizeDescriptorType(int descriptorType)
+            {
+                if (!isEndfield)
+                {
+                    return descriptorType;
+                }
+
+                return descriptorType switch
+                {
+                    0 => 1, // VK_DESCRIPTOR_TYPE_SAMPLER
+                    1 or 2 or 4 => 2, // combined/sampled image or uniform texel buffer
+                    3 => 3, // storage image
+                    5 or 7 or 9 => 5, // storage texel/buffer variants
+                    6 or 8 => 4, // uniform buffer variants
+                    _ => 0,
+                };
+            }
+
+            var vectors = MergeParameters(parameters => parameters.m_VectorParams).ToList();
+            var matrices = MergeParameters(parameters => parameters.m_MatrixParams).ToList();
+            var textures = MergeParameters(parameters => parameters.m_TextureParams).ToList();
+            var buffers = MergeParameters(parameters => parameters.m_BufferParams).ToList();
+            var constantBuffers = MergeParameters(parameters => parameters.m_ConstantBuffers).ToList();
+            var constantBufferBindings = MergeParameters(parameters => parameters.m_ConstantBufferBindings).ToList();
+            var uavs = MergeParameters(parameters => parameters.m_UAVParams).ToList();
+            var samplers = MergeParameters(parameters => parameters.m_Samplers).ToList();
+            var serializedDescriptorSets = MergeParameters(parameters => parameters.m_DescriptorSetParams).ToList();
+
+            object ConvertVector(VectorParameter parameter)
+            {
+                return new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = parameter.m_Index,
+                    ArraySize = parameter.m_ArraySize,
+                    Type = (int)parameter.m_Type,
+                    RowCount = unchecked((byte)parameter.m_Dim),
+                    ColumnCount = (byte)1,
+                    IsMatrix = false,
+                };
+            }
+
+            object ConvertMatrix(MatrixParameter parameter)
+            {
+                return new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = parameter.m_Index,
+                    ArraySize = parameter.m_ArraySize,
+                    Type = (int)parameter.m_Type,
+                    RowCount = unchecked((byte)parameter.m_RowCount),
+                    ColumnCount = (byte)4,
+                    IsMatrix = true,
+                };
+            }
+
+            object ConvertStruct(StructParameter parameter)
+            {
+                return new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = parameter.m_Index,
+                    ArraySize = parameter.m_ArraySize,
+                    StructSize = parameter.m_StructSize,
+                    VectorMembers = (parameter.m_VectorParams ?? new List<VectorParameter>()).Select(ConvertVector).ToArray(),
+                    MatrixMembers = (parameter.m_MatrixParams ?? new List<MatrixParameter>()).Select(ConvertMatrix).ToArray(),
+                };
+            }
+
+            object ConvertBuffer(BufferBinding parameter)
+            {
+                return new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = DecodeBindingIndex(parameter.m_Index),
+                    ArraySize = parameter.m_ArraySize,
+                };
+            }
+
+            object ConvertConstantBuffer(ConstantBuffer parameter)
+            {
+                return new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    MatrixParameters = (parameter.m_MatrixParams ?? new List<MatrixParameter>()).Select(ConvertMatrix).ToArray(),
+                    VectorParameters = (parameter.m_VectorParams ?? new List<VectorParameter>()).Select(ConvertVector).ToArray(),
+                    StructParameters = (parameter.m_StructParams ?? new List<StructParameter>()).Select(ConvertStruct).ToArray(),
+                    Size = parameter.m_Size,
+                    IsPartialCB = parameter.m_IsPartialCB,
+                };
+            }
+
+            var descriptorSets = new Dictionary<int, RuriDescriptorSetMetadata>();
+            var descriptorBindings = new Dictionary<(int Set, int Binding, int Type), RuriDescriptorBindingMetadata>();
+
+            void AddDescriptorBinding(
+                int setId,
+                int bindingIndex,
+                int descriptorType,
+                string name,
+                int nameIndex,
+                uint packedBinding = 0,
+                uint packedInfo = 0,
+                string setName = null,
+                int setNameIndex = -1)
+            {
+                if (setId < 0 || bindingIndex < 0 || descriptorType <= 0)
+                {
+                    return;
+                }
+
+                if (!descriptorSets.TryGetValue(setId, out var set))
+                {
+                    set = new RuriDescriptorSetMetadata
+                    {
+                        Name = setName ?? string.Empty,
+                        NameIndex = setNameIndex,
+                        SetId = setId,
+                    };
+                    descriptorSets.Add(setId, set);
+                }
+                else if (!string.IsNullOrEmpty(setName) && string.IsNullOrEmpty(set.Name))
+                {
+                    set.Name = setName;
+                    set.NameIndex = setNameIndex;
+                }
+
+                if (bindingIndex > set.MaxBindingIndex)
+                {
+                    set.MaxBindingIndex = bindingIndex;
+                }
+
+                var key = (setId, bindingIndex, descriptorType);
+                if (!descriptorBindings.TryGetValue(key, out var binding))
+                {
+                    binding = new RuriDescriptorBindingMetadata
+                    {
+                        Name = name ?? string.Empty,
+                        NameIndex = nameIndex,
+                        BindingIndex = bindingIndex,
+                        DescriptorType = descriptorType,
+                        PackedBinding = packedBinding,
+                        PackedInfo = packedInfo,
+                    };
+                    descriptorBindings.Add(key, binding);
+                    set.Bindings.Add(binding);
+                }
+                else if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(binding.Name))
+                {
+                    binding.Name = name;
+                    binding.NameIndex = nameIndex;
+                }
+            }
+
+            foreach (var descriptorSet in serializedDescriptorSets)
+            {
+                var setName = ResolveName(descriptorSet.m_NameIndex);
+                foreach (var binding in descriptorSet.m_SetBindings ?? new List<SetBinding>())
+                {
+                    AddDescriptorBinding(
+                        descriptorSet.m_SetId,
+                        binding.m_BindingIndex,
+                        NormalizeDescriptorType(binding.m_DescriptorType),
+                        ResolveName(binding.m_NameIndex),
+                        binding.m_NameIndex,
+                        binding.m_PackedBinding,
+                        binding.m_PackedInfo,
+                        setName,
+                        descriptorSet.m_NameIndex);
+                }
+            }
+
+            foreach (var texture in textures)
+            {
+                var decoded = DecodeBinding(texture.m_Index);
+                AddDescriptorBinding(decoded.Set, decoded.Binding, 2, ResolveName(texture.m_NameIndex), texture.m_NameIndex, unchecked((uint)texture.m_Index));
+            }
+            foreach (var buffer in buffers)
+            {
+                var decoded = DecodeBinding(buffer.m_Index);
+                AddDescriptorBinding(decoded.Set, decoded.Binding, 2, ResolveName(buffer.m_NameIndex), buffer.m_NameIndex, unchecked((uint)buffer.m_Index));
+            }
+            foreach (var binding in constantBufferBindings)
+            {
+                var decoded = DecodeBinding(binding.m_Index);
+                AddDescriptorBinding(decoded.Set, decoded.Binding, 4, ResolveName(binding.m_NameIndex), binding.m_NameIndex, unchecked((uint)binding.m_Index));
+            }
+            foreach (var uav in uavs)
+            {
+                var decoded = DecodeBinding(uav.m_Index);
+                AddDescriptorBinding(decoded.Set, decoded.Binding, 5, ResolveName(uav.m_NameIndex), uav.m_NameIndex, unchecked((uint)uav.m_Index));
+            }
+            foreach (var sampler in samplers)
+            {
+                var decoded = DecodeBinding(sampler.bindPoint);
+                AddDescriptorBinding(decoded.Set, decoded.Binding, 1, string.Empty, -1, unchecked((uint)sampler.bindPoint));
+            }
+
+            var payload = new
+            {
+                VectorParameters = vectors.Select(ConvertVector).ToArray(),
+                MatrixParameters = matrices.Select(ConvertMatrix).ToArray(),
+                TextureParameters = textures.Select(parameter => new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = DecodeBindingIndex(parameter.m_Index),
+                    SamplerIndex = DecodeBindingIndex(parameter.m_SamplerIndex),
+                    MultiSampled = parameter.m_MultiSampled,
+                    Dim = unchecked((byte)parameter.m_Dim),
+                }).ToArray(),
+                BufferParameters = buffers.Select(ConvertBuffer).ToArray(),
+                ConstantBufferParameters = constantBuffers.Select(ConvertConstantBuffer).ToArray(),
+                BufferBindingParameters = constantBufferBindings.Select(ConvertBuffer).ToArray(),
+                UAVParameters = uavs.Select(parameter => new
+                {
+                    Name = ResolveName(parameter.m_NameIndex),
+                    NameIndex = parameter.m_NameIndex,
+                    Index = DecodeBindingIndex(parameter.m_Index),
+                    OriginalIndex = DecodeBindingIndex(parameter.m_OriginalIndex),
+                }).ToArray(),
+                SamplerParameters = samplers.Select(parameter => new
+                {
+                    Sampler = parameter.sampler,
+                    BindPoint = DecodeBindingIndex(parameter.bindPoint),
+                    Name = (string)null,
+                }).ToArray(),
+                DescriptorSetParameters = descriptorSets.Values.OrderBy(set => set.SetId).ToArray(),
+                EntryPoint = "main",
+                DebugName =
+                    $"subshader{subShaderIndex.ToString(CultureInfo.InvariantCulture)}/" +
+                    $"pass{passIndex.ToString(CultureInfo.InvariantCulture)}:" +
+                    $"{passName ?? string.Empty}/{stage}/" +
+                    $"blob{blobIndex.ToString(CultureInfo.InvariantCulture)}/{gpuProgramType}",
+                SourceSubShaderIndex = subShaderIndex,
+                SourcePassIndex = passIndex,
+                SourcePassName = passName ?? string.Empty,
+                SourceSerializedProgramStage = stage,
+                SourceCompilerPlatform = compilerPlatform ?? string.Empty,
+                SourceShaderHardwareTier = shaderHardwareTier,
+                SourceCompiledKeywords = (compiledKeywords ?? Array.Empty<string>()).ToArray(),
+                SourceLocalKeywords = (localKeywords ?? Array.Empty<string>()).ToArray(),
+                UsedMaterials = Array.Empty<string>(),
+            };
+
+            return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        }
+
         private static string ConvertSerializedShader(Shader shader, IReadOnlyList<SubShaderBlob> subShaderBlobs)
         {
             if (subShaderBlobs.Count == 1)
@@ -318,9 +680,14 @@ namespace AnimeStudio
 
             sb.Append(ConvertSerializedProperties(m_ParsedForm.m_PropInfo));
 
-            foreach (var m_SubShader in m_ParsedForm.m_SubShaders)
+            for (int subShaderIndex = 0; subShaderIndex < m_ParsedForm.m_SubShaders.Count; subShaderIndex++)
             {
-                sb.Append(ConvertSerializedSubShader(m_SubShader, platforms, shaderPrograms, unavailableReason));
+                sb.Append(ConvertSerializedSubShader(
+                    m_ParsedForm.m_SubShaders[subShaderIndex],
+                    platforms,
+                    shaderPrograms,
+                    subShaderIndex,
+                    unavailableReason));
             }
 
             if (!string.IsNullOrEmpty(m_ParsedForm.m_FallbackName))
@@ -337,7 +704,12 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
-        private static string ConvertSerializedSubShader(SerializedSubShader m_SubShader, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        private static string ConvertSerializedSubShader(
+            SerializedSubShader m_SubShader,
+            ShaderCompilerPlatform[] platforms,
+            ShaderProgram[] shaderPrograms,
+            int subShaderIndex,
+            string unavailableReason = null)
         {
             var sb = new StringBuilder();
             sb.Append("SubShader {\n");
@@ -348,17 +720,32 @@ namespace AnimeStudio
 
             sb.Append(ConvertSerializedTagMap(m_SubShader.m_Tags, 1));
 
-            foreach (var m_Passe in m_SubShader.m_Passes)
+            for (int passIndex = 0; passIndex < m_SubShader.m_Passes.Count; passIndex++)
             {
-                sb.Append(ConvertSerializedPass(m_Passe, platforms, shaderPrograms, unavailableReason));
+                sb.Append(ConvertSerializedPass(
+                    m_SubShader.m_Passes[passIndex],
+                    platforms,
+                    shaderPrograms,
+                    subShaderIndex,
+                    passIndex,
+                    unavailableReason));
             }
             sb.Append("}\n");
             return sb.ToString();
         }
 
-        private static string ConvertSerializedPass(SerializedPass m_Passe, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        private static string ConvertSerializedPass(
+            SerializedPass m_Passe,
+            ShaderCompilerPlatform[] platforms,
+            ShaderProgram[] shaderPrograms,
+            int subShaderIndex,
+            int passIndex,
+            string unavailableReason = null)
         {
             var sb = new StringBuilder();
+            var passName = string.IsNullOrEmpty(m_Passe.m_Name)
+                ? m_Passe.m_State?.m_Name ?? string.Empty
+                : m_Passe.m_Name;
             switch (m_Passe.m_Type)
             {
                 case PassType.Normal:
@@ -393,42 +780,42 @@ namespace AnimeStudio
                     if (HasSerializedProgramSubPrograms(m_Passe.progVertex))
                     {
                         sb.Append("Program \"vp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progVertex, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progVertex, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "vertex", unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (HasSerializedProgramSubPrograms(m_Passe.progFragment))
                     {
                         sb.Append("Program \"fp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progFragment, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progFragment, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "fragment", unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (HasSerializedProgramSubPrograms(m_Passe.progGeometry))
                     {
                         sb.Append("Program \"gp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progGeometry, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progGeometry, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "geometry", unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (HasSerializedProgramSubPrograms(m_Passe.progHull))
                     {
                         sb.Append("Program \"hp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progHull, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progHull, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "hull", unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (HasSerializedProgramSubPrograms(m_Passe.progDomain))
                     {
                         sb.Append("Program \"dp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progDomain, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progDomain, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "domain", unavailableReason));
                         sb.Append("}\n");
                     }
 
                     if (HasSerializedProgramSubPrograms(m_Passe.progRayTracing))
                     {
                         sb.Append("Program \"rtp\" {\n");
-                        sb.Append(ConvertSerializedProgram(m_Passe.progRayTracing, platforms, shaderPrograms, unavailableReason));
+                        sb.Append(ConvertSerializedProgram(m_Passe.progRayTracing, platforms, shaderPrograms, m_Passe.m_NameIndices, subShaderIndex, passIndex, passName, "raytracing", unavailableReason));
                         sb.Append("}\n");
                     }
                 }
@@ -443,20 +830,20 @@ namespace AnimeStudio
                 || program?.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true;
         }
 
-        private static string ConvertSerializedProgram(SerializedProgram program, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        private static string ConvertSerializedProgram(SerializedProgram program, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, IReadOnlyList<KeyValuePair<string, int>> nameIndices, int subShaderIndex, int passIndex, string passName, string stage, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             if (program.m_SubPrograms?.Count > 0)
             {
-                sb.Append(ConvertSerializedSubPrograms(program.m_SubPrograms, platforms, shaderPrograms, unavailableReason));
+                sb.Append(ConvertSerializedSubPrograms(program.m_SubPrograms, platforms, shaderPrograms, program.m_CommonParameters, nameIndices, subShaderIndex, passIndex, passName, stage, unavailableReason));
             }
             if (program.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true)
             {
-                sb.Append(ConvertSerializedPlayerSubPrograms(program.m_PlayerSubPrograms, platforms, shaderPrograms, unavailableReason));
+                sb.Append(ConvertSerializedPlayerSubPrograms(program.m_PlayerSubPrograms, platforms, shaderPrograms, program.m_CommonParameters, nameIndices, subShaderIndex, passIndex, passName, stage, unavailableReason));
             }
             return sb.ToString();
         }
-        private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, SerializedProgramParameters commonParameters, IReadOnlyList<KeyValuePair<string, int>> nameIndices, int subShaderIndex, int passIndex, string passName, string stage, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             var groups = m_SubPrograms.GroupBy(x => x.m_BlobIndex);
@@ -493,7 +880,21 @@ namespace AnimeStudio
                                 sb.Append("\" {\n");
                                 if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
                                 {
-                                    sb.Append(parsedSubProgram.Export());
+                                    var metadataJson = BuildRuriProgramMetadataJson(
+                                        commonParameters,
+                                        subProgram.m_Parameters,
+                                        nameIndices,
+                                        subShaderIndex,
+                                        passIndex,
+                                        passName,
+                                        stage,
+                                        subProgram.m_BlobIndex,
+                                        subProgram.m_GpuProgramType,
+                                        GetPlatformString(platform),
+                                        subProgram.m_ShaderHardwareTier,
+                                        parsedSubProgram.m_Keywords,
+                                        parsedSubProgram.m_LocalKeywords);
+                                    sb.Append(parsedSubProgram.Export(metadataJson));
                                 }
                                 else
                                 {
@@ -509,7 +910,7 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
-        private static string ConvertSerializedPlayerSubPrograms(List<List<SerializedPlayerSubProgram>> m_PlayerSubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
+        private static string ConvertSerializedPlayerSubPrograms(List<List<SerializedPlayerSubProgram>> m_PlayerSubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, SerializedProgramParameters commonParameters, IReadOnlyList<KeyValuePair<string, int>> nameIndices, int subShaderIndex, int passIndex, string passName, string stage, string unavailableReason = null)
         {
             var sb = new StringBuilder();
             var groups = m_PlayerSubPrograms.SelectMany(x => x).GroupBy(x => x.m_BlobIndex);
@@ -539,7 +940,21 @@ namespace AnimeStudio
                                 sb.Append($"SubProgram \"{GetPlatformString(platform)} \" {{\n");
                                 if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
                                 {
-                                    sb.Append(parsedSubProgram.Export());
+                                    var metadataJson = BuildRuriProgramMetadataJson(
+                                        commonParameters,
+                                        null,
+                                        nameIndices,
+                                        subShaderIndex,
+                                        passIndex,
+                                        passName,
+                                        stage,
+                                        subProgram.m_BlobIndex,
+                                        subProgram.m_GpuProgramType,
+                                        GetPlatformString(platform),
+                                        -1,
+                                        parsedSubProgram.m_Keywords,
+                                        parsedSubProgram.m_LocalKeywords);
+                                    sb.Append(parsedSubProgram.Export(metadataJson));
                                 }
                                 else
                                 {
@@ -1452,9 +1867,9 @@ namespace AnimeStudio
             context.AppendProgramBody(sb, body, bodyKind);
         }
 
-        private static void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data)
+        private static void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data, string metadataJson = null)
         {
-            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data);
+            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data, metadataJson);
         }
 
         private static bool HasBytecodeSidecarRoot()
@@ -1462,7 +1877,7 @@ namespace AnimeStudio
             return ShaderConverter.CurrentExportContext?.HasBytecodeSidecarRoot == true;
         }
 
-        public string Export()
+        public string Export(string metadataJson = null)
         {
             var sb = new StringBuilder();
             if (m_Keywords.Length > 0)
@@ -1583,7 +1998,7 @@ namespace AnimeStudio
                                 var (offset, size) = snippets[i];
                                 var snippet = m_ProgramCode.AsSpan(offset, size);
                                 sb.Append($"// Endfield DXBC snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
-                                WriteBytecodeSidecar(sb, $"endfield_dxbc_{i}", ".dxbc", snippet);
+                                WriteBytecodeSidecar(sb, $"endfield_dxbc_{i}", ".dxbc", snippet, metadataJson);
                                 AppendD3D11Disassembly(sb, snippet);
                             }
                             break;
@@ -1614,7 +2029,7 @@ namespace AnimeStudio
                                     var (offset, size) = snippets[i];
                                     sb.Append($"// Endfield SMOL-V snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
                                     var smolvSnippet = m_ProgramCode.AsSpan(offset, size);
-                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet);
+                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet, metadataJson);
                                     try
                                     {
                                         var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
@@ -1624,7 +2039,7 @@ namespace AnimeStudio
                                             var spirvSnippet = SmolvDecoder.Decode(smolvSnippet.ToArray());
                                             if (spirvSnippet != null && spirvSnippet.Length > 0)
                                             {
-                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet);
+                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet, metadataJson);
                                             }
                                         }
                                         if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
