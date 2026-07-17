@@ -34,13 +34,31 @@ namespace AnimeStudio.Endfield
         public EndfieldVfsBlockMainInfo LoadBlockInfo(EndfieldVfsBlockType blockType)
         {
             var blockDirName = BlockDirectoryName(blockType);
-            var blockDir = Path.Combine(vfsPath, blockDirName);
-            if (!Directory.Exists(blockDir))
+            var blockFileName = $"{blockDirName}.blc";
+            var primaryBlockDirectory = Path.Combine(vfsPath, blockDirName);
+            var blockFilePath = Path.Combine(primaryBlockDirectory, blockFileName);
+            var fallbackBlockDirectory = string.IsNullOrEmpty(fallbackVfsPath)
+                ? null
+                : Path.Combine(fallbackVfsPath, blockDirName);
+            if (!File.Exists(blockFilePath) && !string.IsNullOrEmpty(fallbackVfsPath))
             {
+                var fallbackBlockFilePath = Path.Combine(fallbackBlockDirectory, blockFileName);
+                if (File.Exists(fallbackBlockFilePath))
+                {
+                    blockFilePath = fallbackBlockFilePath;
+                }
+            }
+
+            if (!File.Exists(blockFilePath))
+            {
+                if (Directory.Exists(primaryBlockDirectory)
+                    || (!string.IsNullOrEmpty(fallbackBlockDirectory) && Directory.Exists(fallbackBlockDirectory)))
+                {
+                    throw new EndfieldVfsException($"block metadata file not found: {blockFileName}");
+                }
                 throw new EndfieldVfsBlockNotFoundException(blockDirName);
             }
 
-            var blockFilePath = Path.Combine(blockDir, $"{blockDirName}.blc");
             var blockData = File.ReadAllBytes(blockFilePath);
             if (blockData.Length < BlockHeadLength)
             {

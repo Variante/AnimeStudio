@@ -277,6 +277,12 @@ namespace AnimeStudio.CLI
 
         private static void RunVfsIndex(VfsOptions options)
         {
+            if (options.UseJsonLines)
+            {
+                RunVfsIndexJsonLines(options);
+                return;
+            }
+
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
             var blocks = new JArray();
             var flatFiles = new JArray();
@@ -452,6 +458,167 @@ namespace AnimeStudio.CLI
             Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.Output}");
         }
 
+        private static void RunVfsIndexJsonLines(VfsOptions options)
+        {
+            var outputParent = Path.GetDirectoryName(options.Output);
+            if (!string.IsNullOrEmpty(outputParent))
+            {
+                Directory.CreateDirectory(outputParent);
+            }
+
+            var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+            var totalBlocks = 0;
+            var totalChunks = 0;
+            var totalFiles = 0;
+            var totalBytes = 0L;
+            var missingBlocks = 0;
+            var missingChunks = 0;
+
+            using var writer = new StreamWriter(options.Output, false, new UTF8Encoding(false), 64 * 1024)
+            {
+                NewLine = "\n",
+            };
+            WriteJsonLine(writer, new JObject
+            {
+                ["recordType"] = "header",
+                ["format"] = "animestudio-vfs-index",
+                ["encoding"] = "jsonl",
+                ["schemaVersion"] = 1,
+                ["blockFilter"] = options.BlockFilterName,
+                ["fallbackAssets"] = string.IsNullOrEmpty(options.FallbackAssets) ? JValue.CreateNull() : NormalizePath(options.FallbackAssets),
+                ["generatedAtEpoch"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                ["streamingAssets"] = NormalizePath(options.StreamingAssets),
+            });
+
+            foreach (var block in LoadSelectedBlocks(
+                loader,
+                options,
+                blockType => Console.WriteLine($"Indexing {blockType.GetName()} metadata..."),
+                (blockType, e) =>
+                {
+                    Console.WriteLine($"  Warning: Block {e.HashDirectory} not found, skipping");
+                    WriteJsonLine(writer, new JObject
+                    {
+                        ["recordType"] = "missingBlock",
+                        ["name"] = blockType.GetName(),
+                        ["hashDirectory"] = loader.BlockDirectoryName(blockType),
+                    });
+                    missingBlocks++;
+                }))
+            {
+                var blockType = block.BlockType;
+                var blockInfo = block.Info;
+                var blockName = blockType.GetName();
+                var blockDirName = loader.BlockDirectoryName(blockType);
+                totalBlocks++;
+
+                WriteJsonLine(writer, new JObject
+                {
+                    ["recordType"] = "block",
+                    ["blockType"] = blockInfo.BlockType.GetName(),
+                    ["chunkCount"] = blockInfo.Chunks.Count,
+                    ["codeVersion"] = blockInfo.CodeVersion,
+                    ["declaredChunkBytes"] = blockInfo.GroupChunksLength,
+                    ["declaredFileCount"] = blockInfo.GroupFileInfoNum,
+                    ["groupConfigHashName"] = blockInfo.GroupConfigHashName,
+                    ["groupConfigName"] = blockInfo.GroupConfigName,
+                    ["hashDirectory"] = blockDirName,
+                    ["name"] = blockName,
+                    ["version"] = blockInfo.Version,
+                });
+
+                foreach (var chunk in blockInfo.Chunks)
+                {
+                    var chunkFileName = chunk.FileName;
+                    var chunkMd5Name = EndfieldVfsFormatting.UInt128Hex(chunk.Md5Name);
+                    var chunkId = $"{blockName}/{chunkMd5Name}";
+                    var chunkExists = true;
+                    string chunkSource;
+                    string chunkRelativePath;
+                    string chunkAbsolutePath;
+                    try
+                    {
+                        var chunkPath = loader.ResolveChunkPath(blockType, chunk);
+                        (chunkSource, chunkRelativePath) = ClassifyChunkPath(chunkPath, options.StreamingAssets, options.FallbackAssets);
+                        chunkAbsolutePath = NormalizePath(chunkPath);
+                    }
+                    catch (EndfieldVfsChunkNotFoundException)
+                    {
+                        chunkExists = false;
+                        chunkSource = "missing";
+                        chunkRelativePath = $"{blockDirName}/{chunkFileName}";
+                        chunkAbsolutePath = null;
+                        missingChunks++;
+                    }
+
+                    var selectedFiles = SelectedFiles(options, chunk).ToList();
+                    var chunkByteCount = selectedFiles.Sum(file => (long)file.Length);
+                    WriteJsonLine(writer, new JObject
+                    {
+                        ["recordType"] = "chunk",
+                        ["absolutePath"] = chunkAbsolutePath == null ? JValue.CreateNull() : chunkAbsolutePath,
+                        ["blockName"] = blockName,
+                        ["blockType"] = chunk.BlockType.GetName(),
+                        ["byteCount"] = chunkByteCount,
+                        ["chunkId"] = chunkId,
+                        ["contentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
+                        ["exists"] = chunkExists,
+                        ["fileCount"] = selectedFiles.Count,
+                        ["fileName"] = chunkFileName,
+                        ["hashDirectory"] = blockDirName,
+                        ["length"] = chunk.Length,
+                        ["md5Name"] = chunkMd5Name,
+                        ["relativePath"] = chunkRelativePath,
+                        ["source"] = chunkSource,
+                        ["tag"] = chunk.MainTag.ToString(),
+                    });
+
+                    foreach (var file in selectedFiles)
+                    {
+                        var fileName = NormalizePath(file.FileName);
+                        WriteJsonLine(writer, new JObject
+                        {
+                            ["recordType"] = "file",
+                            ["blockName"] = blockName,
+                            ["chunkId"] = chunkId,
+                            ["encrypted"] = file.UseEncrypt,
+                            ["fileBlockType"] = file.BlockType.GetName(),
+                            ["fileChunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
+                            ["fileDataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
+                            ["fileName"] = fileName,
+                            ["fileNameHash"] = file.FileNameHash,
+                            ["fileTag"] = file.FileTag.ToString(),
+                            ["ivSeed"] = file.IvSeed,
+                            ["length"] = file.Length,
+                            ["logicalId"] = $"{blockName}/{fileName.TrimStart('/')}",
+                            ["offset"] = file.Offset,
+                        });
+                    }
+
+                    totalChunks++;
+                    totalFiles += selectedFiles.Count;
+                    totalBytes += chunkByteCount;
+                }
+            }
+
+            WriteJsonLine(writer, new JObject
+            {
+                ["recordType"] = "summary",
+                ["blockCount"] = totalBlocks,
+                ["byteCount"] = totalBytes,
+                ["chunkCount"] = totalChunks,
+                ["fileCount"] = totalFiles,
+                ["missingBlockCount"] = missingBlocks,
+                ["missingChunkCount"] = missingChunks,
+            });
+            Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.Output}");
+        }
+
+        private static void WriteJsonLine(TextWriter writer, JObject payload)
+        {
+            writer.WriteLine(payload.ToString(Formatting.None));
+        }
+
         private static (string source, string relativePath) ClassifyChunkPath(string path, string streamingAssets, string fallbackAssets)
         {
             var primaryVfs = Path.Combine(streamingAssets, EndfieldVfsLoader.VfsDirectoryName);
@@ -550,6 +717,18 @@ namespace AnimeStudio.CLI
                     case "--file-regex":
                         options.AddFileRegex(value ?? NextValue(args, ref i, token));
                         break;
+                    case "--jsonl":
+                        if (!string.Equals(args[0], "vfs-index", StringComparison.OrdinalIgnoreCase)
+                            && !string.Equals(args[0], "vfsindex", StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new ArgumentException("--jsonl is only valid for vfs-index");
+                        }
+                        if (value != null)
+                        {
+                            throw new ArgumentException("--jsonl does not take a value");
+                        }
+                        options.UseJsonLines = true;
+                        break;
                     default:
                         throw new ArgumentException($"unexpected argument: {token}");
                 }
@@ -635,6 +814,8 @@ namespace AnimeStudio.CLI
                         "          May be repeated to index multiple block types.",
                         "      --file-regex <REGEX>",
                         "          Only index files whose VFS filename matches the regex. May be repeated.",
+                        "      --jsonl",
+                        "          Write compact newline-delimited records for streaming consumers.",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -649,12 +830,16 @@ namespace AnimeStudio.CLI
                         "          ",
                         "  -o, --output <OUTPUT>",
                         "          [default: ./output]",
+                        "      --shared-output <OUTPUT>",
+                        "          Route shared Audio/InitAudio/AuditAudio blocks separately from language voice.",
                         "  -l, --language <LANGUAGE>",
                         "          [default: all] [possible values: all, chinese, english, japanese, korean]",
                         "  -f, --format <FORMAT>",
                         "          [default: wav] [possible values: wem, wav]",
                         "  -b, --block <BLOCK>",
                         "          [default: all] [possible values: all, voice, audio, initial-audio, audit-audio, hotfix-audio]",
+                        "  -j, --jobs <JOBS>",
+                        "          Maximum concurrent audio conversions. [default: min(8, logical processors)]",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -681,6 +866,7 @@ namespace AnimeStudio.CLI
             public string StreamingAssets { get; set; }
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
+            public bool UseJsonLines { get; set; }
             public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
             public List<Regex> FileRegexes { get; } = new();
             public bool UseAllBlockTypes { get; private set; } = true;

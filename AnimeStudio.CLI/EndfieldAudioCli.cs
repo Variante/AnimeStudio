@@ -34,7 +34,7 @@ namespace AnimeStudio.CLI
                 foreach (var blockType in options.BlockTypes(language))
                 {
                     Console.WriteLine($"Extracting {language.Name()} audio files from {blockType.GetName()}...");
-                    List<(string name, byte[] data)> pckFiles;
+                    List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> pckFiles;
                     try
                     {
                         pckFiles = ExtractPckFiles(loader, blockType);
@@ -52,12 +52,16 @@ namespace AnimeStudio.CLI
                     }
 
                     Console.WriteLine($"  Found {pckFiles.Count} PCK files");
-                    foreach (var (pckName, pckData) in pckFiles)
+                    foreach (var (chunk, file) in pckFiles)
                     {
+                        var pckName = file.FileName;
                         Console.WriteLine($"  Processing {pckName}");
                         EndfieldAkpkPackage package;
                         try
                         {
+                            // Extract one PCK at a time instead of retaining every
+                            // package in the block during the full conversion pass.
+                            var pckData = loader.ExtractFileToBytes(blockType, chunk, file);
                             package = EndfieldAkpkPackage.Parse(pckData);
                         }
                         catch (Exception e)
@@ -71,7 +75,10 @@ namespace AnimeStudio.CLI
                         var unmappedCount = 0;
                         var entries = package.Entries.ToArray();
 
-                        Parallel.ForEach(entries, entry =>
+                        Parallel.ForEach(entries, new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = options.Jobs,
+                        }, entry =>
                         {
                             var wemData = package.GetWemData(entry);
                             if (wemData.Length < 4 || (!HasMagic(wemData, "RIFF") && !HasMagic(wemData, "RIFX")))
@@ -81,13 +88,14 @@ namespace AnimeStudio.CLI
                             }
 
                             var hash = entry.Id.ToString("x");
+                            var outputRoot = options.OutputForBlock(blockType);
                             string outputPath;
                             var mappedPath = audioMap.GetPath(hash);
                             if (!string.IsNullOrEmpty(mappedPath))
                             {
                                 outputPath = options.Format == AudioOutputFormat.Wav
-                                    ? Path.Combine(options.Output, mappedPath.Replace(".wem", ".wav", StringComparison.Ordinal))
-                                    : Path.Combine(options.Output, mappedPath);
+                                    ? Path.Combine(outputRoot, mappedPath.Replace(".wem", ".wav", StringComparison.Ordinal))
+                                    : Path.Combine(outputRoot, mappedPath);
                             }
                             else
                             {
@@ -98,7 +106,7 @@ namespace AnimeStudio.CLI
                                 // language subfolder. A Wwise event-category subfolder
                                 // is added later by the Python indexer where resolvable.
                                 outputPath = Path.Combine(
-                                    options.Output,
+                                    outputRoot,
                                     "unmapped",
                                     UnmappedBankFolder(pckName),
                                     $"{entry.Id}.{options.Format.Extension()}"
@@ -131,7 +139,7 @@ namespace AnimeStudio.CLI
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [-l <language>] [-f <wem|wav>] [-b <block>] [--fallback-assets <StreamingAssets>]");
+            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [--shared-output <output>] [-l <language>] [-f <wem|wav>] [-b <block>] [-j <jobs>] [--fallback-assets <StreamingAssets>]");
         }
 
         private static JToken LoadAudioDialog(EndfieldVfsLoader loader)
@@ -160,18 +168,18 @@ namespace AnimeStudio.CLI
             throw new EndfieldVfsException("AudioDialog.bytes not found in Table block");
         }
 
-        private static List<(string name, byte[] data)> ExtractPckFiles(EndfieldVfsLoader loader, EndfieldVfsBlockType blockType)
+        private static List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> ExtractPckFiles(EndfieldVfsLoader loader, EndfieldVfsBlockType blockType)
         {
             var blockInfo = loader.LoadBlockInfo(blockType);
 
-            var files = new List<(string name, byte[] data)>();
+            var files = new List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)>();
             foreach (var chunk in blockInfo.Chunks)
             {
                 foreach (var file in chunk.Files)
                 {
                     if (file.FileName.EndsWith(".pck", StringComparison.Ordinal))
                     {
-                        files.Add((file.FileName, loader.ExtractFileToBytes(blockType, chunk, file)));
+                        files.Add((chunk, file));
                     }
                 }
             }
@@ -245,6 +253,7 @@ namespace AnimeStudio.CLI
                 LanguageMode = "all",
                 Format = AudioOutputFormat.Wav,
                 BlockMode = AudioBlockMode.All,
+                Jobs = Math.Min(8, Math.Max(1, Environment.ProcessorCount)),
             };
 
             for (var i = 1; i < args.Length; i++)
@@ -271,6 +280,9 @@ namespace AnimeStudio.CLI
                     case "--output":
                         options.Output = value ?? NextValue(args, ref i, token);
                         break;
+                    case "--shared-output":
+                        options.SharedOutput = value ?? NextValue(args, ref i, token);
+                        break;
                     case "-l":
                     case "--language":
                         options.LanguageMode = value ?? NextValue(args, ref i, token);
@@ -289,6 +301,10 @@ namespace AnimeStudio.CLI
                     case "--block":
                         options.BlockMode = ParseBlockMode(value ?? NextValue(args, ref i, token));
                         break;
+                    case "-j":
+                    case "--jobs":
+                        options.Jobs = int.Parse(value ?? NextValue(args, ref i, token));
+                        break;
                     default:
                         throw new ArgumentException($"unexpected argument: {token}");
                 }
@@ -297,6 +313,10 @@ namespace AnimeStudio.CLI
             if (string.IsNullOrEmpty(options.StreamingAssets))
             {
                 throw new ArgumentException("--streaming-assets is required");
+            }
+            if (options.Jobs <= 0)
+            {
+                throw new ArgumentException("--jobs must be greater than zero");
             }
 
             return options;
@@ -331,9 +351,11 @@ namespace AnimeStudio.CLI
             public string StreamingAssets { get; set; }
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
+            public string SharedOutput { get; set; }
             public string LanguageMode { get; set; }
             public AudioOutputFormat Format { get; set; }
             public AudioBlockMode BlockMode { get; set; }
+            public int Jobs { get; set; }
 
             public IReadOnlyList<EndfieldAudioLanguage> Languages
             {
@@ -369,6 +391,17 @@ namespace AnimeStudio.CLI
                 AudioBlockMode.HotfixAudio => new[] { EndfieldVfsBlockType.HotfixAudio },
                 _ => Array.Empty<EndfieldVfsBlockType>(),
             };
+
+            public string OutputForBlock(EndfieldVfsBlockType blockType) =>
+                !string.IsNullOrEmpty(SharedOutput) && IsSharedBlock(blockType)
+                    ? SharedOutput
+                    : Output;
+
+            private static bool IsSharedBlock(EndfieldVfsBlockType blockType) => blockType is
+                EndfieldVfsBlockType.Audio or
+                EndfieldVfsBlockType.InitialAudio or
+                EndfieldVfsBlockType.AuditAudio or
+                EndfieldVfsBlockType.HotfixAudio;
 
             private static EndfieldVfsBlockType VoiceBlock(EndfieldAudioLanguage language) => language switch
             {

@@ -2468,12 +2468,12 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "layout", "Beyond.Gameplay.Core.TargetSettings" },
-                { "observedPayloadStatus", "TargetSettings is byte-consumed in current focused samples, but selector/post-selector semantics remain diagnostic." },
+                { "structuredDecodeStatus", "decoded" },
+                { "observedPayloadStatus", "TargetSettings and its nested SelectorData/DirectionSettings are consumed exactly across all current CharacterTemplateData samples." },
                 { "partialReasons", new List<string>
                     {
-                        "SelectorData postProcessorData ownership remains unproven because observed late RID candidates are empty.",
-                        "Post-selector compact eight-word tail is consumed but exact field widths and enum meanings remain unproven.",
-                        "No focused sample proves a non-empty targetContextKey or non-default direction/target variant.",
+                        "Enum/hash numeric values remain unnamed until their runtime enum tables are joined.",
+                        "Current samples contain no non-empty postProcessorData, targetContextKey, or non-null advanced-direction source/target RID variant.",
                     }
                 },
                 { "relativeOffset", start - payloadOffset },
@@ -2486,10 +2486,15 @@ namespace AnimeStudio.CLI
                 { "centerContextKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.centerContextKey", 128) },
                 { "centerToGround", reader.ReadBool32($"{fieldName}.centerToGround") },
                 { "selectorData", ReadDiagnosticSelectorData(reader, $"{fieldName}.selectorData", payloadOffset, recoveredByRid) },
-                { "postSelectorFields", ReadDiagnosticTargetSettingsPostSelectorFields(reader, $"{fieldName}.postSelectorFields") },
+                { "enableAdvancedDirection", reader.ReadBool32($"{fieldName}.enableAdvancedDirection") },
+                { "advancedDirection", ReadDiagnosticDirectionSettings(reader, $"{fieldName}.advancedDirection", payloadOffset, recoveredByRid) },
+                { "selectorDirection", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.selectorDirection")) },
+                { "target", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.target")) },
+                { "targetContextKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.targetContextKey", 128) },
             };
             data["length"] = reader.Position - start;
-            data["layoutNote"] = "Field order up through selectorData is metadata-backed. Post-selector fields are preserved raw because their exact byte widths and enum meanings are not yet fully proven.";
+            data["consumedByteCount"] = reader.Position - start;
+            data["layoutNote"] = "Installed IL2CPP metadata supplies the 13 serialized instance fields in declaration order; Default is static and has no payload bytes. The nested SelectorData list/RID boundaries and all eight DirectionSettings fields are byte-validated by exact parent-payload consumption across the current StreamingAssets and Persistent CharacterTemplateData families.";
             return data;
         }
 
@@ -2505,6 +2510,7 @@ namespace AnimeStudio.CLI
             {
                 { "$partial", true },
                 { "layout", "Beyond.Gameplay.Core.Selector/SelectorData" },
+                { "structuredDecodeStatus", "decoded" },
                 { "relativeOffset", start - payloadOffset },
                 { "absoluteOffset", start },
             };
@@ -2520,76 +2526,55 @@ namespace AnimeStudio.CLI
                 data["selectorDataRoleNote"] = "Installed IL2CPP metadata names this slot finderData, but the linked class is not a proven Finder/Data sample yet.";
             }
 
-            var validatorDataCount = reader.ReadInt32($"{fieldName}.validatorDataCount");
-            data["validatorDataCount"] = BuildPayloadHash32(validatorDataCount);
-            if (validatorDataCount == 1)
-            {
-                var validatorDataCandidate = ReadPayloadRidLink(reader, $"{fieldName}.validatorDataRid", recoveredByRid);
-                if (ManagedReferenceLinkClassEndsWith(validatorDataCandidate, "Validator/Data"))
-                {
-                    data["validatorDataRid"] = validatorDataCandidate;
-                }
-                else
-                {
-                    data["extraSelectorRid"] = validatorDataCandidate;
-                    data["validatorDataRoleNote"] = "Installed IL2CPP metadata names this optional slot validatorData, but the linked class is not a proven Validator/Data sample yet.";
-                }
-            }
-            else if (validatorDataCount != 0)
-            {
-                throw new InvalidDataException($"unsupported validatorData count {validatorDataCount} in {fieldName}");
-            }
-
-            data["reservedZeroWords"] = ReadDiagnosticZeroWords(reader, $"{fieldName}.reservedZeroWords", 3);
-            data["postProcessorDataCandidates"] = new OrderedDictionary
-            {
-                { "$partial", true },
-                { "metadataField", "postProcessorData" },
-                { "observedPayloadStatus", "candidate postProcessorData RID slots are preserved but not promoted until a linked non-empty sample proves the container shape." },
-                { "partialReasons", new List<string>
-                    {
-                        "Installed IL2CPP metadata names postProcessorData, but observed focused samples do not contain a linked post-processor RID.",
-                        "The current two late RID candidates are retained so a future non-empty sample can prove ownership without losing bytes.",
-                    }
-                },
-                { "lateRidA", ReadPayloadRidLink(reader, $"{fieldName}.lateRidA", recoveredByRid) },
-                { "lateRidB", ReadPayloadRidLink(reader, $"{fieldName}.lateRidB", recoveredByRid) },
-                { "layoutNote", "Installed IL2CPP metadata names the third SelectorData field postProcessorData, but current samples have not proven which late RID slot or container shape owns it." },
-            };
+            data["validatorData"] = ReadPayloadRidLinkList(reader, $"{fieldName}.validatorData", 32, recoveredByRid);
+            data["postProcessorData"] = ReadPayloadRidLinkList(reader, $"{fieldName}.postProcessorData", 32, recoveredByRid);
             data["length"] = reader.Position - start;
-            data["layoutNote"] = "RID slots are proven by byte offsets and recovered registry links. finderData and validatorData names are emitted only when null/proven by linked class suffix; postProcessorData remains a raw candidate.";
+            data["consumedByteCount"] = reader.Position - start;
+            data["observedPayloadStatus"] = "The direct finder RID and the two counted RID-list fields are consumed exactly in every current sample; validatorData has both empty and one-item observed variants.";
+            data["partialReasons"] = new List<string>
+            {
+                "No current CharacterTemplateData sample contains a non-empty postProcessorData list.",
+                "RID subtype meanings remain linked by recovered class rather than promoted to runtime behavior claims.",
+            };
+            data["layoutNote"] = "Installed IL2CPP metadata names finderData, validatorData, and postProcessorData in this order. Unity serializes finderData as one managed-reference RID and the latter fields as counted RID lists; exact validation covers 72 empty-validator and two one-validator current variants, with empty postProcessorData in all 74.";
             return data;
         }
 
-        private static OrderedDictionary ReadDiagnosticTargetSettingsPostSelectorFields(
+        private static OrderedDictionary ReadDiagnosticDirectionSettings(
             ManagedReferencePayloadReader reader,
-            string fieldName
+            string fieldName,
+            int payloadOffset,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
         )
         {
-            return new OrderedDictionary
+            var start = reader.Position;
+            var data = new OrderedDictionary
             {
                 { "$partial", true },
-                { "observedPayloadStatus", "compact eight-word post-selector tail consumed as raw diagnostics" },
+                { "layout", "Beyond.Gameplay.Core.DirectionSettings" },
+                { "structuredDecodeStatus", "decoded" },
+                { "relativeOffset", start - payloadOffset },
+                { "absoluteOffset", start },
+                { "directionType", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.directionType")) },
+                { "source", ReadPayloadRidLink(reader, $"{fieldName}.source", recoveredByRid) },
+                { "target", ReadPayloadRidLink(reader, $"{fieldName}.target", recoveredByRid) },
+                { "sourceMountPoint", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.sourceMountPoint")) },
+                { "targetMountPoint", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.targetMountPoint")) },
+                { "customSourceAndTarget", reader.ReadBool32($"{fieldName}.customSourceAndTarget") },
+                { "clampToXZ", reader.ReadBool32($"{fieldName}.clampToXZ") },
+                { "invertDirection", reader.ReadBool32($"{fieldName}.invertDirection") },
+                { "observedPayloadStatus", "All eight IL2CPP-declared DirectionSettings fields are consumed exactly in every current TargetSettings sample." },
                 { "partialReasons", new List<string>
                     {
-                        "Current focused samples only prove two zero-heavy raw word patterns.",
-                        "The split between enableAdvancedDirection, advancedDirection, selectorDirection, target, targetContextKey, and Default is not field-width proven.",
-                        "No non-empty targetContextKey or non-default direction sample has been observed in focused validation.",
+                        "Current source and target RIDs are null sentinels, so non-null linked variants remain unobserved.",
+                        "Direction and mount-point enum/hash numeric values remain unnamed.",
                     }
                 },
-                { "metadataFieldOrder", new[]
-                    {
-                        "enableAdvancedDirection",
-                        "advancedDirection",
-                        "selectorDirection",
-                        "target",
-                        "targetContextKey",
-                        "Default",
-                    }
-                },
-                { "rawWords", ReadDiagnosticRawWords(reader, $"{fieldName}.rawWords", 8) },
-                { "layoutNote", "Installed IL2CPP metadata names the post-selector TargetSettings fields, but current byte evidence only proves this combined eight-word tail." },
             };
+            data["length"] = reader.Position - start;
+            data["consumedByteCount"] = reader.Position - start;
+            data["layoutNote"] = "Installed IL2CPP metadata names directionType, source, target, sourceMountPoint, targetMountPoint, customSourceAndTarget, clampToXZ, and invertDirection in this order. The two TargetSettings-typed source/target fields occupy managed-reference RID slots in the observed Unity payload.";
+            return data;
         }
 
         private static bool IsNullRidLink(OrderedDictionary link)
@@ -5277,7 +5262,7 @@ namespace AnimeStudio.CLI
                 { "moveSegments", ReadPayloadObjectList(reader, "projectileComponent.moveSegments", 64, ReadProjectileMoveSegment) },
                 { "tail", ReadProjectileComponentTailDiagnostic(reader, "projectileComponent.tail") },
             };
-            data["layoutNote"] = "Installed IL2CPP metadata supplies ProjectileComponentData field order. The prefix through moveSegments plus the tail moveModeDict and mainEffect finish fields are decoded from current byte evidence; effect lists, sound fields, and final scalar fields remain raw metadata-ordered tail diagnostics until their nested collection shapes are proven across broader samples.";
+            data["layoutNote"] = "Installed IL2CPP metadata supplies ProjectileComponentData field order. The prefix through moveSegments, moveModeDict, main-effect finish fields, six effect lists, alert effect, sound hashes, and final distance/factor scalars are decoded behind exact-consumption guards for the observed payload variants. Blackboard wrapper internals and some enum/hash meanings remain diagnostic rather than fully semantic.";
             reader.EnsureComplete();
             return true;
         }
@@ -5378,9 +5363,26 @@ namespace AnimeStudio.CLI
                 "sizzleSoundTriggerDistance",
                 "ringProjectileSoundSmoothFactor",
             };
-            data["structuredRemainingTail"] = ReadProjectileComponentRemainingTailDiagnostic(reader.RawData, reader.Position, reader.Remaining, $"{fieldName}.structuredRemainingTail");
-            data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192);
-            data["layoutNote"] = "Tail begins at moveModeDict. The dictionary, current fixed-size MoveModeData records, guarded mainEffect finish fields, and guarded end-relative showAlertEffect/alertEffect view are decoded from current samples; effect-list assignment and separate audio/sound field bytes remain raw until validated.";
+            var structuredRemainingTail = ReadProjectileComponentRemainingTailDiagnostic(
+                reader.RawData,
+                reader.Position,
+                reader.Remaining,
+                $"{fieldName}.structuredRemainingTail");
+            data["structuredRemainingTail"] = structuredRemainingTail;
+            if (string.Equals(structuredRemainingTail["structuredDecodeStatus"] as string, "decoded", StringComparison.Ordinal))
+            {
+                // The structured reader is intentionally isolated so it can probe end-relative
+                // variants without mutating the parent on failure. Exact success proves that it
+                // consumed this entire tail, so advance the parent and avoid serializing a second,
+                // redundant copy of every word as residual evidence.
+                reader.SetPosition(reader.End);
+                data["remainingRawWordCount"] = 0;
+            }
+            else
+            {
+                data["remainingRawWords"] = ReadRemainingPayloadRawInt32Words(reader, $"{fieldName}.remainingRawWords", 8192);
+            }
+            data["layoutNote"] = "Tail begins at moveModeDict. The dictionary and variable MoveModeData records are boundary-guarded by the following main-effect fields. The observed remaining variants decode six assigned effect lists, their show flags, alert effect, seven sound hashes, and the final distance/factor scalars with exact tail consumption; unresolved wrapper internals and enum/hash meanings remain explicitly inferred.";
             data["length"] = reader.Position - start;
             return data;
         }
@@ -5789,6 +5791,42 @@ namespace AnimeStudio.CLI
             data["serializedWordCount"] = wordCount;
             return data;
         }
+
+        private static OrderedDictionary ReadAbilitySystemOmitUseScaleBBEffectActionCfgTail(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            const int serializedWordCount = 80;
+            const int serializedByteCount = serializedWordCount * 4;
+            if (reader.Remaining != serializedByteCount)
+            {
+                throw new InvalidDataException(
+                    $"{fieldName} requires exactly {serializedWordCount} words, but {reader.Remaining / 4} remain"
+                );
+            }
+
+            var start = reader.Position;
+            var local = new ManagedReferencePayloadReader(reader.RawData, start, serializedByteCount);
+            var data = ReadProjectileAlertEffectActionCfgTail(local, fieldName);
+            local.EnsureComplete();
+            if (local.Position - start != serializedByteCount)
+            {
+                throw new InvalidDataException(
+                    $"{fieldName} consumed {local.Position - start} bytes instead of {serializedByteCount}"
+                );
+            }
+
+            reader.SetPosition(local.Position);
+            data.Remove("$partial");
+            data["$decoded"] = true;
+            data["layout"] = "Beyond.Gameplay.EffectActionCfg/OmitUseScaleBBTail";
+            data["layoutNote"] = "Exact 80-word tail after AbilitySystemData deadEffect.effectPosData in the observed omit-useScaleBB body. Field names and enum labels retain their separate inferred-confidence marker.";
+            data["structuredDecodeStatus"] = "decoded";
+            data["consumedByteCount"] = serializedByteCount;
+            return data;
+        }
+
         private static OrderedDictionary ReadProjectileAlertEffectActionCfgDiagnostic(
             ManagedReferencePayloadReader reader,
             string fieldName
@@ -11918,6 +11956,11 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AbilityEntityTemplateData", StringComparison.Ordinal))
                 {
+                    if (TryDecodeAbilityEntityTemplateDataPrefix(rawData, offset, length, recoveredByRid, out data))
+                    {
+                        return true;
+                    }
+
                     data = BuildPartialAbilityEntityPayloadData(
                         rawData,
                         offset,
@@ -12645,6 +12688,888 @@ namespace AnimeStudio.CLI
             }
 
             return false;
+        }
+
+        private static bool TryDecodeAbilityEntityTemplateDataPrefix(
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data
+        )
+        {
+            data = null;
+            if (rawData == null
+                || offset < 0
+                || length < 160
+                || (length % 4) != 0
+                || offset > rawData.Length
+                || offset + length > rawData.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                var id = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "abilityEntityTemplate.id", 256);
+                var baseName = ReadPayloadAlignedUtf8StringWithZeroPadding(reader, "abilityEntityTemplate.baseTemplate.name", 256);
+                if (string.IsNullOrEmpty(id)
+                    || !id.StartsWith("abilityentity_", StringComparison.Ordinal)
+                    || !string.Equals(id, baseName, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("AbilityEntityTemplateData id/name pair is invalid");
+                }
+
+                var factionIndex = reader.ReadInt32("abilityEntityTemplate.baseTemplate.factionIndex");
+                var gameplayTags = ReadPayloadGameplayTagListWithZeroPadding(reader, "abilityEntityTemplate.entityTemplate.gameplayTags", 32, 256);
+                var delayToRecycleTime = ReadPayloadFloatRange(reader, "abilityEntityTemplate.entityTemplate.delayToRecycleTime", 0f, 3600f);
+                var delayRecyclePerformTime = ReadPayloadFloatRange(reader, "abilityEntityTemplate.entityTemplate.delayRecyclePerformTime", 0f, 3600f);
+                var sendDieEvent = reader.ReadBool32("abilityEntityTemplate.entityTemplate.sendDieEvent");
+                var enableBornFadeIn = reader.ReadBool32("abilityEntityTemplate.entityTemplate.enableBornFadeIn");
+                var fadeInTime = ReadPayloadFloatRange(reader, "abilityEntityTemplate.entityTemplate.fadeInTime", 0f, 3600f);
+                var componentList = ReadPayloadRidLinkList(reader, "abilityEntityTemplate.entityTemplate.componentList", 32, recoveredByRid);
+                var entityTemplate = new OrderedDictionary
+                {
+                    { "gameplayTags", gameplayTags },
+                    { "delayToRecycleTime", delayToRecycleTime },
+                    { "delayRecyclePerformTime", delayRecyclePerformTime },
+                    { "sendDieEvent", sendDieEvent },
+                    { "enableBornFadeIn", enableBornFadeIn },
+                    { "fadeInTime", fadeInTime },
+                    { "componentList", componentList },
+                };
+                var consumedPrefixBytes = reader.Position - offset;
+                var abilityEntityOpening = ReadAbilityEntityTemplateOpening(
+                    reader,
+                    rawData,
+                    componentList,
+                    recoveredByRid);
+                var surroundingConfigOffset = reader.Position;
+                var surroundingConfigDecoded = TryReadAbilityEntityTemplateSurroundingConfig(
+                    reader,
+                    rawData,
+                    componentList,
+                    recoveredByRid,
+                    out var surroundingConfig,
+                    out var surroundingConfigDiagnostic);
+                if (!surroundingConfigDecoded)
+                {
+                    surroundingConfig = new OrderedDictionary
+                    {
+                        { "$partial", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/SurroundingConfig" },
+                        { "structuredDecodeStatus", "raw-fallback" },
+                        { "offset", surroundingConfigOffset },
+                        { "consumedByteCount", 0 },
+                        { "reason", surroundingConfigDiagnostic },
+                        { "nextFieldBoundary", "surroundingConfig" },
+                        { "layoutNote", "The transactional surroundingConfig reader failed without advancing the parent reader. The exact inherited prefix and opening are retained, and all bytes from surroundingConfig onward remain in remainingRawWords." },
+                    };
+                }
+                var remainingRawWords = ReadRemainingPayloadRawInt32Words(reader, "abilityEntityTemplate.remainingRawWords", 8192);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "$partial", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.AbilityEntityTemplateData" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "id", id },
+                    { "baseTemplate", new OrderedDictionary
+                        {
+                            { "name", baseName },
+                            { "factionIndex", BuildPayloadHash32(factionIndex) },
+                        }
+                    },
+                    { "entityTemplate", entityTemplate },
+                    { "consumedPrefixBytes", consumedPrefixBytes },
+                    { "abilityEntityOpening", abilityEntityOpening },
+                    { "consumedOpeningBytes", abilityEntityOpening["consumedByteCount"] },
+                    { "surroundingConfig", surroundingConfig },
+                    { "consumedSurroundingConfigBytes", surroundingConfig["consumedByteCount"] },
+                    { "remainingRawWordCount", remainingRawWords.Count },
+                    { "remainingRawWords", remainingRawWords },
+                    { "layoutNote", surroundingConfigDecoded
+                        ? "The inherited GameDataWithId/BaseTemplateData/EntityTemplateData prefix, the ability-entity opening through useFrameTick, and the 92-byte surroundingConfig are byte-guarded across all current StreamingAssets and Persistent AbilityEntityTemplateData variants. Available linked AbilityEntityRootComponentData and SurroundingMovementData payloads are validated as independent mirrors. Metadata-order field names retain inferred semantic confidence. Bytes from followMountPointConfig onward remain raw."
+                        : "The inherited GameDataWithId/BaseTemplateData/EntityTemplateData prefix and the ability-entity opening through useFrameTick remain decoded. surroundingConfig failed its isolated reader, so bytes from that boundary onward remain raw without discarding the exact prefix/opening/component links." },
+                    { "partialReasons", new List<string>
+                        {
+                            surroundingConfigDecoded
+                                ? "The ability-entity-specific body from followMountPointConfig onward remains structurally unresolved."
+                                : "surroundingConfig failed its isolated guard; it and all later ability-entity fields remain raw.",
+                            "Names from maxDurationForServer through useFrameTick follow installed IL2CPP field order; their scalar byte boundaries are guarded, but independent runtime behavior is not claimed.",
+                            "surroundingConfig field order and byte ownership are proven, while its enum/hash runtime meanings remain inferred.",
+                            "Gameplay tag list ownership is byte-proven at this position, but its exact source-level field name is not yet proven.",
+                        }
+                    },
+                };
+                reader.EnsureComplete();
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                data = null;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilityEntityTemplateOpening(
+            ManagedReferencePayloadReader reader,
+            byte[] rawData,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var start = reader.Position;
+            var maxStackingCnt = reader.ReadInt32("abilityEntityTemplate.maxStackingCnt");
+            if (maxStackingCnt < -1 || maxStackingCnt > 1024 || maxStackingCnt == 0)
+            {
+                throw new InvalidDataException($"invalid maxStackingCnt {maxStackingCnt} in abilityEntityTemplate opening");
+            }
+
+            var maxStackingCntBB = ReadAbilityEntityTemplateBlackboardInt(reader, "abilityEntityTemplate.maxStackingCntBB");
+            var lifeType = ReadPayloadSparseNamedEnum32(
+                reader,
+                "abilityEntityTemplate.lifeType",
+                false,
+                (0, "Limited"),
+                (1, "Infinity"));
+            var duration = ReadPayloadFloatRange(reader, "abilityEntityTemplate.duration", 0f, 100000f);
+            var durationBB = ReadAbilityEntityTemplateBlackboardDouble(reader, "abilityEntityTemplate.durationBB");
+            var maxDurationForServer = ReadPayloadFloatRange(reader, "abilityEntityTemplate.maxDurationForServer", 0f, 100000f);
+            var canMove = reader.ReadBool32("abilityEntityTemplate.canMove");
+            var moveHeight = ReadPayloadFloatRange(reader, "abilityEntityTemplate.moveHeight", 0f, 10000f);
+            var moveRadius = ReadPayloadFloatRange(reader, "abilityEntityTemplate.moveRadius", 0f, 10000f);
+            var moveType = ReadPayloadSparseNamedEnum32(
+                reader,
+                "abilityEntityTemplate.moveType",
+                false,
+                (0, "ControlledBySkill"),
+                (1, "Surrounding"),
+                (2, "FollowMountPoint"));
+            var useFrameTick = reader.ReadBool32("abilityEntityTemplate.useFrameTick");
+            var consumedByteCount = reader.Position - start;
+            if (consumedByteCount != 60
+                && consumedByteCount != 80
+                && consumedByteCount != 84
+                && consumedByteCount != 104)
+            {
+                throw new InvalidDataException($"unsupported AbilityEntityTemplateData opening length {consumedByteCount}");
+            }
+
+            var data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/Opening" },
+                { "structuredDecodeStatus", "decoded-prefix" },
+                { "offset", start },
+                { "consumedByteCount", consumedByteCount },
+                { "maxStackingCnt", maxStackingCnt },
+                { "maxStackingCntBB", maxStackingCntBB },
+                { "lifeType", lifeType },
+                { "duration", duration },
+                { "durationBB", durationBB },
+                { "maxDurationForServer", maxDurationForServer },
+                { "canMove", canMove },
+                { "moveHeight", moveHeight },
+                { "moveRadius", moveRadius },
+                { "moveType", moveType },
+                { "useFrameTick", useFrameTick },
+                { "nextFieldBoundary", "surroundingConfig" },
+                { "layoutNote", "The first five fields mirror exact AbilityEntityRootComponentData values. The following six scalar names come from installed IL2CPP field order; their byte widths and observed domains are guarded across the current 162-root family, but their runtime semantics remain inferred. This nested opening ends before surroundingConfig; the parent reader continues with its separately guarded structure." },
+                { "partialReasons", new List<string>
+                    {
+                        "maxDurationForServer through useFrameTick use metadata-order names rather than independent runtime behavior proof.",
+                        "surroundingConfig is decoded by a separate guarded reader; later ability-entity fields remain raw in the parent payload.",
+                    }
+                },
+            };
+
+            if (TryDecodeLinkedAbilityEntityRootComponent(
+                rawData,
+                componentList,
+                recoveredByRid,
+                out var rootComponentData,
+                out var mirrorDiagnostic))
+            {
+                if (!AbilityEntityOpeningMatchesRootComponent(
+                    maxStackingCnt,
+                    maxStackingCntBB,
+                    lifeType,
+                    duration,
+                    durationBB,
+                    rootComponentData))
+                {
+                    throw new InvalidDataException("AbilityEntityTemplateData opening does not mirror linked AbilityEntityRootComponentData");
+                }
+                data["rootComponentMirror"] = new OrderedDictionary
+                {
+                    { "status", "matched" },
+                    { "comparedFieldCount", 5 },
+                    { "fields", new[] { "maxStackingCnt", "maxStackingCntBB", "lifeType", "duration", "durationBB" } },
+                    { "layoutNote", "All five opening fields match values independently decoded from the linked exact AbilityEntityRootComponentData payload." },
+                };
+            }
+            else
+            {
+                data["rootComponentMirror"] = new OrderedDictionary
+                {
+                    { "status", "unavailable" },
+                    { "reason", mirrorDiagnostic },
+                    { "layoutNote", "The opening remains protected by string, enum, boolean, float, and consumed-length guards when no linked exact root component can be recovered." },
+                };
+            }
+
+            return data;
+        }
+
+        private static bool TryReadAbilityEntityTemplateSurroundingConfig(
+            ManagedReferencePayloadReader reader,
+            byte[] rawData,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data,
+            out string diagnostic
+        )
+        {
+            data = null;
+            diagnostic = null;
+            if (reader == null || rawData == null)
+            {
+                diagnostic = "surroundingConfig reader input is unavailable";
+                return false;
+            }
+
+            try
+            {
+                var local = new ManagedReferencePayloadReader(rawData, reader.Position, reader.Remaining);
+                data = ReadAbilityEntityTemplateSurroundingConfig(
+                    local,
+                    rawData,
+                    componentList,
+                    recoveredByRid);
+                reader.SetPosition(local.Position);
+                return true;
+            }
+            catch (InvalidDataException exception)
+            {
+                data = null;
+                diagnostic = exception.Message;
+                return false;
+            }
+        }
+
+        private static OrderedDictionary ReadAbilityEntityTemplateSurroundingConfig(
+            ManagedReferencePayloadReader reader,
+            byte[] rawData,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid
+        )
+        {
+            var start = reader.Position;
+            var surroundingBase = ReadPayloadEnum32(reader, "abilityEntityTemplate.surroundingConfig.surroundingBase", 0, 3);
+            var mountPoint = BuildPayloadHash32(reader.ReadInt32("abilityEntityTemplate.surroundingConfig.mountPoint"));
+            var rotationType = ReadPayloadEnum32(reader, "abilityEntityTemplate.surroundingConfig.rotationType", 1, 2);
+            var centerOffset = ReadAbilityEntityTemplateVector3Range(
+                reader,
+                "abilityEntityTemplate.surroundingConfig.centerOffset",
+                -100f,
+                100f);
+            var normalVector = ReadAbilityEntityTemplateVector3Range(
+                reader,
+                "abilityEntityTemplate.surroundingConfig.normalVector",
+                -1.001f,
+                1.001f);
+            var radius = ReadPayloadFloatRange(reader, "abilityEntityTemplate.surroundingConfig.radius", 0f, 1000f);
+            var radiusBB = ReadAbilityEntityTemplateBlackboardDouble(reader, "abilityEntityTemplate.surroundingConfig.radiusBB");
+            EnsureAbilityEntityTemplateBlackboardDoubleRange(radiusBB, "abilityEntityTemplate.surroundingConfig.radiusBB", 0f, 1000f);
+            var angleSpeed = ReadPayloadFloatRange(reader, "abilityEntityTemplate.surroundingConfig.angleSpeed", -3600f, 3600f);
+            var angleSpeedBB = ReadAbilityEntityTemplateBlackboardDouble(reader, "abilityEntityTemplate.surroundingConfig.angleSpeedBB");
+            EnsureAbilityEntityTemplateBlackboardDoubleRange(angleSpeedBB, "abilityEntityTemplate.surroundingConfig.angleSpeedBB", -3600f, 3600f);
+            var rotationClockwise = reader.ReadBool32("abilityEntityTemplate.surroundingConfig.rotationClockwise");
+            var initAngleType = ReadPayloadEnum32(reader, "abilityEntityTemplate.surroundingConfig.initAngleType", 1, 2);
+            var initAngle = ReadPayloadFloatRange(reader, "abilityEntityTemplate.surroundingConfig.initAngle", -720f, 720f);
+            var initAngleBB = ReadAbilityEntityTemplateBlackboardDouble(reader, "abilityEntityTemplate.surroundingConfig.initAngleBB");
+            EnsureAbilityEntityTemplateBlackboardDoubleRange(initAngleBB, "abilityEntityTemplate.surroundingConfig.initAngleBB", -720f, 720f);
+            var consumedByteCount = reader.Position - start;
+            if (consumedByteCount != 92)
+            {
+                throw new InvalidDataException(
+                    $"unsupported AbilityEntityTemplateData surroundingConfig length {consumedByteCount}"
+                );
+            }
+
+            var data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$partial", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.AbilityEntityTemplateData/SurroundingConfig" },
+                { "structuredDecodeStatus", "decoded" },
+                { "offset", start },
+                { "consumedByteCount", consumedByteCount },
+                { "surroundingBase", surroundingBase },
+                { "mountPoint", mountPoint },
+                { "rotationType", rotationType },
+                { "centerOffset", centerOffset },
+                { "normalVector", normalVector },
+                { "radius", radius },
+                { "radiusBB", radiusBB },
+                { "angleSpeed", angleSpeed },
+                { "angleSpeedBB", angleSpeedBB },
+                { "rotationClockwise", rotationClockwise },
+                { "initAngleType", initAngleType },
+                { "initAngle", initAngle },
+                { "initAngleBB", initAngleBB },
+                { "nextFieldBoundary", "followMountPointConfig" },
+                { "layoutNote", "Installed IL2CPP metadata supplies the 13 field names and order. Unity byte ownership is independently guarded by exact 92-byte consumption across the current 162-root family and by linked SurroundingMovementData mirrors when available. Float guards use conservative future-safe envelopes around observed ranges (vectors 0..1, radius 0..20, angle speed 0..360, initial angle -180..240); runtime enum/hash meanings remain inferred." },
+                { "partialReasons", new List<string>
+                    {
+                        "surroundingBase, mountPoint, rotationType, and initAngleType runtime meanings are not independently proven.",
+                        "Current BlackboardDouble samples cover empty keys only, including both zero and literal-value variants.",
+                        "Decoding stops before followMountPointConfig.",
+                    }
+                },
+            };
+
+            if (TryValidateLinkedAbilityEntitySurroundingMovementMirror(
+                rawData,
+                start,
+                componentList,
+                recoveredByRid,
+                out var mirrorDiagnostic))
+            {
+                data["surroundingMovementMirror"] = new OrderedDictionary
+                {
+                    { "status", "matched" },
+                    { "comparedFieldGroupCount", 10 },
+                    { "comparedWordCount", 20 },
+                    { "comparisonScope", "this linked SurroundingMovementData record" },
+                    { "layoutNote", "The 80 overlapping bytes match the exact SurroundingMovementData reached through CharacterMovementComponentData.proxyShape." },
+                };
+            }
+            else
+            {
+                data["surroundingMovementMirror"] = new OrderedDictionary
+                {
+                    { "status", "unavailable" },
+                    { "reason", mirrorDiagnostic },
+                    { "layoutNote", "The structure remains protected by enum, bool, float, aligned-string, and consumed-length guards when no exact linked surrounding-movement mirror is available." },
+                };
+            }
+
+            var boundaryDiagnostic = reader.Remaining >= 12
+                ? null
+                : $"fewer than 12 bytes remain in the current AbilityEntityTemplateData payload ({reader.Remaining})";
+            var boundaryMatched = reader.Remaining >= 12
+                && TryValidateLinkedAbilityEntityFollowMountPointBoundaryMirror(
+                    rawData,
+                    reader.Position,
+                    reader.End,
+                    componentList,
+                    recoveredByRid,
+                    out boundaryDiagnostic);
+            if (boundaryMatched)
+            {
+                data["nextBoundaryMirror"] = new OrderedDictionary
+                {
+                    { "status", "matched" },
+                    { "nextField", "followMountPointConfig" },
+                    { "comparedWordCount", 3 },
+                    { "comparisonScope", "this linked BaseRotationData record" },
+                    { "readerAdvanced", false },
+                    { "layoutNote", "The next 12 bytes match exact BaseRotationData reached through CharacterMovementComponentData.proxyShape, independently confirming the boundary without consuming followMountPointConfig." },
+                };
+            }
+            else
+            {
+                data["nextBoundaryMirror"] = new OrderedDictionary
+                {
+                    { "status", "unavailable" },
+                    { "nextField", "followMountPointConfig" },
+                    { "reason", boundaryDiagnostic },
+                    { "readerAdvanced", false },
+                    { "layoutNote", "No next-field bytes are consumed when a linked BaseRotationData boundary mirror is unavailable." },
+                };
+            }
+
+            return data;
+        }
+
+        private static OrderedDictionary ReadAbilityEntityTemplateVector3Range(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            float min,
+            float max
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "x", ReadPayloadFloatRange(reader, $"{fieldName}.x", min, max) },
+                { "y", ReadPayloadFloatRange(reader, $"{fieldName}.y", min, max) },
+                { "z", ReadPayloadFloatRange(reader, $"{fieldName}.z", min, max) },
+            };
+        }
+
+        private static void EnsureAbilityEntityTemplateBlackboardDoubleRange(
+            OrderedDictionary data,
+            string fieldName,
+            float min,
+            float max
+        )
+        {
+            if (data == null
+                || !data.Contains("value")
+                || !(data["value"] is float value)
+                || value < min
+                || value > max)
+            {
+                throw new InvalidDataException($"invalid BlackboardDouble value in {fieldName}");
+            }
+        }
+
+        private static OrderedDictionary ReadAbilityEntityTemplateBlackboardInt(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardInt" },
+                { "serializationShape", "bool-int-key" },
+                { "useBlackboardKey", reader.ReadBool32($"{fieldName}.useBlackboardKey") },
+                { "value", reader.ReadInt32($"{fieldName}.value") },
+                { "blackboardKey", ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.blackboardKey", 256) },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilityEntityTemplateBlackboardDouble(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var useBlackboardKey = reader.ReadBool32($"{fieldName}.useBlackboardKey");
+            var value = ReadPayloadFloatRange(reader, $"{fieldName}.value", -100000f, 100000f);
+            var blackboardKey = ReadPayloadAlignedAsciiStringWithZeroPadding(reader, $"{fieldName}.blackboardKey", 256);
+            return new OrderedDictionary
+            {
+                { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                { "serializationShape", "bool-float-key" },
+                { "useBlackboardKey", useBlackboardKey },
+                { "value", value },
+                { "blackboardKey", blackboardKey },
+                { "valueFloatCandidate", value },
+            };
+        }
+
+        private static bool TryDecodeLinkedAbilityEntityRootComponent(
+            byte[] rawData,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary rootComponentData,
+            out string diagnostic
+        )
+        {
+            rootComponentData = null;
+            diagnostic = "linked AbilityEntityRootComponentData RID was not available";
+            if (rawData == null || componentList == null || recoveredByRid == null)
+            {
+                return false;
+            }
+
+            ManagedReferenceHeader rootHeader = null;
+            foreach (var link in componentList)
+            {
+                if (link == null || !link.Contains("rid") || !(link["rid"] is long rid))
+                {
+                    continue;
+                }
+                if (recoveredByRid.TryGetValue(rid, out var candidate)
+                    && string.Equals(candidate.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    && string.Equals(candidate.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(candidate.ClassName, "AbilityEntityRootComponentData", StringComparison.Ordinal))
+                {
+                    rootHeader = candidate;
+                    break;
+                }
+            }
+            if (rootHeader == null)
+            {
+                return false;
+            }
+
+            var payloadEnd = rawData.Length;
+            foreach (var candidate in recoveredByRid.Values)
+            {
+                if (candidate.HeaderStart > rootHeader.HeaderStart && candidate.HeaderStart < payloadEnd)
+                {
+                    payloadEnd = candidate.HeaderStart;
+                }
+            }
+            var payloadLength = payloadEnd - rootHeader.DataStart;
+            if (payloadLength <= 0 || (payloadLength % 4) != 0)
+            {
+                diagnostic = $"linked root component payload range is invalid ({payloadLength} bytes)";
+                return false;
+            }
+            if (!TryDecodeAbilityEntityRootComponentData(rawData, rootHeader.DataStart, payloadLength, out rootComponentData))
+            {
+                diagnostic = "linked root component did not pass its exact reader";
+                return false;
+            }
+
+            diagnostic = null;
+            return true;
+        }
+
+        private static bool TryValidateLinkedAbilityEntitySurroundingMovementMirror(
+            byte[] rawData,
+            int surroundingConfigOffset,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out string diagnostic
+        )
+        {
+            diagnostic = "linked CharacterMovementComponentData proxyShape was not available";
+            if (rawData == null
+                || surroundingConfigOffset < 0
+                || surroundingConfigOffset + 92 > rawData.Length
+                || !TryDecodeLinkedAbilityEntityMovementProxy(
+                    rawData,
+                    componentList,
+                    recoveredByRid,
+                    out var proxyHeader,
+                    out var proxyOffset,
+                    out var proxyLength,
+                    out diagnostic))
+            {
+                return false;
+            }
+
+            if (!string.Equals(proxyHeader.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(proxyHeader.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(proxyHeader.ClassName, "AbilityEntityTemplateData/SurroundingMovementData", StringComparison.Ordinal))
+            {
+                diagnostic = "linked CharacterMovementComponentData proxyShape is not SurroundingMovementData";
+                return false;
+            }
+            if (proxyLength != 84)
+            {
+                diagnostic = "linked SurroundingMovementData did not pass its exact 84-byte reader";
+                return false;
+            }
+
+            // surroundingConfig begins with its three base/hash/rotation words.
+            // The following 80 bytes are byte-identical to the first ten field
+            // groups of the independently serialized SurroundingMovementData;
+            // its final followSelfRotation word belongs to that separate type.
+            for (var byteIndex = 0; byteIndex < 80; byteIndex++)
+            {
+                if (rawData[surroundingConfigOffset + 12 + byteIndex]
+                    != rawData[proxyOffset + byteIndex])
+                {
+                    throw new InvalidDataException(
+                        $"AbilityEntityTemplateData surroundingConfig differs from linked SurroundingMovementData at overlapping byte {byteIndex}"
+                    );
+                }
+            }
+
+            diagnostic = null;
+            return true;
+        }
+
+        private static bool TryValidateLinkedAbilityEntityFollowMountPointBoundaryMirror(
+            byte[] rawData,
+            int followMountPointConfigOffset,
+            int abilityEntityPayloadEnd,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out string diagnostic
+        )
+        {
+            diagnostic = "linked CharacterMovementComponentData proxyShape was not available";
+            if (rawData == null
+                || followMountPointConfigOffset < 0
+                || abilityEntityPayloadEnd < followMountPointConfigOffset
+                || abilityEntityPayloadEnd > rawData.Length
+                || followMountPointConfigOffset + 12 > abilityEntityPayloadEnd
+                || !TryDecodeLinkedAbilityEntityMovementProxy(
+                    rawData,
+                    componentList,
+                    recoveredByRid,
+                    out var proxyHeader,
+                    out var proxyOffset,
+                    out var proxyLength,
+                    out diagnostic))
+            {
+                return false;
+            }
+
+            if (!string.Equals(proxyHeader.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(proxyHeader.Namespace, "Beyond.Gameplay", StringComparison.Ordinal)
+                || !string.Equals(proxyHeader.ClassName, "AbilityEntityTemplateData/BaseRotationData", StringComparison.Ordinal))
+            {
+                diagnostic = "linked CharacterMovementComponentData proxyShape is not BaseRotationData";
+                return false;
+            }
+            if (proxyLength != 12)
+            {
+                diagnostic = "linked BaseRotationData did not pass its exact 12-byte reader";
+                return false;
+            }
+
+            for (var byteIndex = 0; byteIndex < 12; byteIndex++)
+            {
+                if (rawData[followMountPointConfigOffset + byteIndex]
+                    != rawData[proxyOffset + byteIndex])
+                {
+                    throw new InvalidDataException(
+                        $"AbilityEntityTemplateData followMountPointConfig boundary differs from linked BaseRotationData at byte {byteIndex}"
+                    );
+                }
+            }
+
+            diagnostic = null;
+            return true;
+        }
+
+        private static bool TryDecodeLinkedAbilityEntityMovementProxy(
+            byte[] rawData,
+            IReadOnlyList<OrderedDictionary> componentList,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out ManagedReferenceHeader proxyHeader,
+            out int proxyOffset,
+            out int proxyLength,
+            out string diagnostic
+        )
+        {
+            proxyHeader = null;
+            proxyOffset = 0;
+            proxyLength = 0;
+            diagnostic = "linked CharacterMovementComponentData proxyShape was not available";
+            if (rawData == null || componentList == null || recoveredByRid == null)
+            {
+                return false;
+            }
+
+            foreach (var link in componentList)
+            {
+                if (link == null
+                    || !link.Contains("rid")
+                    || !(link["rid"] is long componentRid)
+                    || !recoveredByRid.TryGetValue(componentRid, out var movementHeader)
+                    || !string.Equals(movementHeader.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                    || !string.Equals(movementHeader.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    || !string.Equals(movementHeader.ClassName, "CharacterMovementComponentData", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!TryGetManagedReferencePayloadRange(
+                    rawData,
+                    movementHeader,
+                    recoveredByRid,
+                    out var movementOffset,
+                    out var movementLength)
+                    || !TryReadAbilityEntityMovementProxyRid(
+                        rawData,
+                        movementOffset,
+                        movementLength,
+                        out var proxyRid)
+                    || !recoveredByRid.TryGetValue(proxyRid, out proxyHeader)
+                    || !TryGetManagedReferencePayloadRange(
+                        rawData,
+                        proxyHeader,
+                        recoveredByRid,
+                        out proxyOffset,
+                        out proxyLength)
+                    || !TryValidateAbilityEntityMovementProxyPayload(
+                        proxyHeader,
+                        rawData,
+                        proxyOffset,
+                        proxyLength))
+                {
+                    proxyHeader = null;
+                    proxyOffset = 0;
+                    proxyLength = 0;
+                    diagnostic = "linked CharacterMovementComponentData did not expose an exact proxyShape RID";
+                    continue;
+                }
+
+                diagnostic = null;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryReadAbilityEntityMovementProxyRid(
+            byte[] rawData,
+            int offset,
+            int length,
+            out long proxyRid
+        )
+        {
+            proxyRid = 0;
+            if (rawData == null || length != 64)
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                ReadPayloadFloatArray(reader, "abilityEntityMovementMirror.rawFloat32", 10);
+                if (reader.ReadInt32("abilityEntityMovementMirror.overrideMoveMode") != 13
+                    || reader.ReadInt32("abilityEntityMovementMirror.abilityEntityMovementDataCount") != 2)
+                {
+                    return false;
+                }
+                reader.ReadInt64("abilityEntityMovementMirror.movementDataRid");
+                proxyRid = reader.ReadInt64("abilityEntityMovementMirror.proxyShapeRid");
+                reader.EnsureComplete();
+                return proxyRid != 0;
+            }
+            catch (InvalidDataException)
+            {
+                proxyRid = 0;
+                return false;
+            }
+        }
+
+        private static bool TryValidateAbilityEntityMovementProxyPayload(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length
+        )
+        {
+            if (header == null
+                || rawData == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal)
+                || !string.Equals(header.Namespace, "Beyond.Gameplay", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                if (string.Equals(header.ClassName, "AbilityEntityTemplateData/SurroundingMovementData", StringComparison.Ordinal)
+                    && length == 84)
+                {
+                    ReadPayloadVector3(reader, "abilityEntityMovementMirror.centerOffset");
+                    ReadPayloadVector3(reader, "abilityEntityMovementMirror.normalVector");
+                    ReadPayloadFloatRange(reader, "abilityEntityMovementMirror.radius", -10000f, 10000f);
+                    ReadPayloadRawInt32Words(reader, "abilityEntityMovementMirror.radiusBB", 3);
+                    ReadPayloadFloatRange(reader, "abilityEntityMovementMirror.angleSpeed", -10000f, 10000f);
+                    ReadPayloadRawInt32Words(reader, "abilityEntityMovementMirror.angleSpeedBB", 3);
+                    reader.ReadBool32("abilityEntityMovementMirror.rotationClockwise");
+                    ReadPayloadEnum32(reader, "abilityEntityMovementMirror.initAngleType", 0, 16);
+                    ReadPayloadFloatRange(reader, "abilityEntityMovementMirror.initAngle", -3600f, 3600f);
+                    ReadPayloadRawInt32Words(reader, "abilityEntityMovementMirror.initAngleBB", 3);
+                    reader.ReadBool32("abilityEntityMovementMirror.followSelfRotation");
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (string.Equals(header.ClassName, "AbilityEntityTemplateData/BaseRotationData", StringComparison.Ordinal)
+                    && length == 12)
+                {
+                    ReadPayloadEnum32(reader, "abilityEntityMovementMirror.baseType", 0, 16);
+                    reader.ReadInt32("abilityEntityMovementMirror.mountPoint");
+                    reader.ReadBool32("abilityEntityMovementMirror.followSelfRotation");
+                    reader.EnsureComplete();
+                    return true;
+                }
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetManagedReferencePayloadRange(
+            byte[] rawData,
+            ManagedReferenceHeader header,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out int payloadOffset,
+            out int payloadLength
+        )
+        {
+            payloadOffset = 0;
+            payloadLength = 0;
+            if (rawData == null
+                || header == null
+                || recoveredByRid == null
+                || header.DataStart < 0
+                || header.DataStart > rawData.Length)
+            {
+                return false;
+            }
+
+            var payloadEnd = rawData.Length;
+            foreach (var candidate in recoveredByRid.Values)
+            {
+                if (candidate != null
+                    && candidate.HeaderStart > header.HeaderStart
+                    && candidate.HeaderStart < payloadEnd)
+                {
+                    payloadEnd = candidate.HeaderStart;
+                }
+            }
+
+            payloadOffset = header.DataStart;
+            payloadLength = payloadEnd - header.DataStart;
+            return payloadLength >= 0 && (payloadLength % 4) == 0;
+        }
+
+        private static bool AbilityEntityOpeningMatchesRootComponent(
+            int maxStackingCnt,
+            OrderedDictionary maxStackingCntBB,
+            OrderedDictionary lifeType,
+            float duration,
+            OrderedDictionary durationBB,
+            OrderedDictionary rootComponentData
+        )
+        {
+            return rootComponentData != null
+                && rootComponentData["maxStackingCnt"] is int rootMaxStackingCnt
+                && rootMaxStackingCnt == maxStackingCnt
+                && OrderedDictionaryFieldsEqual(maxStackingCntBB, rootComponentData["maxStackingCntBB"] as OrderedDictionary, "useBlackboardKey", "value", "blackboardKey")
+                && OrderedDictionaryFieldsEqual(lifeType, rootComponentData["lifeType"] as OrderedDictionary, "value")
+                && rootComponentData["duration"] is float rootDuration
+                && rootDuration.Equals(duration)
+                && OrderedDictionaryFieldsEqual(durationBB, rootComponentData["durationBB"] as OrderedDictionary, "useBlackboardKey", "value", "blackboardKey");
+        }
+
+        private static bool OrderedDictionaryFieldsEqual(
+            OrderedDictionary left,
+            OrderedDictionary right,
+            params string[] fields
+        )
+        {
+            if (left == null || right == null)
+            {
+                return false;
+            }
+            foreach (var field in fields)
+            {
+                if (!left.Contains(field)
+                    || !right.Contains(field)
+                    || !object.Equals(left[field], right[field]))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static void AddAbilityEntityTemplatePrefixDiagnostics(
@@ -15860,9 +16785,7 @@ namespace AnimeStudio.CLI
             }
 
             data["effectActionTailStatus"] = "decoded 80-word post-prefix EffectActionCfg tail";
-            var tail = ReadProjectileAlertEffectActionCfgTail(postNameReader, $"{fieldName}.effectActionTail");
-            tail["layout"] = "Beyond.Gameplay.EffectActionCfg/OmitUseScaleBBTail";
-            tail["layoutNote"] = "80-word tail after AbilitySystemData deadEffect.effectPosData; field order matches the proven EffectActionCfg tail while useScaleBB and centerOffset are omitted from the enclosing body.";
+            var tail = ReadAbilitySystemOmitUseScaleBBEffectActionCfgTail(postNameReader, $"{fieldName}.effectActionTail");
             data["effectActionTail"] = tail;
             postNameReader.EnsureComplete();
             reader.SetPosition(postNameReader.Position);
