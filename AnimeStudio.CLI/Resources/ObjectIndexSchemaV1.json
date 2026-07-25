@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "endfield-animestudio-object-index-v1",
+  "title": "AnimeStudio compact object-index JSONL row",
+  "oneOf": [
+    { "$ref": "#/$defs/object" },
+    { "$ref": "#/$defs/schema" },
+    { "$ref": "#/$defs/monoScript" },
+    { "$ref": "#/$defs/summary" }
+  ],
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["serializedFile", "source", "sourceOffset", "pathId"],
+      "properties": {
+        "serializedFile": { "type": "string" },
+        "source": { "type": "string" },
+        "sourceOffset": { "type": "integer" },
+        "pathId": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "scriptPointer": {
+      "type": "object",
+      "required": ["fileId", "pathId"],
+      "properties": {
+        "fileId": { "type": "integer" },
+        "pathId": { "type": "integer" },
+        "fullName": { "type": ["string", "null"] },
+        "assembly": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "expectedExternal": {
+      "type": "object",
+      "required": ["serializedFile"],
+      "properties": {
+        "serializedFile": { "type": "string" },
+        "externalPath": { "type": ["string", "null"] },
+        "externalGuid": { "type": ["string", "null"] },
+        "externalType": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["serializedFile", "source", "sourceOffset", "pathId", "type", "name"],
+      "properties": {
+        "serializedFile": { "type": "string" },
+        "source": { "type": "string" },
+        "sourceOffset": { "type": "integer" },
+        "pathId": { "type": "integer" },
+        "type": { "type": ["string", "null"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "pptr": {
+      "type": "object",
+      "required": ["path", "fileId", "pathId", "status"],
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "fileId": { "type": "integer" },
+        "pathId": { "type": "integer" },
+        "status": {
+          "enum": [
+            "null",
+            "resolved",
+            "resolved_postmerge_unique_external_filename_pathid",
+            "local_target_unavailable",
+            "external_target_unavailable",
+            "external_not_exported",
+            "ambiguous_external",
+            "owner_source_unavailable",
+            "negative_file_id",
+            "file_id_out_of_range",
+            "external_index_out_of_range",
+            "legacy_unresolved"
+          ]
+        },
+        "expected": { "$ref": "#/$defs/expectedExternal" },
+        "target": { "$ref": "#/$defs/target" },
+        "requiresGlobalUniquenessCheck": { "type": "boolean" },
+        "resolutionBasis": {
+          "enum": [
+            "runtime_loaded_dependency",
+            "expected_external_identity",
+            "postmerge_unique_external_filename_pathid"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "object": {
+      "type": "object",
+      "required": ["schemaVersion", "recordType", "object", "classId", "type", "decodeStatus", "scalars", "pptrs"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "recordType": { "const": "object" },
+        "object": { "$ref": "#/$defs/identity" },
+        "classId": { "type": ["integer", "null"] },
+        "type": { "type": ["string", "null"] },
+        "name": { "type": "string" },
+        "decodeStatus": { "enum": ["decoded", "partial", "metadata_only"] },
+        "typeTreeSource": { "type": "string" },
+        "schemaId": { "type": ["string", "null"] },
+        "script": { "$ref": "#/$defs/scriptPointer" },
+        "scalars": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "enum": ["s", "i"] }, {}],
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "pptrs": { "type": "array", "items": { "$ref": "#/$defs/pptr" } },
+        "opaque": {
+          "type": "object",
+          "required": ["rawLength", "rawSha256"],
+          "properties": {
+            "rawLength": { "type": ["integer", "null"] },
+            "rawSha256": { "type": ["string", "null"] },
+            "error": { "type": ["string", "null"] }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "required": ["schemaVersion", "recordType", "schemaId", "fields"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "recordType": { "const": "schema" },
+        "schemaId": { "type": "string" },
+        "classId": { "type": ["integer", "null"] },
+        "typeTreeSource": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "monoScript": {
+      "type": "object",
+      "required": ["schemaVersion", "recordType", "object", "className", "namespace", "assemblyName"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "recordType": { "const": "monoScript" },
+        "object": { "$ref": "#/$defs/identity" },
+        "className": { "type": "string" },
+        "namespace": { "type": "string" },
+        "assemblyName": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["schemaVersion", "recordType", "complete", "counts"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "recordType": { "const": "summary" },
+        "complete": { "type": "boolean" },
+        "counts": { "type": "object" },
+        "errors": { "type": "array" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -759,25 +759,33 @@ namespace AnimeStudio.CLI
                             $"Exporting MonoBehaviour {item.Text} as metadata-only JSON after " +
                             $"{decodeException.GetType().Name}: {decodeException.Message}"
                         );
+                        var fallbackMeta = BuildMonoBehaviourExportMetadata(
+                            item,
+                            m_MonoBehaviour,
+                            rawData,
+                            exportTypeTree,
+                            typeTreeSource,
+                            rawSidecar,
+                            decodeException,
+                            scriptTypeTreeConversion,
+                            scriptTypeTreeDecodeException,
+                            null
+                        );
                         var fallback = new OrderedDictionary
                         {
-                            { "$animestudio", BuildMonoBehaviourExportMetadata(
-                                item,
-                                m_MonoBehaviour,
-                                rawData,
-                                exportTypeTree,
-                                typeTreeSource,
-                                rawSidecar,
-                                decodeException,
-                                scriptTypeTreeConversion,
-                                scriptTypeTreeDecodeException,
-                                null
-                            ) },
+                            { "$animestudio", fallbackMeta },
                             { "type", item.TypeString },
                             { "name", item.Text ?? "" },
                             { "pathId", item.m_PathID },
                             { "decodeError", $"{decodeException.GetType().Name}: {decodeException.Message}" },
                         };
+                        ObjectIndexJsonlWriter.Current?.WriteObject(
+                            item,
+                            null,
+                            fallbackMeta,
+                            "metadataOnly",
+                            $"{decodeException.GetType().Name}: {decodeException.Message}"
+                        );
                         var fallbackText = JsonConvert.SerializeObject(fallback, Formatting.Indented);
                         File.WriteAllText(exportFullPath, fallbackText);
                         return true;
@@ -889,6 +897,15 @@ namespace AnimeStudio.CLI
                         meta["managedReferencesRawPayloadDecode"] = rawPayloadDecodeDiagnostic;
                     }
                 }
+                ObjectIndexJsonlWriter.Current?.WriteObject(
+                    item,
+                    type,
+                    meta,
+                    partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded ? "partial" : "decoded",
+                    partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded
+                        ? $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}"
+                        : null
+                );
                 type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
                 File.WriteAllText(exportFullPath, str);
@@ -19758,10 +19775,32 @@ namespace AnimeStudio.CLI
             meta["scriptFileId"] = m_MonoBehaviour.m_Script.m_FileID;
             meta["scriptPathId"] = m_MonoBehaviour.m_Script.m_PathID;
 
+            if (m_MonoBehaviour.m_Script.m_PathID != 0)
+            {
+                var refs = meta["pptrReferences"] as List<OrderedDictionary> ?? new List<OrderedDictionary>();
+                if (!refs.Any(reference => string.Equals(reference["path"] as string, "$.m_Script", StringComparison.Ordinal)))
+                {
+                    var scriptRef = new OrderedDictionary
+                    {
+                        { "path", "$.m_Script" },
+                        { "fileId", (long)m_MonoBehaviour.m_Script.m_FileID },
+                        { "pathId", m_MonoBehaviour.m_Script.m_PathID },
+                    };
+                    AddResolvedPPtrTarget(
+                        scriptRef,
+                        m_MonoBehaviour,
+                        m_MonoBehaviour.m_Script.m_FileID,
+                        m_MonoBehaviour.m_Script.m_PathID
+                    );
+                    refs.Add(scriptRef);
+                    meta["pptrReferences"] = refs;
+                }
+            }
+
             var includeScriptDiagnostics = scriptTypeTreeConversion != null
                 || Studio.MonoBehaviourTypeTreePriorityMode != MonoBehaviourTypeTreePriority.SerializedFirst
                 || (typeTreeSource?.StartsWith("scriptDerived", StringComparison.OrdinalIgnoreCase) ?? false);
-            if (includeScriptDiagnostics && m_MonoBehaviour.m_Script.TryGet(out var m_Script))
+            if (m_MonoBehaviour.m_Script.TryGet(out var m_Script))
             {
                 var scriptNamespace = m_Script.m_Namespace ?? "";
                 var scriptClass = m_Script.m_ClassName ?? "";
@@ -19828,6 +19867,7 @@ namespace AnimeStudio.CLI
                 { "name", item.Text ?? "" },
                 { "sourceFile", item.SourceFile?.fileName ?? "" },
                 { "sourceOriginalPath", item.SourceFile?.originalPath ?? "" },
+                { "sourceOffset", item.SourceFile?.offset ?? 0 },
                 { "container", item.Container ?? "" },
                 { "byteSize", item.Asset.byteSize },
                 { "rawDataLength", rawData?.Length ?? 0 },
@@ -19959,22 +19999,60 @@ namespace AnimeStudio.CLI
 
         private static void AddResolvedPPtrTarget(OrderedDictionary refInfo, Object owner, long fileId, long pathId)
         {
-            if (owner?.assetsFile == null || pathId == 0 || fileId < int.MinValue || fileId > int.MaxValue)
+            if (pathId == 0)
             {
+                refInfo["resolutionStatus"] = "null";
+                return;
+            }
+
+            if (owner?.assetsFile == null)
+            {
+                refInfo["resolutionStatus"] = "owner_source_unavailable";
+                return;
+            }
+
+            if (fileId < int.MinValue || fileId > int.MaxValue)
+            {
+                refInfo["resolutionStatus"] = "file_id_out_of_range";
+                return;
+            }
+
+            if (fileId == 0)
+            {
+                refInfo["expectedTargetSourceFile"] = owner.assetsFile.fileName ?? "";
+                refInfo["expectedTargetSourceOriginalPath"] = owner.assetsFile.originalPath ?? "";
+                refInfo["expectedTargetSourceOffset"] = owner.assetsFile.offset;
+            }
+            else if (fileId > 0 && fileId - 1 < owner.assetsFile.m_Externals.Count)
+            {
+                var external = owner.assetsFile.m_Externals[(int)fileId - 1];
+                refInfo["expectedTargetSourceFile"] = external.fileName ?? "";
+                refInfo["expectedTargetExternalPath"] = external.pathName ?? "";
+                refInfo["expectedTargetExternalGuid"] = external.guid.ToString();
+                refInfo["expectedTargetExternalType"] = external.type;
+            }
+            else
+            {
+                refInfo["resolutionStatus"] = fileId < 0
+                    ? "negative_file_id"
+                    : "external_index_out_of_range";
                 return;
             }
 
             var pptr = new PPtr<Object>((int)fileId, pathId, owner.assetsFile);
             if (!pptr.TryGet(out var target))
             {
+                refInfo["resolutionStatus"] = fileId == 0 ? "local_target_unavailable" : "external_target_unavailable";
                 return;
             }
 
+            refInfo["resolutionStatus"] = "resolved";
             refInfo["targetType"] = target.type.ToString();
             refInfo["targetPathId"] = target.m_PathID;
             refInfo["targetName"] = target.Name ?? "";
             refInfo["targetSourceFile"] = target.assetsFile?.fileName ?? "";
             refInfo["targetSourceOriginalPath"] = target.assetsFile?.originalPath ?? "";
+            refInfo["targetSourceOffset"] = target.assetsFile?.offset ?? 0;
         }
 
         private static bool TryGetDictionaryNumber(OrderedDictionary dictionary, string key, out long value)
@@ -20509,7 +20587,28 @@ namespace AnimeStudio.CLI
             object payload = item.Asset;
             TypeTree exportTypeTree = item.Asset.serializedType?.m_Type;
             string typeTreeSource = exportTypeTree != null ? "serializedType" : "none";
-            if (item.Asset.GetType() == typeof(Object))
+            if (item.Asset is MonoScript monoScript)
+            {
+                var rawData = item.Asset.GetRawData();
+                var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                payload = new OrderedDictionary
+                {
+                    { "$animestudio", BuildObjectExportMetadata(
+                        item,
+                        rawData,
+                        exportTypeTree,
+                        typeTreeSource,
+                        rawSidecar,
+                        null
+                    ) },
+                    { "m_ClassName", monoScript.m_ClassName ?? "" },
+                    { "m_Namespace", monoScript.m_Namespace ?? "" },
+                    { "m_AssemblyName", monoScript.m_AssemblyName ?? "" },
+                    { "m_Name", monoScript.m_Name ?? "" },
+                    { "Name", monoScript.Name ?? "" },
+                };
+            }
+            else if (item.Asset.GetType() == typeof(Object))
             {
                 var typedPayload = item.Asset.ToType();
                 if (typedPayload != null)
@@ -20548,6 +20647,14 @@ namespace AnimeStudio.CLI
                             ["pathId"] = item.m_PathID,
                         };
                 }
+            }
+
+            if (!(item.Asset is MonoScript)
+                && payload is IDictionary payloadDictionary
+                && payloadDictionary.Contains("$animestudio")
+                && payloadDictionary["$animestudio"] is OrderedDictionary objectMetadata)
+            {
+                ObjectIndexJsonlWriter.Current?.WriteObject(item, payload, objectMetadata);
             }
 
             var str = JsonConvert.SerializeObject(payload, Formatting.Indented, settings);

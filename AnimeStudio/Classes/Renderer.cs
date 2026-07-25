@@ -19,6 +19,44 @@ namespace AnimeStudio
 
     public abstract class Renderer : Component
     {
+        // Keep the serialized Renderer header available to JSON consumers.
+        // These values used to be read into constructor locals and discarded,
+        // which made source-exact renderer reconstruction impossible even
+        // though the parser had already decoded the bytes successfully.
+        public bool? m_Enabled;
+        public byte? m_CastShadows;
+        public byte? m_ReceiveShadows;
+        public byte? m_DynamicOccludee;
+        public byte? m_StaticShadowCaster;
+        public byte? m_RealtimeShadowCaster;
+        public byte? m_SubMeshRenderMode;
+        public byte? m_CharacterIndex;
+        public byte? m_MotionVectors;
+        public byte? m_LightProbeUsage;
+        public byte? m_ReflectionProbeUsage;
+        public byte? m_RayTracingMode;
+        public byte? m_RayTraceProcedural;
+        public byte? m_RenderFoliageOccluder;
+        public uint? m_PlatformSpecificCastShadows;
+        public uint? m_RenderingLayerMask;
+        public int? m_RendererPriority;
+        public ushort? m_LightmapIndex;
+        public ushort? m_LightmapIndexDynamic;
+        public Vector4? m_LightmapTilingOffset;
+        public Vector4? m_LightmapTilingOffsetDynamic;
+        public PPtr<Transform> m_StaticBatchRoot;
+        public PPtr<Transform> m_ProbeAnchor;
+        public PPtr<GameObject> m_LightProbeVolumeOverride;
+        public PPtr<Mesh> m_ShadowProxyMesh;
+        public uint? m_SortingLayerID;
+        public short? m_SortingLayer;
+        public short? m_SortingOrder;
+        public bool? m_EnableCharacterOutline;
+        public bool? m_EnablePerRendererLighting;
+        public Vector3? m_PerRendererLightingOffset;
+        public PPtr<Transform> m_PerRendererLightingAnchor;
+        public uint? m_LightModeMask;
+        public float? m_RendererSortingFudge;
         public List<PPtr<Material>> m_Materials;
         public StaticBatchInfo m_StaticBatchInfo;
         public uint[] m_SubsetIndices;
@@ -49,12 +87,12 @@ namespace AnimeStudio
                     {
                         CheckHeader(reader, 0x12);
                     }
-                    var m_Enabled = reader.ReadBoolean();
-                    var m_CastShadows = reader.ReadByte();
-                    var m_ReceiveShadows = reader.ReadByte();
+                    m_Enabled = reader.ReadBoolean();
+                    m_CastShadows = reader.ReadByte();
+                    m_ReceiveShadows = reader.ReadByte();
                     if (version[0] > 2017 || (version[0] == 2017 && version[1] >= 2)) //2017.2 and up
                     {
-                        var m_DynamicOccludee = reader.ReadByte();
+                        m_DynamicOccludee = reader.ReadByte();
                     }
                     if (reader.Game.Type.IsBH3Group())
                     {
@@ -99,24 +137,24 @@ namespace AnimeStudio
                     }
                     if (version[0] >= 2021) //2021.1 and up
                     {
-                        var m_StaticShadowCaster = reader.ReadByte();
+                        m_StaticShadowCaster = reader.ReadByte();
                         if (reader.Game.Type.IsArknightsEndfieldGroup())
                         {
-                            var m_RealtimeShadowCaster = reader.ReadByte();
-                            var m_SubMeshRenderMode = reader.ReadByte();
-                            var m_CharacterIndex = reader.ReadByte();
+                            m_RealtimeShadowCaster = reader.ReadByte();
+                            m_SubMeshRenderMode = reader.ReadByte();
+                            m_CharacterIndex = reader.ReadByte();
                         }
                     }
-                    var m_MotionVectors = reader.ReadByte();
-                    var m_LightProbeUsage = reader.ReadByte();
-                    var m_ReflectionProbeUsage = reader.ReadByte();
+                    m_MotionVectors = reader.ReadByte();
+                    m_LightProbeUsage = reader.ReadByte();
+                    m_ReflectionProbeUsage = reader.ReadByte();
                     if (version[0] > 2019 || (version[0] == 2019 && version[1] >= 3)) //2019.3 and up
                     {
-                        var m_RayTracingMode = reader.ReadByte();
+                        m_RayTracingMode = reader.ReadByte();
                     }
                     if (version[0] >= 2020 || reader.Game.Type.IsZZZ()) //2020.1 and up
                     {
-                        var m_RayTraceProcedural = reader.ReadByte();
+                        m_RayTraceProcedural = reader.ReadByte();
                     }
                     if (reader.Game.Type.IsHYGCB1())
                     {
@@ -128,36 +166,36 @@ namespace AnimeStudio
                     }
                     if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
                     {
-                        var m_RenderFoliageOccluder = reader.ReadByte();
+                        m_RenderFoliageOccluder = reader.ReadByte();
                     }
                     reader.AlignStream();
                 }
                 else
                 {
-                    var m_Enabled = reader.ReadBoolean();
+                    m_Enabled = reader.ReadBoolean();
                     reader.AlignStream();
-                    var m_CastShadows = reader.ReadByte();
-                    var m_ReceiveShadows = reader.ReadBoolean();
+                    m_CastShadows = reader.ReadByte();
+                    m_ReceiveShadows = reader.ReadBoolean() ? (byte)1 : (byte)0;
                     reader.AlignStream();
                 }
 
                 if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
                 {
-                    var m_PlatformSpecificCastShadows = reader.ReadUInt32();
+                    m_PlatformSpecificCastShadows = reader.ReadUInt32();
                 }
 
                 if (version[0] >= 2018 || (reader.Game.Type.IsBH3() && isNewHeader)) //2018 and up
                 {
-                    var m_RenderingLayerMask = reader.ReadUInt32();
+                    m_RenderingLayerMask = reader.ReadUInt32();
                 }
 
                 if (version[0] > 2018 || (version[0] == 2018 && version[1] >= 3)) //2018.3 and up
                 {
-                    var m_RendererPriority = reader.ReadInt32();
+                    m_RendererPriority = reader.ReadInt32();
                 }
 
-                var m_LightmapIndex = reader.ReadUInt16();
-                var m_LightmapIndexDynamic = reader.ReadUInt16();
+                m_LightmapIndex = reader.ReadUInt16();
+                m_LightmapIndexDynamic = reader.ReadUInt16();
                 if (reader.Game.Type.IsGIGroup() && (m_LightmapIndex != 0xFFFF || m_LightmapIndexDynamic != 0xFFFF))
                 {
                     throw new Exception("Not Supported !! skipping....");
@@ -166,12 +204,12 @@ namespace AnimeStudio
 
             if (version[0] >= 3) //3.0 and up
             {
-                var m_LightmapTilingOffset = reader.ReadVector4();
+                m_LightmapTilingOffset = reader.ReadVector4();
             }
 
             if (version[0] >= 5) //5.0 and up
             {
-                var m_LightmapTilingOffsetDynamic = reader.ReadVector4();
+                m_LightmapTilingOffsetDynamic = reader.ReadVector4();
             }
 
             if (reader.Game.Type.IsGIGroup())
@@ -192,7 +230,7 @@ namespace AnimeStudio
 
             if (version[0] < 3) //3.0 down
             {
-                var m_LightmapTilingOffset = reader.ReadVector4();
+                m_LightmapTilingOffset = reader.ReadVector4();
             }
             else //3.0 and up
             {
@@ -205,7 +243,7 @@ namespace AnimeStudio
                     m_SubsetIndices = reader.ReadUInt32Array();
                 }
 
-                var m_StaticBatchRoot = new PPtr<Transform>(reader);
+                m_StaticBatchRoot = new PPtr<Transform>(reader);
             }
 
             if (reader.Game.Type.IsGIGroup())
@@ -217,8 +255,8 @@ namespace AnimeStudio
             {
                 if (version[0] > 5 || (version[0] == 5 && version[1] >= 4)) //5.4 and up
                 {
-                    var m_ProbeAnchor = new PPtr<Transform>(reader);
-                    var m_LightProbeVolumeOverride = new PPtr<GameObject>(reader);
+                    m_ProbeAnchor = new PPtr<Transform>(reader);
+                    m_LightProbeVolumeOverride = new PPtr<GameObject>(reader);
                 }
                 else if (version[0] > 3 || (version[0] == 3 && version[1] >= 5)) //3.5 - 5.3
                 {
@@ -230,13 +268,13 @@ namespace AnimeStudio
                         var m_ReflectionProbeUsage = reader.ReadInt32();
                     }
 
-                    var m_LightProbeAnchor = new PPtr<Transform>(reader); //5.0 and up m_ProbeAnchor
+                    m_ProbeAnchor = new PPtr<Transform>(reader); //5.0 and up m_ProbeAnchor
                 }
             }
 
             if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
             {
-                var m_ShadowProxyMesh = new PPtr<Mesh>(reader);
+                m_ShadowProxyMesh = new PPtr<Mesh>(reader);
             }
 
             if (version[0] > 4 || (version[0] == 4 && version[1] >= 3)) //4.3 and up
@@ -247,12 +285,12 @@ namespace AnimeStudio
                 }
                 else
                 {
-                    var m_SortingLayerID = reader.ReadUInt32();
+                    m_SortingLayerID = reader.ReadUInt32();
                 }
 
                 //SInt16 m_SortingLayer 5.6 and up
-                var m_SortingLayer2 = reader.ReadInt16();
-                var m_SortingOrder = reader.ReadInt16();
+                m_SortingLayer = reader.ReadInt16();
+                m_SortingOrder = reader.ReadInt16();
                 reader.AlignStream();
                 if (reader.Game.Type.IsGIGroup() || reader.Game.Type.IsBH3())
                 {
@@ -281,13 +319,13 @@ namespace AnimeStudio
                 }
                 if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
                 {
-                    var m_EnableCharacterOutline = reader.ReadBoolean();
-                    var m_EnablePerRendererLighting = reader.ReadBoolean();
+                    m_EnableCharacterOutline = reader.ReadBoolean();
+                    m_EnablePerRendererLighting = reader.ReadBoolean();
                     reader.AlignStream();
-                    var m_PerRendererLightingOffset = reader.ReadVector3();
-                    var m_PerRendererLightingAnchor = new PPtr<Transform>(reader);
-                    var m_LightModeMask = reader.ReadUInt32();
-                    var m_RendererSortingFudge = reader.ReadSingle();
+                    m_PerRendererLightingOffset = reader.ReadVector3();
+                    m_PerRendererLightingAnchor = new PPtr<Transform>(reader);
+                    m_LightModeMask = reader.ReadUInt32();
+                    m_RendererSortingFudge = reader.ReadSingle();
                     reader.AlignStream();
                 }
             }

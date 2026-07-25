@@ -3,6 +3,7 @@ using SharpGen.Runtime;
 using Smolv;
 using SpirV;
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -10,6 +11,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Vortice.D3DCompiler;
 
@@ -1872,6 +1874,96 @@ namespace AnimeStudio
             ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data, metadataJson);
         }
 
+        private static string AddDecodedProgramStageMetadata(
+            string metadataJson,
+            ReadOnlySpan<byte> bytecode,
+            string encoding)
+        {
+            if (string.IsNullOrEmpty(metadataJson))
+            {
+                return metadataJson;
+            }
+
+            var decodedStage = encoding == "DXBC"
+                ? TryGetDxbcProgramStage(bytecode)
+                : string.Empty;
+            if (string.IsNullOrEmpty(decodedStage))
+            {
+                return metadataJson;
+            }
+
+            try
+            {
+                var root = JsonNode.Parse(metadataJson)?.AsObject();
+                if (root == null)
+                {
+                    return metadataJson;
+                }
+                root["DecodedProgramStage"] = decodedStage;
+                root["DecodedProgramEncoding"] = encoding;
+                return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (JsonException)
+            {
+                return metadataJson;
+            }
+        }
+
+        private static string TryGetDxbcProgramStage(ReadOnlySpan<byte> bytecode)
+        {
+            const uint DxbcMagic = 0x43425844; // DXBC
+            const uint ShdrFourCc = 0x52444853; // SHDR
+            const uint ShexFourCc = 0x58454853; // SHEX
+            if (bytecode.Length < 32
+                || BinaryPrimitives.ReadUInt32LittleEndian(bytecode) != DxbcMagic)
+            {
+                return string.Empty;
+            }
+
+            var chunkCount = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(28, 4));
+            if (chunkCount > (uint)((bytecode.Length - 32) / 4))
+            {
+                return string.Empty;
+            }
+
+            for (uint index = 0; index < chunkCount; index++)
+            {
+                var offset = BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytecode.Slice(32 + checked((int)index * 4), 4));
+                if (offset > int.MaxValue || (int)offset > bytecode.Length - 12)
+                {
+                    continue;
+                }
+
+                var chunk = bytecode.Slice((int)offset);
+                var fourCc = BinaryPrimitives.ReadUInt32LittleEndian(chunk);
+                if (fourCc != ShdrFourCc && fourCc != ShexFourCc)
+                {
+                    continue;
+                }
+
+                var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(chunk.Slice(4, 4));
+                if (chunkSize < 4 || chunkSize > (uint)(chunk.Length - 8))
+                {
+                    return string.Empty;
+                }
+
+                var versionToken = BinaryPrimitives.ReadUInt32LittleEndian(chunk.Slice(8, 4));
+                return (versionToken >> 16) switch
+                {
+                    0 => "fragment",
+                    1 => "vertex",
+                    2 => "geometry",
+                    3 => "hull",
+                    4 => "domain",
+                    5 => "compute",
+                    _ => string.Empty,
+                };
+            }
+
+            return string.Empty;
+        }
+
         private static bool HasBytecodeSidecarRoot()
         {
             return ShaderConverter.CurrentExportContext?.HasBytecodeSidecarRoot == true;
@@ -1998,7 +2090,12 @@ namespace AnimeStudio
                                 var (offset, size) = snippets[i];
                                 var snippet = m_ProgramCode.AsSpan(offset, size);
                                 sb.Append($"// Endfield DXBC snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
-                                WriteBytecodeSidecar(sb, $"endfield_dxbc_{i}", ".dxbc", snippet, metadataJson);
+                                WriteBytecodeSidecar(
+                                    sb,
+                                    $"endfield_dxbc_{i}",
+                                    ".dxbc",
+                                    snippet,
+                                    AddDecodedProgramStageMetadata(metadataJson, snippet, "DXBC"));
                                 AppendD3D11Disassembly(sb, snippet);
                             }
                             break;

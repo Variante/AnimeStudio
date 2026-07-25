@@ -68,6 +68,15 @@ namespace AnimeStudio.CLI
                 {
                     return;
                 }
+                if (o.ObjectIndexJsonl != null && !HasIndexableJsonTarget(o, typeFilterPlan))
+                {
+                    Console.Error.WriteLine(
+                        "--object_index_jsonl requires a JSON export target selecting MonoBehaviour or PlayableDirector."
+                    );
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                using var objectIndex = ObjectIndexJsonlWriter.Open(o.ObjectIndexJsonl, o.Input);
 
                 if (o.Key != default)
                 {
@@ -103,10 +112,18 @@ namespace AnimeStudio.CLI
 
                 var inputFiles = new InputFileProvider(o.Input);
                 RunMapOperations(o, game, typeFilterPlan, inputFiles);
-                if (ShouldRunAssetExport(o.MapOp) && RunExportPlan(o, typeFilterPlan, exportTargets, inputFiles))
+                var indexComplete = ShouldRunAssetExport(o.MapOp);
+                var exportHadErrors = false;
+                if (ShouldRunAssetExport(o.MapOp)
+                    && RunExportPlan(o, typeFilterPlan, exportTargets, inputFiles, out exportHadErrors))
                 {
                     Environment.ExitCode = 1;
                 }
+                if (ShouldRunAssetExport(o.MapOp))
+                {
+                    indexComplete = !exportHadErrors;
+                }
+                objectIndex?.Complete(indexComplete);
                 if (Properties.Settings.Default.scrapeMonos)
                 {
                     File.WriteAllLines("./Maps/PathStrings_Sorted.txt", PathStrings.Distinct().OrderBy(p => p));
@@ -233,7 +250,9 @@ namespace AnimeStudio.CLI
                 TypeFlags.SetType(ClassIDType.AssetBundle, true, false);
             }
 
-            if (o.DummyDllFolder != null || o.MonoBehaviourTypeTreePriority == MonoBehaviourTypeTreePriority.ScriptFirst)
+            if (o.DummyDllFolder != null
+                || o.MonoBehaviourTypeTreePriority == MonoBehaviourTypeTreePriority.ScriptFirst
+                || ClassIDType.MonoBehaviour.CanExport())
             {
                 TypeFlags.SetType(ClassIDType.MonoScript, true, ClassIDType.MonoScript.CanExport());
             }
@@ -328,18 +347,44 @@ namespace AnimeStudio.CLI
         private static bool ShouldRunAssetExport(MapOpType mapOp) =>
             mapOp.Equals(MapOpType.None) || mapOp.HasFlag(MapOpType.Load);
 
-        private static bool RunExportPlan(Options o, TypeFilterPlan typeFilterPlan, List<ExportTarget> exportTargets, InputFileProvider inputFiles)
+        private static bool HasIndexableJsonTarget(Options options, TypeFilterPlan plan)
+        {
+            bool ContainsIndexableType(ClassIDType[] types)
+            {
+                if (types.IsNullOrEmpty())
+                {
+                    return ClassIDType.MonoBehaviour.CanExport() || ClassIDType.PlayableDirector.CanExport();
+                }
+                return types.Contains(ClassIDType.MonoBehaviour) || types.Contains(ClassIDType.PlayableDirector);
+            }
+
+            return (options.AssetExportType == ExportType.JSON && ContainsIndexableType(plan.PrimaryExportTypes))
+                || (options.SecondaryAssetExportType == ExportType.JSON
+                    && ContainsIndexableType(plan.SecondaryExportTypes));
+        }
+
+        private static bool RunExportPlan(
+            Options o,
+            TypeFilterPlan typeFilterPlan,
+            List<ExportTarget> exportTargets,
+            InputFileProvider inputFiles,
+            out bool anyExportErrors
+        )
         {
             var exportHadErrors = false;
+            anyExportErrors = false;
             var isMultiOutputExport = exportTargets.Count > 1;
             var selectedFiles = inputFiles.GetSelectedFiles();
             if (selectedFiles.Length == 0)
             {
                 Logger.Warning("No files selected for export after map/filter matching.");
-                return false;
+                ObjectIndexJsonlWriter.Current?.RecordError("no_selected_files", "No input files were selected for export.");
+                anyExportErrors = true;
+                return true;
             }
 
             var i = 0;
+            var loadedBatchCount = 0;
 
             var path = Path.GetDirectoryName(Path.GetFullPath(selectedFiles[0]));
             ImportHelper.MergeSplitAssets(path);
@@ -350,6 +395,8 @@ namespace AnimeStudio.CLI
                 assetsManager.LoadPreparedFiles(file);
                 if (assetsManager.assetsFileList.Count > 0)
                 {
+                    loadedBatchCount++;
+                    ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(assetsManager.assetsFileList);
                     BuildAssetData(typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);
                     foreach (var target in exportTargets)
                     {
@@ -359,9 +406,25 @@ namespace AnimeStudio.CLI
                         }
                         var targetAssets = target.SelectAssets(exportableAssets);
                         var result = ExportAssets(target.Output.FullName, targetAssets, o.GroupAssetsType, target.ExportType);
-                        if (result.ErrorCount > 0)
+                        var skippedCount = result.RequestedCount - result.ExportedCount;
+                        var incompleteIndex = ObjectIndexJsonlWriter.Current != null && skippedCount > 0;
+                        if (result.ErrorCount > 0 || incompleteIndex)
                         {
                             exportHadErrors = true;
+                            if (result.ErrorCount > 0)
+                            {
+                                ObjectIndexJsonlWriter.Current?.RecordError(
+                                    "asset_export_error",
+                                    $"{target.Label} reported {result.ErrorCount} export error(s)."
+                                );
+                            }
+                            if (incompleteIndex)
+                            {
+                                ObjectIndexJsonlWriter.Current?.RecordError(
+                                    "asset_export_incomplete",
+                                    $"{target.Label} exported {result.ExportedCount}/{result.RequestedCount} requested asset(s)."
+                                );
+                            }
                             if (isMultiOutputExport)
                             {
                                 Logger.Error($"[{target.Label}] Export failed for {result.ErrorCount} assets.");
@@ -373,7 +436,17 @@ namespace AnimeStudio.CLI
                 assetsManager.Clear();
             }
 
-            return isMultiOutputExport && exportHadErrors;
+            if (loadedBatchCount == 0 && ObjectIndexJsonlWriter.Current != null)
+            {
+                exportHadErrors = true;
+                ObjectIndexJsonlWriter.Current.RecordError(
+                    "no_loaded_asset_files",
+                    "Selected inputs produced no loaded serialized asset files."
+                );
+            }
+
+            anyExportErrors = exportHadErrors;
+            return exportHadErrors;
         }
 
         private sealed class TypeFilterPlan

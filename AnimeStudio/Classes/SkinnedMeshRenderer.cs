@@ -7,20 +7,24 @@ namespace AnimeStudio
 {
     public sealed class SkinnedMeshRenderer : Renderer
     {
+        public int m_Quality;
+        public bool m_UpdateWhenOffscreen;
+        public bool m_SkinNormals;
         public PPtr<Mesh> m_Mesh;
         public List<PPtr<Transform>> m_Bones;
         public float[] m_BlendShapeWeights;
         public PPtr<Transform> m_RootBone;
+        public PPtr<Transform> m_SkinningRoot;
         public AABB m_AABB;
         public bool m_DirtyAABB;
 
         public SkinnedMeshRenderer(ObjectReader reader) : base(reader)
         {
-            int m_Quality = reader.ReadInt32();
-            var m_UpdateWhenOffscreen = reader.ReadBoolean();
+            m_Quality = reader.ReadInt32();
+            m_UpdateWhenOffscreen = reader.ReadBoolean();
             if (!reader.Game.Type.IsHYGCB1())
             {
-                var m_SkinNormals = reader.ReadBoolean(); //3.1.0 and below
+                m_SkinNormals = reader.ReadBoolean(); //3.1.0 and below
             }
             if (reader.Game.Type.IsHYGCB1())
             {
@@ -64,7 +68,7 @@ namespace AnimeStudio
 
             if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
             {
-                var m_SkinningRoot = new PPtr<Transform>(reader);
+                m_SkinningRoot = new PPtr<Transform>(reader);
             }
         }
     }

@@ -40,6 +40,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.AIFile,
                 optionsBinder.DummyDllFolder,
                 optionsBinder.MonoBehaviourTypeTreePriorityOption,
+                optionsBinder.ObjectIndexJsonl,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Input,
                 optionsBinder.Output
@@ -77,6 +78,7 @@ namespace AnimeStudio.CLI
         public FileInfo AIFile { get; set; }
         public DirectoryInfo DummyDllFolder { get; set; }
         public MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriority { get; set; }
+        public FileInfo ObjectIndexJsonl { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public FileInfo Input { get; set; }
         public DirectoryInfo Output { get; set; }
@@ -103,6 +105,7 @@ namespace AnimeStudio.CLI
         public readonly Option<FileInfo> AIFile;
         public readonly Option<DirectoryInfo> DummyDllFolder;
         public readonly Option<MonoBehaviourTypeTreePriority> MonoBehaviourTypeTreePriorityOption;
+        public readonly Option<FileInfo> ObjectIndexJsonl;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Argument<FileInfo> Input;
         public readonly Argument<DirectoryInfo> Output;
@@ -127,6 +130,7 @@ namespace AnimeStudio.CLI
             AIFile = new Option<FileInfo>("--ai_file", "Specify asset_index json file path (to recover GI containers).").LegalFilePathsOnly();
             DummyDllFolder = new Option<DirectoryInfo>("--dummy_dlls", "Specify DummyDll path.").LegalFilePathsOnly();
             MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
+            ObjectIndexJsonl = new Option<FileInfo>("--object_index_jsonl", "Write a compact original-data object/PPtr/MonoScript JSONL index while exporting JSON.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Input = new Argument<FileInfo>("input_path", "Input file/folder.").LegalFilePathsOnly();
             Output = new Argument<DirectoryInfo>("output_path", "Output folder.").LegalFilePathsOnly();
@@ -283,6 +287,7 @@ namespace AnimeStudio.CLI
             AIFile = bindingContext.ParseResult.GetValueForOption(AIFile),
             DummyDllFolder = bindingContext.ParseResult.GetValueForOption(DummyDllFolder),
             MonoBehaviourTypeTreePriority = bindingContext.ParseResult.GetValueForOption(MonoBehaviourTypeTreePriorityOption),
+            ObjectIndexJsonl = bindingContext.ParseResult.GetValueForOption(ObjectIndexJsonl),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),
             Output = bindingContext.ParseResult.GetValueForArgument(Output)

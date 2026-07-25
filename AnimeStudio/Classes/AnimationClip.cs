@@ -2041,7 +2041,14 @@ namespace AnimeStudio
         public ClipMuscleConstant m_MuscleClip;
         public AnimationClipBindingConstant m_ClipBindingConstant;
         public AnimClipAclCompressedBuffer m_AclCompressedBuffer;
+        public bool m_HasGenericRootTransform;
+        public bool m_HasMotionFloatCurves;
         public List<AnimationEvent> m_Events;
+        public ushort m_ClipTag;
+        public byte m_TransitionRotateMode;
+        public byte m_TransitionRotateDirType;
+        public uint m_TotalSize;
+        public ushort m_TransitionRotateCurveIndex;
         public StreamingInfo m_StreamData;
 
         private bool hasStreamingInfo = false;
@@ -2201,8 +2208,8 @@ namespace AnimeStudio
             }
             if (version[0] > 2018 || (version[0] == 2018 && version[1] >= 3)) //2018.3 and up
             {
-                var m_HasGenericRootTransform = reader.ReadBoolean();
-                var m_HasMotionFloatCurves = reader.ReadBoolean();
+                m_HasGenericRootTransform = reader.ReadBoolean();
+                m_HasMotionFloatCurves = reader.ReadBoolean();
                 reader.AlignStream();
             }
             if (reader.Game.Type.IsRewindingCadence())
@@ -2217,12 +2224,12 @@ namespace AnimeStudio
             }
             if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
             {
-                var m_ClipTag = reader.ReadUInt16();
-                var m_TransitionRotateMode = reader.ReadByte();
-                var m_TransitionRotateDirType = reader.ReadByte();
+                m_ClipTag = reader.ReadUInt16();
+                m_TransitionRotateMode = reader.ReadByte();
+                m_TransitionRotateDirType = reader.ReadByte();
                 reader.AlignStream();
-                var m_TotalSize = reader.ReadUInt32();
-                var m_TransitionRotateCurveIndex = reader.ReadUInt16();
+                m_TotalSize = reader.ReadUInt32();
+                m_TransitionRotateCurveIndex = reader.ReadUInt16();
             }
             if (reader.Game.Type.IsRewindingCadence())
             {
