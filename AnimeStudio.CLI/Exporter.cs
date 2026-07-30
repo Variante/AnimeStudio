@@ -15,6 +15,8 @@ namespace AnimeStudio.CLI
 {
     internal static class Exporter
     {
+        public static bool ExportTexture2DNativePayloads { get; set; }
+
         private const int MaxSafeFileNameLength = 120;
         private const int MonoBehaviourBaseTypeTreeNodeCount = 12;
         private static readonly HashSet<string> ReservedFileNames = new(StringComparer.OrdinalIgnoreCase)
@@ -283,6 +285,10 @@ namespace AnimeStudio.CLI
                     {
                         image.WriteToStream(file, type);
                     }
+                    if (ExportTexture2DNativePayloads)
+                    {
+                        ExportTexture2DNativePayload(item, m_Texture2D, exportPath);
+                    }
                     return true;
                 }
             }
@@ -293,6 +299,120 @@ namespace AnimeStudio.CLI
                 File.WriteAllBytes(exportFullPath, m_Texture2D.image_data.GetData());
                 return true;
             }
+        }
+
+        private static void ExportTexture2DNativePayload(
+            AssetItem item,
+            Texture2D texture,
+            string exportPath)
+        {
+            var extension = texture.m_TextureFormat == TextureFormat.BC7
+                ? ".texture2d.bc7"
+                : ".texture2d.raw";
+            if (!TryExportFile(exportPath, item, extension, out var payloadPath))
+            {
+                throw new IOException(
+                    $"Unable to create native Texture2D payload path for {item.Text} ({item.m_PathID}).");
+            }
+
+            var payload = texture.image_data.GetData();
+            var mipCount = Math.Max(1, texture.m_MipCount);
+            var mipDimensions = new List<object>();
+            var payloadOffset = 0;
+            var layoutValidated =
+                texture.m_TextureFormat == TextureFormat.BC7
+                && texture.m_ImageCount == 1
+                && texture.m_TextureDimension == 2
+                && texture.m_MipsStripped == 0;
+            for (var mip = 0; mip < mipCount; mip++)
+            {
+                var width = Math.Max(1, texture.m_Width >> mip);
+                var height = Math.Max(1, texture.m_Height >> mip);
+                int? byteSize = null;
+                if (texture.m_TextureFormat == TextureFormat.BC7)
+                {
+                    byteSize = GetBC7MipByteSize(width, height);
+                }
+                mipDimensions.Add(new
+                {
+                    mip,
+                    width,
+                    height,
+                    offset = byteSize.HasValue ? payloadOffset : (int?)null,
+                    byteSize,
+                });
+                if (byteSize.HasValue)
+                {
+                    payloadOffset = checked(payloadOffset + byteSize.Value);
+                }
+            }
+            if (layoutValidated && payloadOffset != payload.Length)
+            {
+                throw new InvalidDataException(
+                    $"Texture2D {item.Text} ({item.m_PathID}) BC7 mip layout totals " +
+                    $"{payloadOffset} bytes, but the original resource payload has {payload.Length} bytes.");
+            }
+
+            File.WriteAllBytes(payloadPath, payload);
+            using var sha = SHA256.Create();
+            var payloadSha256 = Convert.ToHexString(sha.ComputeHash(payload));
+            var settings = texture.m_TextureSettings;
+            var manifest = new
+            {
+                schema = "animestudio.texture2d-native-payload.v1",
+                type = item.TypeString,
+                name = item.Text,
+                pathId = item.m_PathID,
+                sourceFile = item.SourceFile?.fileName,
+                sourceOriginalPath = item.SourceFile?.originalPath,
+                sourceOffset = item.SourceFile?.offset ?? -1,
+                container = item.Container,
+                width = texture.m_Width,
+                height = texture.m_Height,
+                completeImageSize = texture.m_CompleteImageSize,
+                mipsStripped = texture.m_MipsStripped,
+                format = texture.m_TextureFormat.ToString(),
+                formatValue = (int)texture.m_TextureFormat,
+                mipMap = texture.m_MipMap,
+                mipCount,
+                imageCount = texture.m_ImageCount,
+                textureDimension = texture.m_TextureDimension,
+                colorSpace = texture.m_ColorSpace,
+                textureSettings = new
+                {
+                    filterMode = settings?.m_FilterMode,
+                    aniso = settings?.m_Aniso,
+                    mipBias = settings?.m_MipBias,
+                    wrapU = settings?.m_WrapMode,
+                    wrapV = settings?.m_WrapV,
+                    wrapW = settings?.m_WrapW,
+                },
+                payload = new
+                {
+                    file = Path.GetFileName(payloadPath),
+                    bytes = payload.Length,
+                    sha256 = payloadSha256,
+                    layout = "unity_texture2d_resource_mip_chain_largest_to_smallest",
+                    layoutValidated,
+                    mipDimensions,
+                },
+                streamData = new
+                {
+                    offset = texture.m_StreamData?.offset,
+                    size = texture.m_StreamData?.size,
+                    path = texture.m_StreamData?.path,
+                },
+            };
+            File.WriteAllText(
+                payloadPath + ".manifest.json",
+                JsonConvert.SerializeObject(manifest, Formatting.Indented));
+        }
+
+        private static int GetBC7MipByteSize(int width, int height)
+        {
+            var blocksWide = Math.Max(1, (width + 3) / 4);
+            var blocksHigh = Math.Max(1, (height + 3) / 4);
+            return checked(blocksWide * blocksHigh * 16);
         }
 
         private static int GetBC6HMipByteSize(int width, int height)

@@ -56,6 +56,7 @@ namespace AnimeStudio.CLI
                 AssetsHelper.Minimal = Settings.Default.minimalAssetMap;
                 AssetsHelper.SetUnityVersion(o.UnityVersion);
                 Studio.MonoBehaviourTypeTreePriorityMode = o.MonoBehaviourTypeTreePriority;
+                Exporter.ExportTexture2DNativePayloads = o.Texture2DNativePayload;
 
                 var typeFilterPlan = ConfigureTypeFilters(o);
 

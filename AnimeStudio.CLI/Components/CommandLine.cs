@@ -42,6 +42,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.MonoBehaviourTypeTreePriorityOption,
                 optionsBinder.ObjectIndexJsonl,
                 optionsBinder.FilterDataFile,
+                optionsBinder.Texture2DNativePayload,
                 optionsBinder.Input,
                 optionsBinder.Output
             };
@@ -80,6 +81,7 @@ namespace AnimeStudio.CLI
         public MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriority { get; set; }
         public FileInfo ObjectIndexJsonl { get; set; }
         public FileInfo FilterDataFile { get; set; }
+        public bool Texture2DNativePayload { get; set; }
         public FileInfo Input { get; set; }
         public DirectoryInfo Output { get; set; }
     }
@@ -107,6 +109,7 @@ namespace AnimeStudio.CLI
         public readonly Option<MonoBehaviourTypeTreePriority> MonoBehaviourTypeTreePriorityOption;
         public readonly Option<FileInfo> ObjectIndexJsonl;
         public readonly Option<FileInfo> FilterDataFile;
+        public readonly Option<bool> Texture2DNativePayload;
         public readonly Argument<FileInfo> Input;
         public readonly Argument<DirectoryInfo> Output;
 
@@ -132,6 +135,9 @@ namespace AnimeStudio.CLI
             MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
             ObjectIndexJsonl = new Option<FileInfo>("--object_index_jsonl", "Write a compact original-data object/PPtr/MonoScript JSONL index while exporting JSON.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
+            Texture2DNativePayload = new Option<bool>(
+                "--texture2d_native_payload",
+                "Write the exact native Texture2D image payload and a validated mip-layout manifest alongside converted textures.");
             Input = new Argument<FileInfo>("input_path", "Input file/folder.").LegalFilePathsOnly();
             Output = new Argument<DirectoryInfo>("output_path", "Output folder.").LegalFilePathsOnly();
 
@@ -289,6 +295,7 @@ namespace AnimeStudio.CLI
             MonoBehaviourTypeTreePriority = bindingContext.ParseResult.GetValueForOption(MonoBehaviourTypeTreePriorityOption),
             ObjectIndexJsonl = bindingContext.ParseResult.GetValueForOption(ObjectIndexJsonl),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
+            Texture2DNativePayload = bindingContext.ParseResult.GetValueForOption(Texture2DNativePayload),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),
             Output = bindingContext.ParseResult.GetValueForArgument(Output)
         };

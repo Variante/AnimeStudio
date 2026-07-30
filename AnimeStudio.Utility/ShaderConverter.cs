@@ -43,6 +43,7 @@ namespace AnimeStudio
 
             internal bool HasBytecodeSidecarRoot => !string.IsNullOrEmpty(m_bytecodeSidecarRoot);
             internal bool IsEndfield { get; }
+            internal int? ShaderLOD { get; set; }
 
             internal bool CanAppendProgramBody => m_programBodyChars < MaxShaderProgramBodyChars;
 
@@ -282,6 +283,8 @@ namespace AnimeStudio
         private static string BuildRuriProgramMetadataJson(
             SerializedProgramParameters commonParameters,
             SerializedProgramParameters variantParameters,
+            EndfieldShaderParameterRecord endfieldParameterRecord,
+            uint? parameterBlobIndex,
             IReadOnlyList<KeyValuePair<string, int>> nameIndices,
             int subShaderIndex,
             int passIndex,
@@ -294,7 +297,9 @@ namespace AnimeStudio
             IReadOnlyList<string> compiledKeywords,
             IReadOnlyList<string> localKeywords)
         {
-            if ((commonParameters == null && variantParameters == null)
+            if ((commonParameters == null
+                    && variantParameters == null
+                    && endfieldParameterRecord == null)
                 || CurrentExportContext?.HasBytecodeSidecarRoot != true)
             {
                 return null;
@@ -514,6 +519,15 @@ namespace AnimeStudio
                     binding.Name = name;
                     binding.NameIndex = nameIndex;
                 }
+
+                if (packedBinding != 0 && binding.PackedBinding == 0)
+                {
+                    binding.PackedBinding = packedBinding;
+                }
+                if (packedInfo != 0 && binding.PackedInfo == 0)
+                {
+                    binding.PackedInfo = packedInfo;
+                }
             }
 
             foreach (var descriptorSet in serializedDescriptorSets)
@@ -531,6 +545,26 @@ namespace AnimeStudio
                         binding.m_PackedInfo,
                         setName,
                         descriptorSet.m_NameIndex);
+                }
+            }
+
+            if (endfieldParameterRecord != null)
+            {
+                foreach (var descriptorSet in endfieldParameterRecord.DescriptorSets)
+                {
+                    foreach (var binding in descriptorSet.Bindings)
+                    {
+                        AddDescriptorBinding(
+                            descriptorSet.SetId,
+                            binding.BindingIndex,
+                            NormalizeDescriptorType(binding.DescriptorType),
+                            binding.Name,
+                            -1,
+                            binding.PackedBinding,
+                            binding.PackedInfo,
+                            descriptorSet.Name,
+                            -1);
+                    }
                 }
             }
 
@@ -560,6 +594,51 @@ namespace AnimeStudio
                 AddDescriptorBinding(decoded.Set, decoded.Binding, 1, string.Empty, -1, unchecked((uint)sampler.bindPoint));
             }
 
+            var samplerPayload = new List<object>();
+            var emittedSamplerBindings = new HashSet<(int SetId, int BindingIndex)>();
+            if (endfieldParameterRecord != null)
+            {
+                foreach (var descriptorSet in endfieldParameterRecord.DescriptorSets)
+                {
+                    foreach (var binding in descriptorSet.Bindings.Where(binding => binding.DescriptorType == 0))
+                    {
+                        if (!emittedSamplerBindings.Add((descriptorSet.SetId, binding.BindingIndex)))
+                        {
+                            continue;
+                        }
+                        var staticStateKnown = binding.PackedInfo != 0x0001FFFFu;
+                        samplerPayload.Add(new
+                        {
+                            Sampler = binding.PackedInfo,
+                            BindPoint = binding.BindingIndex,
+                            Name = binding.Name,
+                            PackedBinding = binding.PackedBinding,
+                            PackedInfo = binding.PackedInfo,
+                            StaticSamplerState = staticStateKnown ? "encoded" : "unknown",
+                            StaticSamplerStateKnown = staticStateKnown,
+                        });
+                    }
+                }
+            }
+            foreach (var sampler in samplers)
+            {
+                var decoded = DecodeBinding(sampler.bindPoint);
+                if (!emittedSamplerBindings.Add((decoded.Set, decoded.Binding)))
+                {
+                    continue;
+                }
+                samplerPayload.Add(new
+                {
+                    Sampler = sampler.sampler,
+                    BindPoint = decoded.Binding,
+                    Name = (string)null,
+                    PackedBinding = unchecked((uint)sampler.bindPoint),
+                    PackedInfo = sampler.sampler,
+                    StaticSamplerState = (string)null,
+                    StaticSamplerStateKnown = false,
+                });
+            }
+
             var payload = new
             {
                 VectorParameters = vectors.Select(ConvertVector).ToArray(),
@@ -583,12 +662,7 @@ namespace AnimeStudio
                     Index = DecodeBindingIndex(parameter.m_Index),
                     OriginalIndex = DecodeBindingIndex(parameter.m_OriginalIndex),
                 }).ToArray(),
-                SamplerParameters = samplers.Select(parameter => new
-                {
-                    Sampler = parameter.sampler,
-                    BindPoint = DecodeBindingIndex(parameter.bindPoint),
-                    Name = (string)null,
-                }).ToArray(),
+                SamplerParameters = samplerPayload.ToArray(),
                 DescriptorSetParameters = descriptorSets.Values.OrderBy(set => set.SetId).ToArray(),
                 EntryPoint = "main",
                 DebugName =
@@ -596,12 +670,17 @@ namespace AnimeStudio
                     $"pass{passIndex.ToString(CultureInfo.InvariantCulture)}:" +
                     $"{passName ?? string.Empty}/{stage}/" +
                     $"blob{blobIndex.ToString(CultureInfo.InvariantCulture)}/{gpuProgramType}",
+                SourceShaderLOD = CurrentExportContext?.ShaderLOD,
                 SourceSubShaderIndex = subShaderIndex,
                 SourcePassIndex = passIndex,
                 SourcePassName = passName ?? string.Empty,
                 SourceSerializedProgramStage = stage,
                 SourceCompilerPlatform = compilerPlatform ?? string.Empty,
                 SourceShaderHardwareTier = shaderHardwareTier,
+                SourceProgramBlobIndex = blobIndex,
+                SourceParameterBlobIndex = parameterBlobIndex,
+                SourceEndfieldParameterRecordParsed = endfieldParameterRecord != null,
+                SourceCombinedProgramContainer = endfieldParameterRecord != null,
                 SourceCompiledKeywords = (compiledKeywords ?? Array.Empty<string>()).ToArray(),
                 SourceLocalKeywords = (localKeywords ?? Array.Empty<string>()).ToArray(),
                 UsedMaterials = Array.Empty<string>(),
@@ -629,15 +708,48 @@ namespace AnimeStudio
 
         private static string ConvertSerializedShader(Shader shader, SubShaderBlob subShaderBlob)
         {
-            return ConvertSerializedShader(shader, subShaderBlob.m_CompressedBlob, subShaderBlob.m_Offsets, subShaderBlob.m_CompressedLengths, subShaderBlob.m_DecompressedLengths);
+            var previousShaderLod = CurrentExportContext?.ShaderLOD;
+            if (CurrentExportContext != null)
+            {
+                CurrentExportContext.ShaderLOD = subShaderBlob.m_ShaderLOD;
+            }
+            try
+            {
+                return ConvertSerializedShader(
+                    shader,
+                    subShaderBlob.m_CompressedBlob,
+                    subShaderBlob.m_Offsets,
+                    subShaderBlob.m_CompressedLengths,
+                    subShaderBlob.m_DecompressedLengths,
+                    subShaderBlob.m_ShaderLOD);
+            }
+            finally
+            {
+                if (CurrentExportContext != null)
+                {
+                    CurrentExportContext.ShaderLOD = previousShaderLod;
+                }
+            }
         }
 
         private static string ConvertSerializedShader(Shader shader)
         {
-            return ConvertSerializedShader(shader, shader.compressedBlob, shader.offsets, shader.compressedLengths, shader.decompressedLengths);
+            return ConvertSerializedShader(
+                shader,
+                shader.compressedBlob,
+                shader.offsets,
+                shader.compressedLengths,
+                shader.decompressedLengths,
+                null);
         }
 
-        private static string ConvertSerializedShader(Shader shader, byte[] compressedBlob, uint[][] offsets, uint[][] compressedLengths, uint[][] decompressedLengths)
+        private static string ConvertSerializedShader(
+            Shader shader,
+            byte[] compressedBlob,
+            uint[][] offsets,
+            uint[][] compressedLengths,
+            uint[][] decompressedLengths,
+            int? shaderLod)
         {
             var length = shader.platforms.Length;
             var shaderPrograms = new ShaderProgram[length];
@@ -672,7 +784,30 @@ namespace AnimeStudio
                 }
             }
 
-            return ConvertSerializedShader(shader.m_ParsedForm, shader.platforms, shaderPrograms);
+            var sb = new StringBuilder();
+            for (var platformIndex = 0; platformIndex < shaderPrograms.Length; platformIndex++)
+            {
+                var shaderProgram = shaderPrograms[platformIndex];
+                var entryCount = shaderProgram?.entries?.Length ?? 0;
+                var availableCount = shaderProgram?.m_SubPrograms?.Count(subProgram => subProgram != null) ?? 0;
+                var platform = platformIndex < shader.platforms.Length
+                    ? shader.platforms[platformIndex].ToString()
+                    : "unknown";
+                sb.Append("// AnimeStudio shader program blob: ");
+                if (shaderLod.HasValue)
+                {
+                    sb.Append($"shader LOD {shaderLod.Value.ToString(CultureInfo.InvariantCulture)}, ");
+                }
+                sb.Append($"platform {platform}, entries {entryCount.ToString(CultureInfo.InvariantCulture)}, ");
+                sb.Append($"available {availableCount.ToString(CultureInfo.InvariantCulture)}.\n");
+            }
+            if (shaderPrograms.All(program => program?.entries?.Length is null or 0))
+            {
+                sb.Append("// AnimeStudio: this shader LOD blob contains no serialized program entries.\n");
+                return sb.ToString();
+            }
+            sb.Append(ConvertSerializedShader(shader.m_ParsedForm, shader.platforms, shaderPrograms));
+            return sb.ToString();
         }
 
         private static string ConvertSerializedShader(SerializedShader m_ParsedForm, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, string unavailableReason = null)
@@ -841,7 +976,7 @@ namespace AnimeStudio
             }
             if (program.m_PlayerSubPrograms?.Any(group => group.Count > 0) == true)
             {
-                sb.Append(ConvertSerializedPlayerSubPrograms(program.m_PlayerSubPrograms, platforms, shaderPrograms, program.m_CommonParameters, nameIndices, subShaderIndex, passIndex, passName, stage, unavailableReason));
+                sb.Append(ConvertSerializedPlayerSubPrograms(program.m_PlayerSubPrograms, program.m_ParameterBlobIndices, platforms, shaderPrograms, program.m_CommonParameters, nameIndices, subShaderIndex, passIndex, passName, stage, unavailableReason));
             }
             return sb.ToString();
         }
@@ -885,6 +1020,8 @@ namespace AnimeStudio
                                     var metadataJson = BuildRuriProgramMetadataJson(
                                         commonParameters,
                                         subProgram.m_Parameters,
+                                        null,
+                                        null,
                                         nameIndices,
                                         subShaderIndex,
                                         passIndex,
@@ -912,21 +1049,50 @@ namespace AnimeStudio
             return sb.ToString();
         }
 
-        private static string ConvertSerializedPlayerSubPrograms(List<List<SerializedPlayerSubProgram>> m_PlayerSubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, SerializedProgramParameters commonParameters, IReadOnlyList<KeyValuePair<string, int>> nameIndices, int subShaderIndex, int passIndex, string passName, string stage, string unavailableReason = null)
+        private static string ConvertSerializedPlayerSubPrograms(
+            List<List<SerializedPlayerSubProgram>> m_PlayerSubPrograms,
+            uint[][] m_ParameterBlobIndices,
+            ShaderCompilerPlatform[] platforms,
+            ShaderProgram[] shaderPrograms,
+            SerializedProgramParameters commonParameters,
+            IReadOnlyList<KeyValuePair<string, int>> nameIndices,
+            int subShaderIndex,
+            int passIndex,
+            string passName,
+            string stage,
+            string unavailableReason = null)
         {
             var sb = new StringBuilder();
-            var groups = m_PlayerSubPrograms.SelectMany(x => x).GroupBy(x => x.m_BlobIndex);
+            var mappedSubPrograms = new List<(SerializedPlayerSubProgram SubProgram, uint? ParameterBlobIndex)>();
+            for (var groupIndex = 0; groupIndex < m_PlayerSubPrograms.Count; groupIndex++)
+            {
+                var playerGroup = m_PlayerSubPrograms[groupIndex];
+                var parameterGroup = m_ParameterBlobIndices != null
+                    && groupIndex < m_ParameterBlobIndices.Length
+                        ? m_ParameterBlobIndices[groupIndex]
+                        : null;
+                for (var programIndex = 0; programIndex < playerGroup.Count; programIndex++)
+                {
+                    uint? parameterBlobIndex = parameterGroup != null
+                        && programIndex < parameterGroup.Length
+                            ? parameterGroup[programIndex]
+                            : null;
+                    mappedSubPrograms.Add((playerGroup[programIndex], parameterBlobIndex));
+                }
+            }
+
+            var groups = mappedSubPrograms.GroupBy(x => x.SubProgram.m_BlobIndex);
             foreach (var group in groups)
             {
-                var programs = group.GroupBy(x => x.m_GpuProgramType);
+                var programs = group.GroupBy(x => x.SubProgram.m_GpuProgramType);
                 foreach (var program in programs)
                 {
                     if (platforms == null || platforms.Length == 0)
                     {
-                        foreach (var subProgram in program)
+                        foreach (var mappedSubProgram in program)
                         {
                             sb.Append("SubProgram \"unknown\" {\n");
-                            AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                            AppendUnavailableSubProgram(sb, mappedSubProgram.SubProgram, unavailableReason);
                             sb.Append("\n}\n");
                         }
                         continue;
@@ -937,14 +1103,26 @@ namespace AnimeStudio
                         var platform = platforms[i];
                         if (CheckGpuProgramUsable(platform, program.Key))
                         {
-                            foreach (var subProgram in program)
+                            foreach (var mappedSubProgram in program)
                             {
+                                var subProgram = mappedSubProgram.SubProgram;
                                 sb.Append($"SubProgram \"{GetPlatformString(platform)} \" {{\n");
                                 if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
                                 {
+                                    EndfieldShaderParameterRecord endfieldParameterRecord = null;
+                                    if (mappedSubProgram.ParameterBlobIndex.HasValue)
+                                    {
+                                        TryGetEndfieldParameterRecord(
+                                            shaderPrograms,
+                                            i,
+                                            mappedSubProgram.ParameterBlobIndex.Value,
+                                            out endfieldParameterRecord);
+                                    }
                                     var metadataJson = BuildRuriProgramMetadataJson(
                                         commonParameters,
                                         null,
+                                        endfieldParameterRecord,
+                                        mappedSubProgram.ParameterBlobIndex,
                                         nameIndices,
                                         subShaderIndex,
                                         passIndex,
@@ -971,6 +1149,22 @@ namespace AnimeStudio
             }
             return sb.ToString();
         }
+
+        private static bool TryGetEndfieldParameterRecord(
+            ShaderProgram[] shaderPrograms,
+            int platformIndex,
+            uint parameterBlobIndex,
+            out EndfieldShaderParameterRecord parameterRecord)
+        {
+            parameterRecord = null;
+            return TryGetShaderSubProgram(
+                    shaderPrograms,
+                    platformIndex,
+                    parameterBlobIndex,
+                    out var parameterSubProgram)
+                && (parameterRecord = parameterSubProgram.m_EndfieldParameterRecord) != null;
+        }
+
         private static bool TryGetShaderSubProgram(ShaderProgram[] shaderPrograms, int platformIndex, uint blobIndex, out ShaderSubProgram subProgram)
         {
             subProgram = null;
@@ -1725,6 +1919,216 @@ namespace AnimeStudio
         }
     }
 
+    public sealed class EndfieldShaderParameterBinding
+    {
+        public string Name;
+        public int BindingIndex;
+        public int DescriptorType;
+        public uint PackedBinding;
+        public uint PackedInfo;
+    }
+
+    public sealed class EndfieldShaderParameterSet
+    {
+        public string Name;
+        public int SetId;
+        public int MaxBindingIndex;
+        public List<EndfieldShaderParameterBinding> Bindings;
+    }
+
+    public sealed class EndfieldShaderParameterRecord
+    {
+        private const int HeaderSize = 24;
+        private const int MaxDescriptorSetCount = 32;
+        private const int MaxBindingCount = 4096;
+        private const int MaxNameLength = 1024;
+        private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
+        public int DescriptorTailOffset;
+        public List<EndfieldShaderParameterSet> DescriptorSets;
+
+        public static bool TryParse(byte[] record, out EndfieldShaderParameterRecord parsed)
+        {
+            parsed = null;
+            if (record == null || record.Length < HeaderSize + sizeof(int))
+            {
+                return false;
+            }
+
+            if (BinaryPrimitives.ReadInt32LittleEndian(record.AsSpan(0, sizeof(int)))
+                != ShaderConverter.EndfieldShaderSubProgramVersion)
+            {
+                return false;
+            }
+
+            EndfieldShaderParameterRecord candidate = null;
+            for (var candidateOffset = HeaderSize;
+                 candidateOffset <= record.Length - sizeof(int);
+                 candidateOffset += sizeof(int))
+            {
+                var descriptorSetCount = BinaryPrimitives.ReadInt32LittleEndian(
+                    record.AsSpan(candidateOffset, sizeof(int)));
+                if (descriptorSetCount <= 0 || descriptorSetCount > MaxDescriptorSetCount)
+                {
+                    continue;
+                }
+
+                if (!TryParseDescriptorSets(
+                        record,
+                        candidateOffset + sizeof(int),
+                        descriptorSetCount,
+                        out var descriptorSets,
+                        out var endOffset)
+                    || endOffset != record.Length
+                    || descriptorSets.Sum(set => set.Bindings.Count) == 0)
+                {
+                    continue;
+                }
+
+                var parsedCandidate = new EndfieldShaderParameterRecord
+                {
+                    DescriptorTailOffset = candidateOffset,
+                    DescriptorSets = descriptorSets,
+                };
+                if (candidate != null)
+                {
+                    return false;
+                }
+                candidate = parsedCandidate;
+            }
+
+            parsed = candidate;
+            return parsed != null;
+        }
+
+        private static bool TryParseDescriptorSets(
+            byte[] record,
+            int startOffset,
+            int descriptorSetCount,
+            out List<EndfieldShaderParameterSet> descriptorSets,
+            out int endOffset)
+        {
+            descriptorSets = new List<EndfieldShaderParameterSet>();
+            endOffset = startOffset;
+            var seenSetIds = new HashSet<int>();
+            for (var setIndex = 0; setIndex < descriptorSetCount; setIndex++)
+            {
+                if (!TryReadAlignedString(record, ref endOffset, out var setName)
+                    || !TryReadInt32(record, ref endOffset, out var setId)
+                    || !TryReadInt32(record, ref endOffset, out var bindingCount)
+                    || !TryReadInt32(record, ref endOffset, out var maxBindingIndex)
+                    || setId < 0
+                    || setId > byte.MaxValue
+                    || setId != setIndex
+                    || !seenSetIds.Add(setId)
+                    || bindingCount < 0
+                    || bindingCount > MaxBindingCount
+                    || maxBindingIndex < -1
+                    || maxBindingIndex > ushort.MaxValue)
+                {
+                    return false;
+                }
+
+                var bindings = new List<EndfieldShaderParameterBinding>(bindingCount);
+                var seenBindingIndices = new HashSet<int>();
+                for (var bindingIndex = 0; bindingIndex < bindingCount; bindingIndex++)
+                {
+                    if (!TryReadAlignedString(record, ref endOffset, out var bindingName)
+                        || !TryReadInt32(record, ref endOffset, out var nativeBindingIndex)
+                        || !TryReadInt32(record, ref endOffset, out var descriptorType)
+                        || !TryReadUInt32(record, ref endOffset, out var packedBinding)
+                        || !TryReadUInt32(record, ref endOffset, out var packedInfo)
+                        || nativeBindingIndex < 0
+                        || nativeBindingIndex > ushort.MaxValue
+                        || !seenBindingIndices.Add(nativeBindingIndex)
+                        || descriptorType < 0
+                        || descriptorType > 9)
+                    {
+                        return false;
+                    }
+
+                    bindings.Add(new EndfieldShaderParameterBinding
+                    {
+                        Name = bindingName,
+                        BindingIndex = nativeBindingIndex,
+                        DescriptorType = descriptorType,
+                        PackedBinding = packedBinding,
+                        PackedInfo = packedInfo,
+                    });
+                }
+
+                if (bindings.Count == 0
+                        ? maxBindingIndex != -1
+                        : bindings.Max(binding => binding.BindingIndex) != maxBindingIndex)
+                {
+                    return false;
+                }
+
+                descriptorSets.Add(new EndfieldShaderParameterSet
+                {
+                    Name = setName,
+                    SetId = setId,
+                    MaxBindingIndex = maxBindingIndex,
+                    Bindings = bindings,
+                });
+            }
+
+            return true;
+        }
+
+        private static bool TryReadAlignedString(byte[] record, ref int offset, out string value)
+        {
+            value = string.Empty;
+            if (!TryReadInt32(record, ref offset, out var length)
+                || length < 0
+                || length > MaxNameLength
+                || offset > record.Length - length)
+            {
+                return false;
+            }
+
+            try
+            {
+                value = StrictUtf8.GetString(record, offset, length);
+            }
+            catch (DecoderFallbackException)
+            {
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(value)
+                || value.Any(ch => char.IsControl(ch)))
+            {
+                return false;
+            }
+            offset = checked((offset + length + 3) & ~3);
+            return offset <= record.Length;
+        }
+
+        private static bool TryReadInt32(byte[] record, ref int offset, out int value)
+        {
+            value = 0;
+            if (offset < 0 || offset > record.Length - sizeof(int))
+            {
+                return false;
+            }
+            value = BinaryPrimitives.ReadInt32LittleEndian(record.AsSpan(offset, sizeof(int)));
+            offset += sizeof(int);
+            return true;
+        }
+
+        private static bool TryReadUInt32(byte[] record, ref int offset, out uint value)
+        {
+            value = 0;
+            if (offset < 0 || offset > record.Length - sizeof(uint))
+            {
+                return false;
+            }
+            value = BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(offset, sizeof(uint)));
+            offset += sizeof(uint);
+            return true;
+        }
+    }
+
     public class ShaderSubProgram
     {
         private int m_Version;
@@ -1732,6 +2136,7 @@ namespace AnimeStudio
         public string[] m_Keywords;
         public string[] m_LocalKeywords;
         public byte[] m_ProgramCode;
+        public EndfieldShaderParameterRecord m_EndfieldParameterRecord;
 
         public ShaderSubProgram(EndianBinaryReader reader, bool hasUpdatedGpuProgram, int entryLength = -1)
         {
@@ -1783,7 +2188,8 @@ namespace AnimeStudio
 
         private void ReadEndfieldSubProgram(EndianBinaryReader reader, int entryLength)
         {
-            var recordEnd = reader.BaseStream.Position - sizeof(int) + entryLength;
+            var recordStart = reader.BaseStream.Position - sizeof(int);
+            var recordEnd = recordStart + entryLength;
             if (recordEnd > reader.BaseStream.Length)
             {
                 throw new IOException($"Endfield shader record end 0x{recordEnd:X} exceeds stream length 0x{reader.BaseStream.Length:X}");
@@ -1797,6 +2203,9 @@ namespace AnimeStudio
             reader.BaseStream.Position += 16;
             if (!IsEndfieldNativeProgramType(m_ProgramType))
             {
+                reader.BaseStream.Position = recordStart;
+                var record = reader.ReadBytes(entryLength);
+                EndfieldShaderParameterRecord.TryParse(record, out m_EndfieldParameterRecord);
                 reader.BaseStream.Position = recordEnd;
                 return;
             }
