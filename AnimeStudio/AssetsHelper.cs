@@ -466,7 +466,14 @@ namespace AnimeStudio
                                 break;
                             default:
                                 asset.Name = objectReader.type.ToString();
-                                exportable = !Minimal;
+                                // A minimal map normally omits generic Object payloads. Keep an
+                                // explicitly requested, export-enabled native type so targeted
+                                // TypeTree recovery can seed an AssetMap without widening the
+                                // normal production map surface.
+                                exportable = !Minimal
+                                    || (!typeFilters.IsNullOrEmpty()
+                                        && typeFilters.Contains(objectReader.type)
+                                        && objectReader.type.CanExport());
                                 break;
                         }
                     }

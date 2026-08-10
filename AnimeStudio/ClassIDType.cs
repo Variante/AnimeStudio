@@ -240,6 +240,13 @@ namespace AnimeStudio
         MiHoYoWindParameterConfigurator = 605,
         MiHoYoGrassGlobalConfigurator = 606,
         MiHoYoGrassLayerConfig = 607,
+        // Arknights: Endfield native HGGraphics types. These IDs are read from
+        // the installed UnityPlayer native serialized-type descriptor table;
+        // payload decoding remains generic and uses each object's TypeTree.
+        HGTree = 0x2C9CB981,
+        HGMeshRenderer = 0x508754A6,
+        HGMeshRendererData = 0x50F4EE0C,
+        HGTreeData = 0x59383C91,
         SmallestEditorClassID = 1000,
         PrefabInstance = 1001,
         EditorExtensionImpl = 1002,
