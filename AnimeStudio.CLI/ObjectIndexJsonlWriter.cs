@@ -177,6 +177,11 @@ namespace AnimeStudio.CLI
                 CopyMetadataValue(metadata, row, "scriptDerivedMonoScriptResolved");
                 CopyMetadataValue(metadata, row, "scriptDerivedTypeDefinitionResolved");
                 CopyMetadataValue(metadata, row, "scriptDerivedTypeTreeStatus");
+                var sceneContext = BuildComponentSceneContext(item.Asset);
+                if (sceneContext != null)
+                {
+                    row["sceneContext"] = sceneContext;
+                }
 
                 if (scalarTruncated)
                 {
@@ -189,6 +194,98 @@ namespace AnimeStudio.CLI
                 pptrCount += pptrs.Count;
             }
         }
+
+        private OrderedDictionary BuildComponentSceneContext(AnimeStudio.Object asset)
+        {
+            if (!(asset is Component component)
+                || component.m_GameObject.m_PathID == 0
+                || !component.m_GameObject.TryGet(out var gameObject))
+            {
+                return null;
+            }
+
+            var context = new OrderedDictionary
+            {
+                { "gameObject", BuildIdentity(gameObject) },
+                { "gameObjectName", gameObject.m_Name ?? "" },
+            };
+            var transform = gameObject.m_Transform;
+            if (transform == null)
+            {
+                context["worldPositionStatus"] = "transform_unavailable";
+                return context;
+            }
+
+            context["transform"] = BuildIdentity(transform);
+            context["localPosition"] = BuildVector3(transform.m_LocalPosition);
+
+            const int MaxParentDepth = 256;
+            var chain = new List<Transform>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var current = transform;
+            var status = "exact_transform_hierarchy";
+            while (current != null)
+            {
+                var identity = BuildIdentity(current);
+                var marker = JsonConvert.SerializeObject(identity, Formatting.None);
+                if (!seen.Add(marker))
+                {
+                    status = "transform_parent_cycle";
+                    break;
+                }
+                chain.Add(current);
+                if (chain.Count >= MaxParentDepth)
+                {
+                    status = "transform_parent_depth_limit";
+                    break;
+                }
+                if (current.m_Father.m_PathID == 0)
+                {
+                    break;
+                }
+                if (!current.m_Father.TryGet(out var parent))
+                {
+                    status = "transform_parent_unresolved";
+                    break;
+                }
+                current = parent;
+            }
+
+            var world = Matrix4x4.Translate(new Vector3(0, 0, 0));
+            for (var index = chain.Count - 1; index >= 0; index--)
+            {
+                var node = chain[index];
+                var local = Matrix4x4.Translate(node.m_LocalPosition)
+                    * Matrix4x4.Rotate(node.m_LocalRotation)
+                    * Matrix4x4.Scale(node.m_LocalScale);
+                world = world * local;
+            }
+            context["worldPosition"] = BuildVector3(new Vector3(world.M03, world.M13, world.M23));
+            context["worldPositionStatus"] = status;
+            context["parentDepth"] = Math.Max(0, chain.Count - 1);
+
+            var hierarchyPath = new List<string>();
+            for (var index = chain.Count - 1; index >= 0; index--)
+            {
+                if (chain[index].m_GameObject.TryGet(out var chainObject))
+                {
+                    hierarchyPath.Add(chainObject.m_Name ?? "");
+                }
+                else
+                {
+                    hierarchyPath.Add("");
+                }
+            }
+            context["hierarchyPath"] = hierarchyPath;
+            return context;
+        }
+
+        private static OrderedDictionary BuildVector3(Vector3 value) => new OrderedDictionary
+        {
+            { "x", value.X },
+            { "y", value.Y },
+            { "z", value.Z },
+        };
 
         public void RecordError(string code, string message)
         {
@@ -440,7 +537,15 @@ namespace AnimeStudio.CLI
                 }
                 return;
             }
-            if (value is bool || value is float || value is double || value is decimal || value is byte[])
+            if (value is bool booleanValue)
+            {
+                if (IsIdentityIntegerPath(path))
+                {
+                    result.Add(new object[] { path, "b", booleanValue });
+                }
+                return;
+            }
+            if (value is float || value is double || value is decimal || value is byte[])
             {
                 return;
             }

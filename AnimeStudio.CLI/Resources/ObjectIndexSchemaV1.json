@@ -31,6 +31,39 @@
       },
       "additionalProperties": false
     },
+    "vector3": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "sceneContext": {
+      "type": "object",
+      "required": ["gameObject", "gameObjectName", "worldPositionStatus"],
+      "properties": {
+        "gameObject": { "$ref": "#/$defs/identity" },
+        "gameObjectName": { "type": "string" },
+        "transform": { "$ref": "#/$defs/identity" },
+        "localPosition": { "$ref": "#/$defs/vector3" },
+        "worldPosition": { "$ref": "#/$defs/vector3" },
+        "worldPositionStatus": {
+          "enum": [
+            "exact_transform_hierarchy",
+            "transform_unavailable",
+            "transform_parent_unresolved",
+            "transform_parent_cycle",
+            "transform_parent_depth_limit"
+          ]
+        },
+        "parentDepth": { "type": "integer", "minimum": 0 },
+        "hierarchyPath": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
     "expectedExternal": {
       "type": "object",
       "required": ["serializedFile"],
@@ -105,11 +138,12 @@
         "typeTreeSource": { "type": "string" },
         "schemaId": { "type": ["string", "null"] },
         "script": { "$ref": "#/$defs/scriptPointer" },
+        "sceneContext": { "$ref": "#/$defs/sceneContext" },
         "scalars": {
           "type": "array",
           "items": {
             "type": "array",
-            "prefixItems": [{ "type": "string" }, { "enum": ["s", "i"] }, {}],
+            "prefixItems": [{ "type": "string" }, { "enum": ["s", "i", "b"] }, {}],
             "minItems": 3,
             "maxItems": 3
           }

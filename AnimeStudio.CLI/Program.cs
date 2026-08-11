@@ -1,4 +1,5 @@
 using System;
+using AnimeStudio;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -244,6 +245,17 @@ namespace AnimeStudio.CLI
                     }
                 }
 
+                if (o.ObjectIndexJsonl != null
+                    && (ClassIDType.MonoBehaviour.CanExport() || ClassIDType.PlayableDirector.CanExport()))
+                {
+                    // Object-index scene ownership requires the component's
+                    // GameObject and Transform hierarchy, but these are parse
+                    // dependencies only and must not broaden JSON exports.
+                    EnsureParseDependency(ClassIDType.GameObject);
+                    EnsureParseDependency(ClassIDType.Transform);
+                    EnsureParseDependency(ClassIDType.RectTransform);
+                }
+
                 classTypeFilter = classTypeFilterList.ToArray();
             }
             if (o.GroupAssetsType == AssetGroupOption.ByContainer)
@@ -398,7 +410,10 @@ namespace AnimeStudio.CLI
                 {
                     loadedBatchCount++;
                     ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(assetsManager.assetsFileList);
-                    BuildAssetData(typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);
+                    using (LoadTiming.Measure(LoadTiming.Id.BuildAssetData))
+                    {
+                        BuildAssetData(typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);
+                    }
                     foreach (var target in exportTargets)
                     {
                         if (isMultiOutputExport)
@@ -406,7 +421,9 @@ namespace AnimeStudio.CLI
                             Logger.Info($"[{target.Label}] Exporting {target.ExportType} assets to {target.Output.FullName}");
                         }
                         var targetAssets = target.SelectAssets(exportableAssets);
+                        var exportScope = LoadTiming.Measure(LoadTiming.Id.ExportAssets);
                         var result = ExportAssets(target.Output.FullName, targetAssets, o.GroupAssetsType, target.ExportType);
+                        exportScope.Dispose();
                         var skippedCount = result.RequestedCount - result.ExportedCount;
                         var incompleteIndex = ObjectIndexJsonlWriter.Current != null && skippedCount > 0;
                         if (result.ErrorCount > 0 || incompleteIndex)
@@ -434,8 +451,12 @@ namespace AnimeStudio.CLI
                     }
                 }
                 exportableAssets.Clear();
-                assetsManager.Clear();
+                using (LoadTiming.Measure(LoadTiming.Id.ManagerClear))
+                {
+                    assetsManager.Clear();
+                }
             }
+            LoadTiming.Report("whole export run");
 
             if (loadedBatchCount == 0 && ObjectIndexJsonlWriter.Current != null)
             {

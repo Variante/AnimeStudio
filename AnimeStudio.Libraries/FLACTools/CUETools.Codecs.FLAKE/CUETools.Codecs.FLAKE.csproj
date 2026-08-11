@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>netstandard2.0</TargetFramework>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Version>1.0.1-animestudio.1</Version>
+		<Company>Tomáš Kohl</Company>
+		<Description>AnimeStudio's patched netstandard2.0 build of the CUETools FLAKE encoder and decoder.</Description>
+		<Copyright>Copyright © 2008-2010 Grigory Chudov, 2022 Tomáš Kohl</Copyright>
+		<AssemblyVersion>1.0.1.1</AssemblyVersion>
+		<FileVersion>1.0.0.0</FileVersion>
+		<AssemblyName>CUETools.Codecs.FLAKE</AssemblyName>
+		<Product>CUETools.Codecs.FLAKE-Reloaded</Product>
+	</PropertyGroup>
+</Project>

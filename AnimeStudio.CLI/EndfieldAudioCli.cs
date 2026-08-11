@@ -18,17 +18,21 @@ namespace AnimeStudio.CLI
 
             Console.WriteLine("Loading AudioDialog.json...");
             var audioDialog = LoadAudioDialog(loader);
-            var converter = options.Format == AudioOutputFormat.Wav
+            var converter = options.Format != AudioOutputFormat.Wem
                 ? EndfieldVgmstreamConverter.CreateDefault()
                 : null;
 
             var totalSuccess = 0;
             var totalErrors = 0;
             var totalUnmapped = 0;
+            var totalPluginMedia = 0;
+            var totalDuplicatePathUnavailablePackages = 0;
+            var totalPackageErrors = 0;
 
             foreach (var language in options.Languages)
             {
                 var audioMap = EndfieldAudioMap.FromAudioDialog(audioDialog, language);
+                var processedPckNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 Console.WriteLine($"  Found {audioMap.Count} {language.Name()} audio entries");
 
                 foreach (var blockType in options.BlockTypes(language))
@@ -64,15 +68,26 @@ namespace AnimeStudio.CLI
                             var pckData = loader.ExtractFileToBytes(blockType, chunk, file);
                             package = EndfieldAkpkPackage.Parse(pckData);
                         }
+                        catch (EndfieldVfsChunkNotFoundException e) when (processedPckNames.Contains(pckName))
+                        {
+                            Console.WriteLine(
+                                $"    Skip: {e.Message}; the same logical PCK path was already processed from an earlier block"
+                            );
+                            totalDuplicatePathUnavailablePackages++;
+                            continue;
+                        }
                         catch (Exception e)
                         {
                             Console.Error.WriteLine($"    Error: Failed to parse {pckName}: {e.Message}");
+                            totalPackageErrors++;
                             continue;
                         }
+                        processedPckNames.Add(pckName);
 
                         var successCount = 0;
                         var errorCount = 0;
                         var unmappedCount = 0;
+                        var pluginMediaCount = 0;
                         var entries = package.Entries.ToArray();
 
                         Parallel.ForEach(entries, new ParallelOptions
@@ -80,47 +95,63 @@ namespace AnimeStudio.CLI
                             MaxDegreeOfParallelism = options.Jobs,
                         }, entry =>
                         {
-                            var wemData = package.GetWemData(entry);
-                            if (wemData.Length < 4 || (!HasMagic(wemData, "RIFF") && !HasMagic(wemData, "RIFX")))
-                            {
-                                Interlocked.Increment(ref errorCount);
-                                return;
-                            }
-
-                            var hash = entry.Id.ToString("x");
-                            var outputRoot = options.OutputForBlock(blockType);
-                            string outputPath;
-                            var mappedPath = audioMap.GetPath(hash);
-                            if (!string.IsNullOrEmpty(mappedPath))
-                            {
-                                outputPath = options.Format == AudioOutputFormat.Wav
-                                    ? Path.Combine(outputRoot, mappedPath.Replace(".wem", ".wav", StringComparison.Ordinal))
-                                    : Path.Combine(outputRoot, mappedPath);
-                            }
-                            else
-                            {
-                                Interlocked.Increment(ref unmappedCount);
-                                // The language is already encoded in the output root
-                                // (Audio/<LANG> or Audio/shared); unmapped media are
-                                // grouped by their source bank instead of a redundant
-                                // language subfolder. A Wwise event-category subfolder
-                                // is added later by the Python indexer where resolvable.
-                                outputPath = Path.Combine(
-                                    outputRoot,
-                                    "unmapped",
-                                    UnmappedBankFolder(pckName),
-                                    $"{entry.Id}.{options.Format.Extension()}"
-                                );
-                            }
-
                             try
                             {
+                                var wemData = package.GetWemData(entry);
+                                if (HasMagic(wemData, "PLUG"))
+                                {
+                                    Interlocked.Increment(ref pluginMediaCount);
+                                    return;
+                                }
+                                if (wemData.Length < 4 || (!HasMagic(wemData, "RIFF") && !HasMagic(wemData, "RIFX")))
+                                {
+                                    Console.Error.WriteLine(
+                                        $"    Error: Unsupported media entry {entry.Id:x} in {pckName}: " +
+                                        $"expected RIFF/RIFX, got {MagicPreview(wemData)} ({wemData.Length} bytes)"
+                                    );
+                                    Interlocked.Increment(ref errorCount);
+                                    return;
+                                }
+
+                                var hash = entry.Id.ToString("x");
+                                var outputRoot = options.OutputForBlock(blockType);
+                                string outputPath;
+                                var mappedPath = audioMap.GetPath(hash);
+                                if (!string.IsNullOrEmpty(mappedPath))
+                                {
+                                    outputPath = options.Format == AudioOutputFormat.Wem
+                                        ? Path.Combine(outputRoot, mappedPath)
+                                        : Path.Combine(
+                                            outputRoot,
+                                            mappedPath.Replace(
+                                                ".wem",
+                                                $".{options.Format.Extension()}",
+                                                StringComparison.Ordinal
+                                            )
+                                        );
+                                }
+                                else
+                                {
+                                    Interlocked.Increment(ref unmappedCount);
+                                    // The language is already encoded in the output root
+                                    // (Audio/<LANG> or Audio/shared); unmapped media are
+                                    // grouped by their source bank instead of a redundant
+                                    // language subfolder. A Wwise event-category subfolder
+                                    // is added later by the Python indexer where resolvable.
+                                    outputPath = Path.Combine(
+                                        outputRoot,
+                                        "unmapped",
+                                        UnmappedBankFolder(pckName),
+                                        $"{entry.Id}.{options.Format.Extension()}"
+                                    );
+                                }
+
                                 WriteAudioFile(wemData, outputPath, options.Format, converter);
                                 Interlocked.Increment(ref successCount);
                             }
                             catch (Exception e)
                             {
-                                Console.Error.WriteLine($"    Error: Failed to write {hash}: {e.Message}");
+                                Console.Error.WriteLine($"    Error: Failed to extract/write media {entry.Id:x}: {e.Message}");
                                 Interlocked.Increment(ref errorCount);
                             }
                         });
@@ -128,18 +159,29 @@ namespace AnimeStudio.CLI
                         totalSuccess += successCount;
                         totalErrors += errorCount;
                         totalUnmapped += unmappedCount;
-                        Console.WriteLine($"    Done: Processed {successCount}/{entries.Length} entries");
+                        totalPluginMedia += pluginMediaCount;
+                        Console.WriteLine(
+                            $"    Done: Extracted {successCount}/{entries.Length} audio entries" +
+                            (pluginMediaCount > 0
+                                ? $" ({pluginMediaCount} Wwise FX plugin-media entries skipped)"
+                                : string.Empty)
+                        );
                     }
                 }
             }
 
             Console.WriteLine();
-            Console.WriteLine($"Complete: Extracted {totalSuccess} files ({totalUnmapped} unmapped, {totalErrors} errors)");
+            Console.WriteLine(
+                $"Complete: Extracted {totalSuccess} files ({totalUnmapped} unmapped, " +
+                $"{totalPluginMedia} Wwise FX plugin-media entries skipped, " +
+                $"{totalDuplicatePathUnavailablePackages} duplicate-path packages unavailable, " +
+                $"{totalPackageErrors + totalErrors} errors)"
+            );
         }
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [--shared-output <output>] [-l <language>] [-f <wem|wav>] [-b <block>] [-j <jobs>] [--fallback-assets <StreamingAssets>]");
+            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [--shared-output <output>] [-l <language>] [-f <flac|wav|wem>] [-b <block>] [-j <jobs>] [--fallback-assets <StreamingAssets>]");
         }
 
         private static JToken LoadAudioDialog(EndfieldVfsLoader loader)
@@ -198,6 +240,10 @@ namespace AnimeStudio.CLI
             {
                 File.WriteAllBytes(outputPath, wemData);
             }
+            else if (format == AudioOutputFormat.Flac)
+            {
+                converter.ConvertBytesToFlac(wemData, outputPath);
+            }
             else
             {
                 converter.ConvertBytes(wemData, outputPath);
@@ -245,13 +291,18 @@ namespace AnimeStudio.CLI
             return true;
         }
 
+        private static string MagicPreview(byte[] data) =>
+            data.Length == 0
+                ? "<empty>"
+                : Convert.ToHexString(data.AsSpan(0, Math.Min(data.Length, 8)));
+
         private static AudioOptions ParseOptions(string[] args)
         {
             var options = new AudioOptions
             {
                 Output = "./output",
                 LanguageMode = "all",
-                Format = AudioOutputFormat.Wav,
+                Format = AudioOutputFormat.Flac,
                 BlockMode = AudioBlockMode.All,
                 Jobs = Math.Min(8, Math.Max(1, Environment.ProcessorCount)),
             };
@@ -292,6 +343,7 @@ namespace AnimeStudio.CLI
                         var rawFormat = value ?? NextValue(args, ref i, token);
                         options.Format = rawFormat.ToLowerInvariant() switch
                         {
+                            "flac" => AudioOutputFormat.Flac,
                             "wem" => AudioOutputFormat.Wem,
                             "wav" => AudioOutputFormat.Wav,
                             _ => throw new ArgumentException($"unknown format: {rawFormat}"),
@@ -415,6 +467,7 @@ namespace AnimeStudio.CLI
 
         public enum AudioOutputFormat
         {
+            Flac,
             Wem,
             Wav,
         }
@@ -433,6 +486,11 @@ namespace AnimeStudio.CLI
     internal static class AudioOutputFormatExtensions
     {
         public static string Extension(this EndfieldAudioCli.AudioOutputFormat format) =>
-            format == EndfieldAudioCli.AudioOutputFormat.Wav ? "wav" : "wem";
+            format switch
+            {
+                EndfieldAudioCli.AudioOutputFormat.Flac => "flac",
+                EndfieldAudioCli.AudioOutputFormat.Wav => "wav",
+                _ => "wem",
+            };
     }
 }

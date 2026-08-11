@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using CUETools.Codecs.FLAKE;
 
 namespace AnimeStudio.Endfield
 {
@@ -40,11 +41,28 @@ namespace AnimeStudio.Endfield
 
         public void ConvertBytes(byte[] wemData, string outputPath)
         {
+            ConvertBytes(wemData, outputPath, flac: false);
+        }
+
+        public void ConvertBytesToFlac(byte[] wemData, string outputPath)
+        {
+            ConvertBytes(wemData, outputPath, flac: true);
+        }
+
+        private void ConvertBytes(byte[] wemData, string outputPath, bool flac)
+        {
             var tempInput = Path.Combine(Path.GetTempPath(), $"AnimeStudio_{Guid.NewGuid():N}.wem");
             try
             {
                 File.WriteAllBytes(tempInput, wemData);
-                Convert(tempInput, outputPath);
+                if (flac)
+                {
+                    ConvertToFlac(tempInput, outputPath);
+                }
+                else
+                {
+                    ConvertToWav(tempInput, outputPath);
+                }
             }
             finally
             {
@@ -62,7 +80,7 @@ namespace AnimeStudio.Endfield
             }
         }
 
-        private void Convert(string inputPath, string outputPath)
+        private void ConvertToWav(string inputPath, string outputPath)
         {
             var parent = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(parent))
@@ -93,5 +111,100 @@ namespace AnimeStudio.Endfield
                 throw new EndfieldVfsException($"conversion failed: exit code {process.ExitCode}, stderr: {stderr}");
             }
         }
+
+        private void ConvertToFlac(string inputPath, string outputPath)
+        {
+            var parent = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(parent))
+            {
+                Directory.CreateDirectory(parent);
+            }
+
+            var tempOutput = outputPath + $".{Guid.NewGuid():N}.tmp";
+            FlakeWriter writer = null;
+            try
+            {
+                using var decoder = CreateVgmstreamPipeProcess(inputPath);
+                decoder.Start();
+
+                var decoderErrorTask = decoder.StandardError.ReadToEndAsync();
+                var reader = new WAVReader(string.Empty, decoder.StandardOutput.BaseStream);
+                writer = new FlakeWriter(
+                    tempOutput,
+                    null,
+                    new FlakeWriterSettings
+                    {
+                        PCM = reader.PCM,
+                        EncoderMode = "5",
+                    }
+                )
+                {
+                    DoSeekTable = false,
+                };
+                var buffer = new AudioBuffer(reader, 65536);
+                while (reader.Read(buffer, -1) > 0)
+                {
+                    writer.Write(buffer);
+                }
+                reader.Close();
+                writer.Close();
+                writer = null;
+
+                decoder.WaitForExit();
+                var decoderError = decoderErrorTask.GetAwaiter().GetResult();
+
+                if (decoder.ExitCode != 0)
+                {
+                    throw new EndfieldVfsException(
+                        $"vgmstream conversion failed: exit code {decoder.ExitCode}, stderr: {decoderError}"
+                    );
+                }
+                File.Move(tempOutput, outputPath, true);
+            }
+            finally
+            {
+                if (writer != null)
+                {
+                    try
+                    {
+                        writer.Delete();
+                    }
+                    catch
+                    {
+                        // Best-effort encoder cleanup.
+                    }
+                }
+                try
+                {
+                    if (File.Exists(tempOutput))
+                    {
+                        File.Delete(tempOutput);
+                    }
+                }
+                catch
+                {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
+
+        private Process CreateVgmstreamPipeProcess(string inputPath)
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = cliPath,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                },
+            };
+            process.StartInfo.ArgumentList.Add("-p");
+            process.StartInfo.ArgumentList.Add(inputPath);
+            return process;
+        }
+
     }
 }

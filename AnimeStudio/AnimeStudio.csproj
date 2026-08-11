@@ -17,6 +17,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<ProjectReference Include="..\AnimeStudio.Libraries\FLACTools\CUETools.Codecs.FLAKE\CUETools.Codecs.FLAKE.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<Content Include="CNKeys.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>

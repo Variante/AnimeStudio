@@ -835,7 +835,7 @@ namespace AnimeStudio.CLI
                         "  -l, --language <LANGUAGE>",
                         "          [default: all] [possible values: all, chinese, english, japanese, korean]",
                         "  -f, --format <FORMAT>",
-                        "          [default: wav] [possible values: wem, wav]",
+                        "          [default: flac] [possible values: flac, wav, wem]",
                         "  -b, --block <BLOCK>",
                         "          [default: all] [possible values: all, voice, audio, initial-audio, audit-audio, hotfix-audio]",
                         "  -j, --jobs <JOBS>",
