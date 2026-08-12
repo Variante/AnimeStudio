@@ -11130,6 +11130,33 @@ namespace AnimeStudio.CLI
                     return true;
                 }
 
+                if (string.Equals(header.ClassName, "PlayLineSound", StringComparison.Ordinal))
+                {
+                    if (length != 24)
+                    {
+                        return false;
+                    }
+
+                    var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.PlayLineSound" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "soundSpawn", BuildPayloadHash32(reader.ReadInt32("soundSpawn")) },
+                        { "soundFinish", BuildPayloadHash32(reader.ReadInt32("soundFinish")) },
+                        { "useConfigSourceMountPoint", reader.ReadBool32("useConfigSourceMountPoint") },
+                        { "sourceMount", BuildPayloadHash32(reader.ReadInt32("sourceMount")) },
+                        { "useConfigTargetMountPoint", reader.ReadBool32("useConfigTargetMountPoint") },
+                        { "targetMount", BuildPayloadHash32(reader.ReadInt32("targetMount")) },
+                        { "layoutNote", "Installed IL2CPP metadata declares soundSpawn, soundFinish, useConfigSourceMountPoint, sourceMount, useConfigTargetMountPoint, and targetMount in this order. The current two 24-byte payloads consume exactly; runtime emitter/effect/Transform caches are not serialized." },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
                 if (string.Equals(header.ClassName, "PlaySoundByParticleCount", StringComparison.Ordinal))
                 {
                     if (length < 20)
