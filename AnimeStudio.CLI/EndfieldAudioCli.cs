@@ -186,18 +186,71 @@ namespace AnimeStudio.CLI
 
         private static JToken LoadAudioDialog(EndfieldVfsLoader loader)
         {
+            var merged = new JObject();
+            var layerLoaders = new List<EndfieldVfsLoader> { loader };
+            if (!string.IsNullOrEmpty(loader.FallbackAssetsPath)
+                && !string.Equals(loader.StreamingAssetsPath, loader.FallbackAssetsPath, StringComparison.OrdinalIgnoreCase))
+            {
+                // Keep the primary loader's fallback resolution: some primary
+                // Table metadata references a chunk that is present only in
+                // the fallback VFS.  The second loader reads the fallback
+                // table itself so its Persistent rows are also merged.
+                layerLoaders.Add(new EndfieldVfsLoader(loader.FallbackAssetsPath));
+            }
+
+            foreach (var layerLoader in layerLoaders)
+            {
+                try
+                {
+                    var layer = LoadAudioDialogLayer(layerLoader);
+                    foreach (var property in layer.Properties())
+                    {
+                        // Persistent is the overlay layer, so rows in it win
+                        // when the same authored id exists in both roots.
+                        merged[property.Name] = property.Value.DeepClone();
+                    }
+                }
+                catch (EndfieldVfsBlockNotFoundException)
+                {
+                    // A language/install root may legitimately omit the Table
+                    // block; keep loading the other root if it has one.
+                }
+            }
+
+            if (merged.Count > 0)
+            {
+                return merged;
+            }
+
+            throw new EndfieldVfsException("AudioDialog.bytes not found in Table block");
+        }
+
+        private static JObject LoadAudioDialogLayer(EndfieldVfsLoader loader)
+        {
             var blockInfo = loader.LoadBlockInfo(EndfieldVfsBlockType.Table);
             foreach (var chunk in blockInfo.Chunks)
             {
                 foreach (var file in chunk.Files)
                 {
-                    var data = loader.ExtractFileToBytes(EndfieldVfsBlockType.Table, chunk, file);
+                    byte[] data;
+                    try
+                    {
+                        data = loader.ExtractFileToBytes(EndfieldVfsBlockType.Table, chunk, file);
+                    }
+                    catch (EndfieldVfsChunkNotFoundException)
+                    {
+                        // Persistent Table metadata can retain audit chunks
+                        // supplied by the primary VFS.  A fallback-only loader
+                        // cannot read those shared chunks; continue to the
+                        // chunks that are actually present in Persistent.
+                        continue;
+                    }
                     try
                     {
                         var parsed = EndfieldSparkBuffer.ParseBytes(data);
-                        if (parsed.Name == "AudioDialog")
+                        if (parsed.Name == "AudioDialog" && parsed.Data is JObject obj)
                         {
-                            return parsed.Data;
+                            return obj;
                         }
                     }
                     catch
