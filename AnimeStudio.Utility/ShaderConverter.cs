@@ -9,6 +9,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -34,16 +35,26 @@ namespace AnimeStudio
 
             private readonly string m_bytecodeSidecarRoot;
             private int m_sidecarIndex;
+            private readonly List<Dictionary<string, object>> m_sidecarEntries = new List<Dictionary<string, object>>();
 
-            internal ShaderExportContext(string bytecodeSidecarRoot, bool isEndfield)
+            internal ShaderExportContext(string bytecodeSidecarRoot, Shader shader)
             {
                 m_bytecodeSidecarRoot = bytecodeSidecarRoot;
-                IsEndfield = isEndfield;
+                IsEndfield = shader?.assetsFile?.game?.Type.IsArknightsEndfieldCB3() == true
+                    || shader?.assetsFile?.game?.Type.IsArknightsEndfield() == true;
+                ShaderCab = shader?.assetsFile?.fileName ?? string.Empty;
+                ShaderSourceOriginalPath = shader?.assetsFile?.originalPath ?? string.Empty;
+                ShaderPathId = shader?.m_PathID ?? 0;
+                ShaderName = shader?.Name ?? string.Empty;
             }
 
             internal bool HasBytecodeSidecarRoot => !string.IsNullOrEmpty(m_bytecodeSidecarRoot);
             internal bool IsEndfield { get; }
             internal int? ShaderLOD { get; set; }
+            internal string ShaderCab { get; }
+            internal string ShaderSourceOriginalPath { get; }
+            internal long ShaderPathId { get; }
+            internal string ShaderName { get; }
 
             internal bool CanAppendProgramBody => m_programBodyChars < MaxShaderProgramBodyChars;
 
@@ -72,7 +83,13 @@ namespace AnimeStudio
                 sb.Append("// AnimeStudio: bytecode was parsed; hash, offset, and size comments above preserve identity.\n");
             }
 
-            internal void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data, string metadataJson = null)
+            internal void WriteBytecodeSidecar(
+                StringBuilder sb,
+                string kind,
+                string extension,
+                ReadOnlySpan<byte> data,
+                string metadataJson = null,
+                string encoding = null)
             {
                 if (string.IsNullOrEmpty(m_bytecodeSidecarRoot) || data.IsEmpty)
                 {
@@ -85,7 +102,10 @@ namespace AnimeStudio
                     var fileName = $"{m_sidecarIndex.ToString("D4", CultureInfo.InvariantCulture)}_{SanitizeFileNamePart(kind)}{extension}";
                     m_sidecarIndex++;
                     var path = Path.Combine(m_bytecodeSidecarRoot, fileName);
-                    File.WriteAllBytes(path, data.ToArray());
+                    var payload = data.ToArray();
+                    File.WriteAllBytes(path, payload);
+                    var manifestEntry = BuildManifestEntry(fileName, payload, metadataJson, encoding);
+                    m_sidecarEntries.Add(manifestEntry);
                     sb.Append($"// AnimeStudio bytecode sidecar: {fileName}\n");
                     if (!string.IsNullOrEmpty(metadataJson))
                     {
@@ -100,6 +120,142 @@ namespace AnimeStudio
                     sb.Append($"// AnimeStudio bytecode sidecar write failed: {reason}\n");
                     Logger.Warning($"Shader bytecode sidecar write failed: {reason}");
                 }
+            }
+
+            internal void WriteManifest()
+            {
+                if (string.IsNullOrEmpty(m_bytecodeSidecarRoot))
+                {
+                    return;
+                }
+
+                try
+                {
+                    Directory.CreateDirectory(m_bytecodeSidecarRoot);
+                    var manifest = new
+                    {
+                        schema = "animestudio.shader-subprogram.v1",
+                        shader = new
+                        {
+                            cab = ShaderCab,
+                            pathId = ShaderPathId,
+                            name = ShaderName,
+                            sourceOriginalPath = ShaderSourceOriginalPath,
+                        },
+                        entries = m_sidecarEntries,
+                    };
+                    var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(Path.Combine(m_bytecodeSidecarRoot, "manifest.json"), json, new UTF8Encoding(false));
+                }
+                catch (Exception ex)
+                {
+                    var reason = SanitizeComment(ex.Message);
+                    Logger.Warning($"Shader bytecode manifest write failed: {reason}");
+                }
+            }
+
+            private Dictionary<string, object> BuildManifestEntry(
+                string fileName,
+                byte[] payload,
+                string metadataJson,
+                string encoding)
+            {
+                using var metadata = TryParseMetadata(metadataJson);
+                var root = metadata?.RootElement;
+                var decodedStage = encoding == "DXBC"
+                    ? ShaderSubProgram.TryGetDxbcProgramStage(payload)
+                    : GetString(root, "SourceSerializedProgramStage");
+                var entry = new Dictionary<string, object>
+                {
+                    ["fileName"] = fileName,
+                    ["encoding"] = encoding ?? string.Empty,
+                    ["stage"] = decodedStage ?? string.Empty,
+                    ["byteCount"] = payload.Length,
+                    ["sha256"] = System.Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
+                    ["shaderCab"] = ShaderCab,
+                    ["shaderPathId"] = ShaderPathId,
+                    ["shaderName"] = ShaderName,
+                    ["shaderSourceOriginalPath"] = ShaderSourceOriginalPath,
+                    ["shaderLOD"] = GetInt(root, "SourceShaderLOD"),
+                    ["subShaderIndex"] = GetInt(root, "SourceSubShaderIndex"),
+                    ["passIndex"] = GetInt(root, "SourcePassIndex"),
+                    ["passName"] = GetString(root, "SourcePassName") ?? string.Empty,
+                    ["subProgramIndex"] = GetInt(root, "SourceSubProgramIndex"),
+                    ["programBlobIndex"] = GetUInt(root, "SourceProgramBlobIndex"),
+                    ["platform"] = GetString(root, "SourceCompilerPlatform") ?? string.Empty,
+                    ["programType"] = GetString(root, "SourceProgramType") ?? string.Empty,
+                    ["programTypeValue"] = GetInt(root, "SourceProgramTypeValue"),
+                    ["serializedStage"] = GetString(root, "SourceSerializedProgramStage") ?? string.Empty,
+                    ["shaderHardwareTier"] = GetInt(root, "SourceShaderHardwareTier"),
+                    ["keywords"] = GetStringArray(root, "SourceCompiledKeywords"),
+                    ["localKeywords"] = GetStringArray(root, "SourceLocalKeywords"),
+                };
+                return entry;
+            }
+
+            private static JsonDocument TryParseMetadata(string metadataJson)
+            {
+                if (string.IsNullOrEmpty(metadataJson))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    return JsonDocument.Parse(metadataJson);
+                }
+                catch (JsonException)
+                {
+                    return null;
+                }
+            }
+
+            private static string GetString(JsonElement? root, string name)
+            {
+                return root.HasValue
+                    && root.Value.ValueKind == JsonValueKind.Object
+                    && root.Value.TryGetProperty(name, out var value)
+                    && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+            }
+
+            private static int? GetInt(JsonElement? root, string name)
+            {
+                return root.HasValue
+                    && root.Value.ValueKind == JsonValueKind.Object
+                    && root.Value.TryGetProperty(name, out var value)
+                    && value.ValueKind == JsonValueKind.Number
+                    && value.TryGetInt32(out var result)
+                    ? result
+                    : null;
+            }
+
+            private static uint? GetUInt(JsonElement? root, string name)
+            {
+                return root.HasValue
+                    && root.Value.ValueKind == JsonValueKind.Object
+                    && root.Value.TryGetProperty(name, out var value)
+                    && value.ValueKind == JsonValueKind.Number
+                    && value.TryGetUInt32(out var result)
+                    ? result
+                    : null;
+            }
+
+            private static string[] GetStringArray(JsonElement? root, string name)
+            {
+                if (!root.HasValue
+                    || root.Value.ValueKind != JsonValueKind.Object
+                    || !root.Value.TryGetProperty(name, out var value)
+                    || value.ValueKind != JsonValueKind.Array)
+                {
+                    return Array.Empty<string>();
+                }
+
+                return value.EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString() ?? string.Empty)
+                    .ToArray();
             }
         }
 
@@ -131,7 +287,7 @@ namespace AnimeStudio
             var previousContext = s_currentExportContext;
             var isEndfield = shader.assetsFile.game.Type.IsArknightsEndfieldCB3()
                 || shader.assetsFile.game.Type.IsArknightsEndfield();
-            s_currentExportContext = new ShaderExportContext(bytecodeSidecarRoot, isEndfield);
+            s_currentExportContext = new ShaderExportContext(bytecodeSidecarRoot, shader);
             try
             {
                 if (shader.platformInfos != null)
@@ -149,6 +305,7 @@ namespace AnimeStudio
             }
             finally
             {
+                s_currentExportContext?.WriteManifest();
                 s_currentExportContext = previousContext;
             }
         }
@@ -290,6 +447,7 @@ namespace AnimeStudio
             int passIndex,
             string passName,
             string stage,
+            int subProgramIndex,
             uint blobIndex,
             ShaderGpuProgramType gpuProgramType,
             string compilerPlatform,
@@ -297,10 +455,7 @@ namespace AnimeStudio
             IReadOnlyList<string> compiledKeywords,
             IReadOnlyList<string> localKeywords)
         {
-            if ((commonParameters == null
-                    && variantParameters == null
-                    && endfieldParameterRecord == null)
-                || CurrentExportContext?.HasBytecodeSidecarRoot != true)
+            if (CurrentExportContext?.HasBytecodeSidecarRoot != true)
             {
                 return null;
             }
@@ -675,9 +830,14 @@ namespace AnimeStudio
                 SourcePassIndex = passIndex,
                 SourcePassName = passName ?? string.Empty,
                 SourceSerializedProgramStage = stage,
+                SourceSubProgramIndex = subProgramIndex,
                 SourceCompilerPlatform = compilerPlatform ?? string.Empty,
                 SourceShaderHardwareTier = shaderHardwareTier,
                 SourceProgramBlobIndex = blobIndex,
+                SourceProgramType = IsEndfieldD3D11ProgramType(gpuProgramType)
+                    ? "EndfieldD3D11"
+                    : gpuProgramType.ToString(),
+                SourceProgramTypeValue = (int)gpuProgramType,
                 SourceParameterBlobIndex = parameterBlobIndex,
                 SourceEndfieldParameterRecordParsed = endfieldParameterRecord != null,
                 SourceCombinedProgramContainer = endfieldParameterRecord != null,
@@ -983,18 +1143,20 @@ namespace AnimeStudio
         private static string ConvertSerializedSubPrograms(List<SerializedSubProgram> m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, SerializedProgramParameters commonParameters, IReadOnlyList<KeyValuePair<string, int>> nameIndices, int subShaderIndex, int passIndex, string passName, string stage, string unavailableReason = null)
         {
             var sb = new StringBuilder();
-            var groups = m_SubPrograms.GroupBy(x => x.m_BlobIndex);
+            var groups = m_SubPrograms
+                .Select((subProgram, index) => new { SubProgram = subProgram, Index = index })
+                .GroupBy(x => x.SubProgram.m_BlobIndex);
             foreach (var group in groups)
             {
-                var programs = group.GroupBy(x => x.m_GpuProgramType);
+                var programs = group.GroupBy(x => x.SubProgram.m_GpuProgramType);
                 foreach (var program in programs)
                 {
                     if (platforms == null || platforms.Length == 0)
                     {
-                        foreach (var subProgram in program)
+                        foreach (var subProgramEntry in program)
                         {
                             sb.Append("SubProgram \"unknown\" {\n");
-                            AppendUnavailableSubProgram(sb, subProgram, unavailableReason);
+                            AppendUnavailableSubProgram(sb, subProgramEntry.SubProgram, unavailableReason);
                             sb.Append("\n}\n");
                         }
                         continue;
@@ -1007,8 +1169,9 @@ namespace AnimeStudio
                         {
                             var subPrograms = program.ToList();
                             var isTier = subPrograms.Count > 1;
-                            foreach (var subProgram in subPrograms)
+                            foreach (var subProgramEntry in subPrograms)
                             {
+                                var subProgram = subProgramEntry.SubProgram;
                                 sb.Append($"SubProgram \"{GetPlatformString(platform)} ");
                                 if (isTier)
                                 {
@@ -1027,6 +1190,7 @@ namespace AnimeStudio
                                         passIndex,
                                         passName,
                                         stage,
+                                        subProgramEntry.Index,
                                         subProgram.m_BlobIndex,
                                         subProgram.m_GpuProgramType,
                                         GetPlatformString(platform),
@@ -1063,7 +1227,8 @@ namespace AnimeStudio
             string unavailableReason = null)
         {
             var sb = new StringBuilder();
-            var mappedSubPrograms = new List<(SerializedPlayerSubProgram SubProgram, uint? ParameterBlobIndex)>();
+            var mappedSubPrograms = new List<(SerializedPlayerSubProgram SubProgram, uint? ParameterBlobIndex, int SubProgramIndex)>();
+            var subProgramIndex = 0;
             for (var groupIndex = 0; groupIndex < m_PlayerSubPrograms.Count; groupIndex++)
             {
                 var playerGroup = m_PlayerSubPrograms[groupIndex];
@@ -1077,7 +1242,7 @@ namespace AnimeStudio
                         && programIndex < parameterGroup.Length
                             ? parameterGroup[programIndex]
                             : null;
-                    mappedSubPrograms.Add((playerGroup[programIndex], parameterBlobIndex));
+                    mappedSubPrograms.Add((playerGroup[programIndex], parameterBlobIndex, subProgramIndex++));
                 }
             }
 
@@ -1128,6 +1293,7 @@ namespace AnimeStudio
                                         passIndex,
                                         passName,
                                         stage,
+                                        mappedSubProgram.SubProgramIndex,
                                         subProgram.m_BlobIndex,
                                         subProgram.m_GpuProgramType,
                                         GetPlatformString(platform),
@@ -2278,9 +2444,15 @@ namespace AnimeStudio
             context.AppendProgramBody(sb, body, bodyKind);
         }
 
-        private static void WriteBytecodeSidecar(StringBuilder sb, string kind, string extension, ReadOnlySpan<byte> data, string metadataJson = null)
+        private static void WriteBytecodeSidecar(
+            StringBuilder sb,
+            string kind,
+            string extension,
+            ReadOnlySpan<byte> data,
+            string metadataJson = null,
+            string encoding = null)
         {
-            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data, metadataJson);
+            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data, metadataJson, encoding);
         }
 
         private static string AddDecodedProgramStageMetadata(
@@ -2318,7 +2490,7 @@ namespace AnimeStudio
             }
         }
 
-        private static string TryGetDxbcProgramStage(ReadOnlySpan<byte> bytecode)
+        internal static string TryGetDxbcProgramStage(ReadOnlySpan<byte> bytecode)
         {
             const uint DxbcMagic = 0x43425844; // DXBC
             const uint ShdrFourCc = 0x52444853; // SHDR
@@ -2464,6 +2636,13 @@ namespace AnimeStudio
                             var buffSpan = m_ProgramCode.AsSpan(start);
 
                             sb.Append($"// hash: {ComputeHash64(buffSpan):x8}\n");
+                            WriteBytecodeSidecar(
+                                sb,
+                                "d3d_program",
+                                ".dxbc",
+                                buffSpan,
+                                AddDecodedProgramStageMetadata(metadataJson, buffSpan, "DXBC"),
+                                "DXBC");
                             try
                             {
                                 HLSLDecompiler.DecompileShader(buffSpan.ToArray(), buffSpan.Length, out var hlslText);
@@ -2504,7 +2683,8 @@ namespace AnimeStudio
                                     $"endfield_dxbc_{i}",
                                     ".dxbc",
                                     snippet,
-                                    AddDecodedProgramStageMetadata(metadataJson, snippet, "DXBC"));
+                                    AddDecodedProgramStageMetadata(metadataJson, snippet, "DXBC"),
+                                    "DXBC");
                                 AppendD3D11Disassembly(sb, snippet);
                             }
                             break;
@@ -2535,7 +2715,7 @@ namespace AnimeStudio
                                     var (offset, size) = snippets[i];
                                     sb.Append($"// Endfield SMOL-V snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
                                     var smolvSnippet = m_ProgramCode.AsSpan(offset, size);
-                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet, metadataJson);
+                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet, metadataJson, "SMOL-V");
                                     try
                                     {
                                         var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
@@ -2545,7 +2725,7 @@ namespace AnimeStudio
                                             var spirvSnippet = SmolvDecoder.Decode(smolvSnippet.ToArray());
                                             if (spirvSnippet != null && spirvSnippet.Length > 0)
                                             {
-                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet, metadataJson);
+                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet, metadataJson, "SPIR-V");
                                             }
                                         }
                                         if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
@@ -2564,6 +2744,7 @@ namespace AnimeStudio
                                 try
                                 {
                                     sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
+                                    WriteBytecodeSidecar(sb, "spirv_program", ".spv", m_ProgramCode, metadataJson, "SPIR-V");
                                     if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
                                     {
                                         AppendProgramBody(sb, SpirVShaderConverter.Convert(m_ProgramCode), "SPIR-V disassembly");
