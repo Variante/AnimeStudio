@@ -89,7 +89,9 @@ namespace AnimeStudio
                 string extension,
                 ReadOnlySpan<byte> data,
                 string metadataJson = null,
-                string encoding = null)
+                string encoding = null,
+                int? sourceOffset = null,
+                int? sourceSize = null)
             {
                 if (string.IsNullOrEmpty(m_bytecodeSidecarRoot) || data.IsEmpty)
                 {
@@ -104,7 +106,7 @@ namespace AnimeStudio
                     var path = Path.Combine(m_bytecodeSidecarRoot, fileName);
                     var payload = data.ToArray();
                     File.WriteAllBytes(path, payload);
-                    var manifestEntry = BuildManifestEntry(fileName, payload, metadataJson, encoding);
+                    var manifestEntry = BuildManifestEntry(fileName, payload, metadataJson, encoding, sourceOffset, sourceSize);
                     m_sidecarEntries.Add(manifestEntry);
                     sb.Append($"// AnimeStudio bytecode sidecar: {fileName}\n");
                     if (!string.IsNullOrEmpty(metadataJson))
@@ -158,18 +160,27 @@ namespace AnimeStudio
                 string fileName,
                 byte[] payload,
                 string metadataJson,
-                string encoding)
+                string encoding,
+                int? sourceOffset,
+                int? sourceSize)
             {
                 using var metadata = TryParseMetadata(metadataJson);
                 var root = metadata?.RootElement;
                 var decodedStage = encoding == "DXBC"
                     ? ShaderSubProgram.TryGetDxbcProgramStage(payload)
-                    : GetString(root, "SourceSerializedProgramStage");
+                    : string.Empty;
+                var serializedStage = GetString(root, "SourceSerializedProgramStage") ?? string.Empty;
                 var entry = new Dictionary<string, object>
                 {
                     ["fileName"] = fileName,
                     ["encoding"] = encoding ?? string.Empty,
                     ["stage"] = decodedStage ?? string.Empty,
+                    ["serializedStage"] = serializedStage,
+                    ["decodedStage"] = decodedStage ?? string.Empty,
+                    ["sourceOffset"] = sourceOffset ?? 0,
+                    ["sourceSize"] = sourceSize ?? payload.Length,
+                    ["rawSourceOffset"] = sourceOffset ?? 0,
+                    ["rawSourceSize"] = sourceSize ?? payload.Length,
                     ["byteCount"] = payload.Length,
                     ["sha256"] = System.Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
                     ["shaderCab"] = ShaderCab,
@@ -185,7 +196,6 @@ namespace AnimeStudio
                     ["platform"] = GetString(root, "SourceCompilerPlatform") ?? string.Empty,
                     ["programType"] = GetString(root, "SourceProgramType") ?? string.Empty,
                     ["programTypeValue"] = GetInt(root, "SourceProgramTypeValue"),
-                    ["serializedStage"] = GetString(root, "SourceSerializedProgramStage") ?? string.Empty,
                     ["shaderHardwareTier"] = GetInt(root, "SourceShaderHardwareTier"),
                     ["keywords"] = GetStringArray(root, "SourceCompiledKeywords"),
                     ["localKeywords"] = GetStringArray(root, "SourceLocalKeywords"),
@@ -2450,9 +2460,19 @@ namespace AnimeStudio
             string extension,
             ReadOnlySpan<byte> data,
             string metadataJson = null,
-            string encoding = null)
+            string encoding = null,
+            int? sourceOffset = null,
+            int? sourceSize = null)
         {
-            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(sb, kind, extension, data, metadataJson, encoding);
+            ShaderConverter.CurrentExportContext?.WriteBytecodeSidecar(
+                sb,
+                kind,
+                extension,
+                data,
+                metadataJson,
+                encoding,
+                sourceOffset,
+                sourceSize);
         }
 
         private static string AddDecodedProgramStageMetadata(
@@ -2501,35 +2521,51 @@ namespace AnimeStudio
                 return string.Empty;
             }
 
+            var totalLength = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(24, 4));
+            if (totalLength != (uint)bytecode.Length)
+            {
+                return string.Empty;
+            }
+
             var chunkCount = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(28, 4));
             if (chunkCount > (uint)((bytecode.Length - 32) / 4))
             {
                 return string.Empty;
             }
 
+            var chunkTableEnd = 32 + checked((int)chunkCount * 4);
+            var chunks = new List<(int Offset, uint Size, uint FourCc)>();
             for (uint index = 0; index < chunkCount; index++)
             {
-                var offset = BinaryPrimitives.ReadUInt32LittleEndian(
-                    bytecode.Slice(32 + checked((int)index * 4), 4));
-                if (offset > int.MaxValue || (int)offset > bytecode.Length - 12)
-                {
-                    continue;
-                }
-
-                var chunk = bytecode.Slice((int)offset);
-                var fourCc = BinaryPrimitives.ReadUInt32LittleEndian(chunk);
-                if (fourCc != ShdrFourCc && fourCc != ShexFourCc)
-                {
-                    continue;
-                }
-
-                var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(chunk.Slice(4, 4));
-                if (chunkSize < 4 || chunkSize > (uint)(chunk.Length - 8))
+                var tableOffset = 32 + checked((int)index * 4);
+                var chunkOffset = BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytecode.Slice(tableOffset, 4));
+                if (chunkOffset < (uint)chunkTableEnd
+                    || chunkOffset > (uint)(bytecode.Length - 12))
                 {
                     return string.Empty;
                 }
 
-                var versionToken = BinaryPrimitives.ReadUInt32LittleEndian(chunk.Slice(8, 4));
+                var chunkStart = (int)chunkOffset;
+                var chunkRemaining = bytecode.Length - chunkStart;
+                var fourCc = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(chunkStart, 4));
+                var chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(chunkStart + 4, 4));
+                if (chunkSize < 4 || chunkSize > (uint)(chunkRemaining - 8))
+                {
+                    return string.Empty;
+                }
+
+                chunks.Add((chunkStart, chunkSize, fourCc));
+            }
+
+            foreach (var chunk in chunks)
+            {
+                if (chunk.FourCc != ShdrFourCc && chunk.FourCc != ShexFourCc)
+                {
+                    continue;
+                }
+
+                var versionToken = BinaryPrimitives.ReadUInt32LittleEndian(bytecode.Slice(chunk.Offset + 8, 4));
                 return (versionToken >> 16) switch
                 {
                     0 => "fragment",
@@ -2642,7 +2678,9 @@ namespace AnimeStudio
                                 ".dxbc",
                                 buffSpan,
                                 AddDecodedProgramStageMetadata(metadataJson, buffSpan, "DXBC"),
-                                "DXBC");
+                                "DXBC",
+                                start,
+                                buffSpan.Length);
                             try
                             {
                                 HLSLDecompiler.DecompileShader(buffSpan.ToArray(), buffSpan.Length, out var hlslText);
@@ -2684,7 +2722,9 @@ namespace AnimeStudio
                                     ".dxbc",
                                     snippet,
                                     AddDecodedProgramStageMetadata(metadataJson, snippet, "DXBC"),
-                                    "DXBC");
+                                    "DXBC",
+                                    offset,
+                                    size);
                                 AppendD3D11Disassembly(sb, snippet);
                             }
                             break;
@@ -2715,7 +2755,15 @@ namespace AnimeStudio
                                     var (offset, size) = snippets[i];
                                     sb.Append($"// Endfield SMOL-V snippet {i}: offset 0x{offset:X}, size 0x{size:X}\n");
                                     var smolvSnippet = m_ProgramCode.AsSpan(offset, size);
-                                    WriteBytecodeSidecar(sb, $"endfield_smolv_{i}", ".smolv", smolvSnippet, metadataJson, "SMOL-V");
+                                    WriteBytecodeSidecar(
+                                        sb,
+                                        $"endfield_smolv_{i}",
+                                        ".smolv",
+                                        smolvSnippet,
+                                        metadataJson,
+                                        "SMOL-V",
+                                        offset,
+                                        size);
                                     try
                                     {
                                         var snippetProgram = BuildSingleSpirVSnippetProgram(m_ProgramCode, offset, size);
@@ -2725,7 +2773,15 @@ namespace AnimeStudio
                                             var spirvSnippet = SmolvDecoder.Decode(smolvSnippet.ToArray());
                                             if (spirvSnippet != null && spirvSnippet.Length > 0)
                                             {
-                                                WriteBytecodeSidecar(sb, $"endfield_spirv_{i}", ".spv", spirvSnippet, metadataJson, "SPIR-V");
+                                                WriteBytecodeSidecar(
+                                                    sb,
+                                                    $"endfield_spirv_{i}",
+                                                    ".spv",
+                                                    spirvSnippet,
+                                                    metadataJson,
+                                                    "SPIR-V",
+                                                    offset,
+                                                    size);
                                             }
                                         }
                                         if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
@@ -2744,7 +2800,15 @@ namespace AnimeStudio
                                 try
                                 {
                                     sb.Append($"// hash: {ComputeHash64(m_ProgramCode):x8}\n");
-                                    WriteBytecodeSidecar(sb, "spirv_program", ".spv", m_ProgramCode, metadataJson, "SPIR-V");
+                                    WriteBytecodeSidecar(
+                                        sb,
+                                        "spirv_program",
+                                        ".spv",
+                                        m_ProgramCode,
+                                        metadataJson,
+                                        "SPIR-V",
+                                        0,
+                                        m_ProgramCode.Length);
                                     if (ShouldAppendProgramBody(sb, "SPIR-V disassembly"))
                                     {
                                         AppendProgramBody(sb, SpirVShaderConverter.Convert(m_ProgramCode), "SPIR-V disassembly");
@@ -2774,11 +2838,16 @@ namespace AnimeStudio
             sb.Append('"');
             return sb.ToString();
         }
-        private static List<(int Offset, int Size)> EnumerateEndfieldD3D11Snippets(byte[] programCode)
+        internal static List<(int Offset, int Size)> EnumerateEndfieldD3D11Snippets(byte[] programCode)
         {
             var snippets = new List<(int Offset, int Size)>();
+            if (programCode == null || programCode.Length < 8)
+            {
+                return snippets;
+            }
+
             var minOffset = programCode.Length;
-            for (var offset = 4; offset + 8 <= programCode.Length && offset < minOffset; offset += 8)
+            for (var offset = 4; offset <= programCode.Length - 8 && offset < minOffset; offset += 8)
             {
                 var codeOffset = BitConverter.ToInt32(programCode, offset);
                 var codeSize = BitConverter.ToInt32(programCode, offset + 4);
@@ -2786,11 +2855,16 @@ namespace AnimeStudio
                 {
                     break;
                 }
+                if (codeOffset >= programCode.Length || codeSize > programCode.Length - codeOffset)
+                {
+                    break;
+                }
+
                 if (codeOffset < minOffset)
                 {
                     minOffset = codeOffset;
                 }
-                if (codeOffset + codeSize <= programCode.Length && IsDxbc(programCode, codeOffset))
+                if (IsDxbc(programCode, codeOffset))
                 {
                     snippets.Add((codeOffset, codeSize));
                 }
@@ -2798,15 +2872,20 @@ namespace AnimeStudio
 
             if (snippets.Count == 0)
             {
-                for (var offset = 0; offset + 4 <= programCode.Length; offset++)
+                for (var offset = 0; offset <= programCode.Length - 4; offset++)
                 {
                     if (!IsDxbc(programCode, offset))
                     {
                         continue;
                     }
 
-                    var codeSize = offset + 28 <= programCode.Length ? BitConverter.ToInt32(programCode, offset + 24) : 0;
-                    if (codeSize > 0 && offset + codeSize <= programCode.Length)
+                    if (offset > programCode.Length - 28)
+                    {
+                        continue;
+                    }
+
+                    var codeSize = BitConverter.ToInt32(programCode, offset + 24);
+                    if (codeSize > 0 && codeSize <= programCode.Length - offset)
                     {
                         snippets.Add((offset, codeSize));
                     }
@@ -2816,11 +2895,16 @@ namespace AnimeStudio
             return snippets;
         }
 
-        private static List<(int Offset, int Size)> EnumerateEndfieldSpirVSnippets(byte[] programCode)
+        internal static List<(int Offset, int Size)> EnumerateEndfieldSpirVSnippets(byte[] programCode)
         {
             var snippets = new List<(int Offset, int Size)>();
+            if (programCode == null || programCode.Length < 8)
+            {
+                return snippets;
+            }
+
             var minOffset = programCode.Length;
-            for (var offset = 4; offset + 8 <= programCode.Length && offset < minOffset; offset += 8)
+            for (var offset = 4; offset <= programCode.Length - 8 && offset < minOffset; offset += 8)
             {
                 var codeOffset = BitConverter.ToInt32(programCode, offset);
                 var codeSize = BitConverter.ToInt32(programCode, offset + 4);
@@ -2828,11 +2912,16 @@ namespace AnimeStudio
                 {
                     break;
                 }
+                if (codeOffset >= programCode.Length || codeSize > programCode.Length - codeOffset)
+                {
+                    break;
+                }
+
                 if (codeOffset < minOffset)
                 {
                     minOffset = codeOffset;
                 }
-                if (codeOffset + codeSize <= programCode.Length && IsSmolv(programCode, codeOffset))
+                if (IsSmolv(programCode, codeOffset))
                 {
                     snippets.Add((codeOffset, codeSize));
                 }
@@ -2852,7 +2941,9 @@ namespace AnimeStudio
 
         private static bool IsSmolv(byte[] data, int offset)
         {
-            return offset + 4 <= data.Length
+            return data != null
+                && offset >= 0
+                && offset <= data.Length - 4
                 && data[offset] == (byte)'L'
                 && data[offset + 1] == (byte)'O'
                 && data[offset + 2] == (byte)'M'
@@ -2860,7 +2951,9 @@ namespace AnimeStudio
         }
         private static bool IsDxbc(byte[] data, int offset)
         {
-            return offset + 4 <= data.Length
+            return data != null
+                && offset >= 0
+                && offset <= data.Length - 4
                 && data[offset] == (byte)'D'
                 && data[offset + 1] == (byte)'X'
                 && data[offset + 2] == (byte)'B'
