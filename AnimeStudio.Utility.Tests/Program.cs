@@ -9,6 +9,8 @@ static class Program
         TestDxbcMalformedHeadersFailClosed();
         TestD3D11SnippetBoundsFailClosed();
         TestSpirVSnippetBoundsFailClosed();
+        TestEndfieldConstantBufferTable();
+        TestEndfieldConstantBufferTableFailsClosed();
         Console.WriteLine("Shader boundary synthetic tests passed.");
         return 0;
     }
@@ -79,6 +81,105 @@ static class Program
         var snippets = ShaderSubProgram.EnumerateEndfieldSpirVSnippets(valid);
         AssertEqual(1, snippets.Count, "valid SPIR-V wrapper snippet count");
         AssertEqual((24, 16), snippets[0], "valid SPIR-V wrapper snippet");
+    }
+
+    private static void TestEndfieldConstantBufferTable()
+    {
+        var record = BuildEndfieldParameterRecord(structCount: 0, secondFieldOffset: 16);
+        AssertEqual(true, EndfieldShaderParameterRecord.TryParse(record, out var parsed), "valid Endfield parameter record");
+        AssertEqual(true, parsed.ConstantBufferTableParsed, "valid Endfield constant-buffer table status");
+        AssertEqual(1, parsed.ConstantBuffers.Count, "valid Endfield constant-buffer count");
+        var buffer = parsed.ConstantBuffers[0];
+        AssertEqual("UnityPerMaterial", buffer.Name, "valid Endfield constant-buffer name");
+        AssertEqual(64, buffer.Size, "valid Endfield constant-buffer size");
+        AssertEqual(2, buffer.Fields.Count, "valid Endfield constant-buffer field count");
+        AssertEqual(("_Color", 0, 1, 4, 0, 0),
+            (buffer.Fields[0].Name, buffer.Fields[0].Kind, buffer.Fields[0].RowCount,
+                buffer.Fields[0].ColumnCount, buffer.Fields[0].ArraySize, buffer.Fields[0].ByteOffset),
+            "valid Endfield vector field");
+        AssertEqual(("_Matrix", 0, 4, 4, 0, 16),
+            (buffer.Fields[1].Name, buffer.Fields[1].Kind, buffer.Fields[1].RowCount,
+                buffer.Fields[1].ColumnCount, buffer.Fields[1].ArraySize, buffer.Fields[1].ByteOffset),
+            "valid Endfield matrix field");
+    }
+
+    private static void TestEndfieldConstantBufferTableFailsClosed()
+    {
+        var outOfRange = BuildEndfieldParameterRecord(structCount: 0, secondFieldOffset: 64);
+        AssertEqual(true, EndfieldShaderParameterRecord.TryParse(outOfRange, out var parsedOutOfRange), "descriptor tail survives invalid field offset");
+        AssertEqual(false, parsedOutOfRange.ConstantBufferTableParsed, "invalid field offset fails closed");
+
+        var unsupportedStruct = BuildEndfieldParameterRecord(structCount: 1, secondFieldOffset: 16);
+        AssertEqual(true, EndfieldShaderParameterRecord.TryParse(unsupportedStruct, out var parsedStruct), "descriptor tail survives unsupported struct table");
+        AssertEqual(false, parsedStruct.ConstantBufferTableParsed, "unsupported struct table fails closed");
+    }
+
+    private static byte[] BuildEndfieldParameterRecord(int structCount, int secondFieldOffset)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(0x0C11FFE2);
+        writer.Write(new byte[20]);
+
+        WriteAlignedString(writer, "UnityPerMaterial");
+        writer.Write(64);
+        writer.Write(2);
+        WriteConstantField(writer, "_Color", 0, 1, 4, 0, 0, 0);
+        WriteConstantField(writer, "_Matrix", 0, 4, 4, 0, 0, secondFieldOffset);
+        writer.Write(structCount);
+
+        writer.Write(2);
+        WriteAlignedString(writer, "_MainTex");
+        writer.Write(0u);
+        writer.Write(1u);
+        writer.Write(2u);
+        writer.Write(3u);
+        WriteAlignedString(writer, "UnityPerMaterial");
+        writer.Write(1u);
+        writer.Write(4u);
+        writer.Write(5u);
+
+        writer.Write(1);
+        WriteAlignedString(writer, "Global");
+        writer.Write(0);
+        writer.Write(1);
+        writer.Write(0);
+        WriteAlignedString(writer, "_MainTex");
+        writer.Write(0);
+        writer.Write(1);
+        writer.Write(0u);
+        writer.Write(0u);
+        return stream.ToArray();
+    }
+
+    private static void WriteConstantField(
+        BinaryWriter writer,
+        string name,
+        int kind,
+        int rows,
+        int columns,
+        int arraySize,
+        int unknown,
+        int byteOffset)
+    {
+        WriteAlignedString(writer, name);
+        writer.Write(kind);
+        writer.Write(rows);
+        writer.Write(columns);
+        writer.Write(arraySize);
+        writer.Write(unknown);
+        writer.Write(byteOffset);
+    }
+
+    private static void WriteAlignedString(BinaryWriter writer, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+        while ((writer.BaseStream.Position & 3) != 0)
+        {
+            writer.Write((byte)0);
+        }
     }
 
     private static byte[] BuildDxbc(int totalLength, int chunkOffset, int chunkSize, uint versionToken)

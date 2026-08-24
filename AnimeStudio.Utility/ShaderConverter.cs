@@ -288,6 +288,29 @@ namespace AnimeStudio
             public List<RuriDescriptorBindingMetadata> Bindings { get; set; } = new List<RuriDescriptorBindingMetadata>();
         }
 
+        private sealed class RuriConstantFieldMetadata
+        {
+            public string Name { get; set; } = string.Empty;
+            public int NameIndex { get; set; } = -1;
+            public int Index { get; set; }
+            public int ArraySize { get; set; }
+            public int Type { get; set; }
+            public int RowCount { get; set; }
+            public int ColumnCount { get; set; }
+            public bool IsMatrix { get; set; }
+        }
+
+        private sealed class RuriConstantBufferMetadata
+        {
+            public string Name { get; set; } = string.Empty;
+            public int NameIndex { get; set; } = -1;
+            public List<RuriConstantFieldMetadata> MatrixParameters { get; set; } = new List<RuriConstantFieldMetadata>();
+            public List<RuriConstantFieldMetadata> VectorParameters { get; set; } = new List<RuriConstantFieldMetadata>();
+            public List<object> StructParameters { get; set; } = new List<object>();
+            public int Size { get; set; }
+            public bool IsPartialCB { get; set; }
+        }
+
         internal static bool IsEndfieldD3D11ProgramType(ShaderGpuProgramType programType)
         {
             return (int)programType == EndfieldD3D11ProgramType;
@@ -555,9 +578,9 @@ namespace AnimeStudio
             var samplers = MergeParameters(parameters => parameters.m_Samplers).ToList();
             var serializedDescriptorSets = MergeParameters(parameters => parameters.m_DescriptorSetParams).ToList();
 
-            object ConvertVector(VectorParameter parameter)
+            RuriConstantFieldMetadata ConvertVector(VectorParameter parameter)
             {
-                return new
+                return new RuriConstantFieldMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
@@ -570,9 +593,9 @@ namespace AnimeStudio
                 };
             }
 
-            object ConvertMatrix(MatrixParameter parameter)
+            RuriConstantFieldMetadata ConvertMatrix(MatrixParameter parameter)
             {
-                return new
+                return new RuriConstantFieldMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
@@ -610,18 +633,90 @@ namespace AnimeStudio
                 };
             }
 
-            object ConvertConstantBuffer(ConstantBuffer parameter)
+            RuriConstantBufferMetadata ConvertConstantBuffer(ConstantBuffer parameter)
             {
-                return new
+                return new RuriConstantBufferMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
-                    MatrixParameters = (parameter.m_MatrixParams ?? new List<MatrixParameter>()).Select(ConvertMatrix).ToArray(),
-                    VectorParameters = (parameter.m_VectorParams ?? new List<VectorParameter>()).Select(ConvertVector).ToArray(),
-                    StructParameters = (parameter.m_StructParams ?? new List<StructParameter>()).Select(ConvertStruct).ToArray(),
+                    MatrixParameters = (parameter.m_MatrixParams ?? new List<MatrixParameter>()).Select(ConvertMatrix).ToList(),
+                    VectorParameters = (parameter.m_VectorParams ?? new List<VectorParameter>()).Select(ConvertVector).ToList(),
+                    StructParameters = (parameter.m_StructParams ?? new List<StructParameter>()).Select(ConvertStruct).ToList(),
                     Size = parameter.m_Size,
                     IsPartialCB = parameter.m_IsPartialCB,
                 };
+            }
+
+            var constantBufferPayload = constantBuffers.Select(ConvertConstantBuffer).ToList();
+            var constantBuffersByName = constantBufferPayload
+                .Where(buffer => !string.IsNullOrEmpty(buffer.Name))
+                .GroupBy(buffer => buffer.Name, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+            if (endfieldParameterRecord?.ConstantBufferTableParsed == true)
+            {
+                foreach (var recoveredBuffer in endfieldParameterRecord.ConstantBuffers)
+                {
+                    if (!constantBuffersByName.TryGetValue(recoveredBuffer.Name, out var target))
+                    {
+                        target = new RuriConstantBufferMetadata
+                        {
+                            Name = recoveredBuffer.Name,
+                            Size = recoveredBuffer.Size,
+                            IsPartialCB = true,
+                        };
+                        constantBufferPayload.Add(target);
+                        constantBuffersByName.Add(target.Name, target);
+                    }
+                    else if (target.Size != recoveredBuffer.Size)
+                    {
+                        continue;
+                    }
+
+                    var fieldsByName = target.MatrixParameters
+                        .Concat(target.VectorParameters)
+                        .Where(field => !string.IsNullOrEmpty(field.Name))
+                        .GroupBy(field => field.Name, StringComparer.Ordinal)
+                        .Where(group => group.Count() == 1)
+                        .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+                    foreach (var recoveredField in recoveredBuffer.Fields)
+                    {
+                        var isMatrix = recoveredField.RowCount > 1 && recoveredField.ColumnCount > 1;
+                        var converted = new RuriConstantFieldMetadata
+                        {
+                            Name = recoveredField.Name,
+                            Index = recoveredField.ByteOffset,
+                            ArraySize = recoveredField.ArraySize,
+                            Type = recoveredField.Kind,
+                            RowCount = recoveredField.RowCount,
+                            ColumnCount = recoveredField.ColumnCount,
+                            IsMatrix = isMatrix,
+                        };
+                        if (fieldsByName.TryGetValue(converted.Name, out var existing))
+                        {
+                            if (existing.Index != converted.Index
+                                || existing.ArraySize != converted.ArraySize
+                                || existing.Type != converted.Type
+                                || existing.RowCount != converted.RowCount
+                                || existing.ColumnCount != converted.ColumnCount
+                                || existing.IsMatrix != converted.IsMatrix)
+                            {
+                                continue;
+                            }
+                            continue;
+                        }
+                        if (isMatrix)
+                        {
+                            target.MatrixParameters.Add(converted);
+                        }
+                        else
+                        {
+                            target.VectorParameters.Add(converted);
+                        }
+                        fieldsByName.Add(converted.Name, converted);
+                    }
+                    target.IsPartialCB = true;
+                }
             }
 
             var descriptorSets = new Dictionary<int, RuriDescriptorSetMetadata>();
@@ -818,7 +913,7 @@ namespace AnimeStudio
                     Dim = unchecked((byte)parameter.m_Dim),
                 }).ToArray(),
                 BufferParameters = buffers.Select(ConvertBuffer).ToArray(),
-                ConstantBufferParameters = constantBuffers.Select(ConvertConstantBuffer).ToArray(),
+                ConstantBufferParameters = constantBufferPayload.ToArray(),
                 BufferBindingParameters = constantBufferBindings.Select(ConvertBuffer).ToArray(),
                 UAVParameters = uavs.Select(parameter => new
                 {
@@ -850,6 +945,8 @@ namespace AnimeStudio
                 SourceProgramTypeValue = (int)gpuProgramType,
                 SourceParameterBlobIndex = parameterBlobIndex,
                 SourceEndfieldParameterRecordParsed = endfieldParameterRecord != null,
+                SourceEndfieldConstantBufferTableParsed =
+                    endfieldParameterRecord?.ConstantBufferTableParsed == true,
                 SourceCombinedProgramContainer = endfieldParameterRecord != null,
                 SourceCompiledKeywords = (compiledKeywords ?? Array.Empty<string>()).ToArray(),
                 SourceLocalKeywords = (localKeywords ?? Array.Empty<string>()).ToArray(),
@@ -2112,15 +2209,40 @@ namespace AnimeStudio
         public List<EndfieldShaderParameterBinding> Bindings;
     }
 
+    public sealed class EndfieldShaderConstantBufferField
+    {
+        public string Name;
+        public int Kind;
+        public int RowCount;
+        public int ColumnCount;
+        public int ArraySize;
+        public int Unknown;
+        public int ByteOffset;
+    }
+
+    public sealed class EndfieldShaderConstantBuffer
+    {
+        public string Name;
+        public int Size;
+        public List<EndfieldShaderConstantBufferField> Fields;
+    }
+
     public sealed class EndfieldShaderParameterRecord
     {
         private const int HeaderSize = 24;
+        private const int MaxConstantBufferCount = 256;
+        private const int MaxConstantBufferSize = 16 * 1024 * 1024;
+        private const int MaxConstantBufferFieldCount = 4096;
+        private const int MaxResourceCount = 4096;
         private const int MaxDescriptorSetCount = 32;
         private const int MaxBindingCount = 4096;
         private const int MaxNameLength = 1024;
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         public int DescriptorTailOffset;
+        public int ResourceTableOffset;
+        public bool ConstantBufferTableParsed;
+        public List<EndfieldShaderConstantBuffer> ConstantBuffers;
         public List<EndfieldShaderParameterSet> DescriptorSets;
 
         public static bool TryParse(byte[] record, out EndfieldShaderParameterRecord parsed)
@@ -2164,6 +2286,8 @@ namespace AnimeStudio
                 var parsedCandidate = new EndfieldShaderParameterRecord
                 {
                     DescriptorTailOffset = candidateOffset,
+                    ResourceTableOffset = -1,
+                    ConstantBuffers = new List<EndfieldShaderConstantBuffer>(),
                     DescriptorSets = descriptorSets,
                 };
                 if (candidate != null)
@@ -2174,7 +2298,172 @@ namespace AnimeStudio
             }
 
             parsed = candidate;
+            if (parsed != null
+                && TryParseConstantBufferAndResourceTables(
+                    record,
+                    parsed.DescriptorTailOffset,
+                    out var constantBuffers,
+                    out var resourceTableOffset))
+            {
+                parsed.ConstantBuffers = constantBuffers;
+                parsed.ResourceTableOffset = resourceTableOffset;
+                parsed.ConstantBufferTableParsed = true;
+            }
             return parsed != null;
+        }
+
+        private static bool TryParseConstantBufferAndResourceTables(
+            byte[] record,
+            int descriptorTailOffset,
+            out List<EndfieldShaderConstantBuffer> constantBuffers,
+            out int resourceTableOffset)
+        {
+            constantBuffers = new List<EndfieldShaderConstantBuffer>();
+            resourceTableOffset = -1;
+            List<EndfieldShaderConstantBuffer> uniqueBuffers = null;
+            var uniqueBoundary = -1;
+            for (var candidateBoundary = HeaderSize + sizeof(int);
+                 candidateBoundary <= descriptorTailOffset - sizeof(int);
+                 candidateBoundary += sizeof(int))
+            {
+                if (!TryParseConstantBuffersExact(
+                        record,
+                        candidateBoundary,
+                        out var candidateBuffers)
+                    || !TryParseResourceTableExact(
+                        record,
+                        candidateBoundary,
+                        descriptorTailOffset))
+                {
+                    continue;
+                }
+
+                if (uniqueBuffers != null)
+                {
+                    return false;
+                }
+                uniqueBuffers = candidateBuffers;
+                uniqueBoundary = candidateBoundary;
+            }
+
+            if (uniqueBuffers == null)
+            {
+                return false;
+            }
+            constantBuffers = uniqueBuffers;
+            resourceTableOffset = uniqueBoundary;
+            return true;
+        }
+
+        private static bool TryParseConstantBuffersExact(
+            byte[] record,
+            int endOffset,
+            out List<EndfieldShaderConstantBuffer> constantBuffers)
+        {
+            constantBuffers = new List<EndfieldShaderConstantBuffer>();
+            var offset = HeaderSize;
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            while (offset < endOffset)
+            {
+                if (constantBuffers.Count >= MaxConstantBufferCount
+                    || !TryReadAlignedString(record, ref offset, out var name)
+                    || !seenNames.Add(name)
+                    || !TryReadInt32(record, ref offset, out var size)
+                    || !TryReadInt32(record, ref offset, out var fieldCount)
+                    || size <= 0
+                    || size > MaxConstantBufferSize
+                    || fieldCount < 0
+                    || fieldCount > MaxConstantBufferFieldCount)
+                {
+                    return false;
+                }
+
+                var fields = new List<EndfieldShaderConstantBufferField>(fieldCount);
+                var seenFieldNames = new HashSet<string>(StringComparer.Ordinal);
+                for (var fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
+                {
+                    if (!TryReadAlignedString(record, ref offset, out var fieldName)
+                        || !seenFieldNames.Add(fieldName)
+                        || !TryReadInt32(record, ref offset, out var kind)
+                        || !TryReadInt32(record, ref offset, out var rowCount)
+                        || !TryReadInt32(record, ref offset, out var columnCount)
+                        || !TryReadInt32(record, ref offset, out var arraySize)
+                        || !TryReadInt32(record, ref offset, out var unknown)
+                        || !TryReadInt32(record, ref offset, out var byteOffset)
+                        || kind < 0
+                        || kind > 16
+                        || rowCount <= 0
+                        || rowCount > 16
+                        || columnCount <= 0
+                        || columnCount > 16
+                        || arraySize < 0
+                        || arraySize > ushort.MaxValue
+                        || byteOffset < 0
+                        || byteOffset >= size)
+                    {
+                        return false;
+                    }
+                    fields.Add(new EndfieldShaderConstantBufferField
+                    {
+                        Name = fieldName,
+                        Kind = kind,
+                        RowCount = rowCount,
+                        ColumnCount = columnCount,
+                        ArraySize = arraySize,
+                        Unknown = unknown,
+                        ByteOffset = byteOffset,
+                    });
+                }
+
+                if (!TryReadInt32(record, ref offset, out var structCount)
+                    || structCount != 0
+                    || offset > endOffset)
+                {
+                    return false;
+                }
+                constantBuffers.Add(new EndfieldShaderConstantBuffer
+                {
+                    Name = name,
+                    Size = size,
+                    Fields = fields,
+                });
+            }
+
+            return offset == endOffset && constantBuffers.Count > 0;
+        }
+
+        private static bool TryParseResourceTableExact(
+            byte[] record,
+            int startOffset,
+            int endOffset)
+        {
+            var offset = startOffset;
+            if (!TryReadInt32(record, ref offset, out var resourceCount)
+                || resourceCount < 0
+                || resourceCount > MaxResourceCount)
+            {
+                return false;
+            }
+            for (var resourceIndex = 0; resourceIndex < resourceCount; resourceIndex++)
+            {
+                if (!TryReadAlignedString(record, ref offset, out _)
+                    || !TryReadUInt32(record, ref offset, out var resourceKind)
+                    || resourceKind > 1)
+                {
+                    return false;
+                }
+                // Including resourceKind, texture rows (kind 0) contain four
+                // uint32 words; constant-buffer rows (kind 1) contain three.
+                var remainingWordCount = resourceKind == 0 ? 3 : 2;
+                for (var wordIndex = 0; wordIndex < remainingWordCount; wordIndex++)
+                {
+                    if (!TryReadUInt32(record, ref offset, out _))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return offset == endOffset;
         }
 
         private static bool TryParseDescriptorSets(
