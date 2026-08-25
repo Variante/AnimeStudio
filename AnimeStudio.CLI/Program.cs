@@ -79,6 +79,7 @@ namespace AnimeStudio.CLI
                     return;
                 }
                 using var objectIndex = ObjectIndexJsonlWriter.Open(o.ObjectIndexJsonl, o.Input);
+                using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
 
                 if (o.Key != default)
                 {
@@ -126,6 +127,7 @@ namespace AnimeStudio.CLI
                     indexComplete = !exportHadErrors;
                 }
                 objectIndex?.Complete(indexComplete);
+                rendererIndex?.Complete(indexComplete);
                 if (Properties.Settings.Default.scrapeMonos)
                 {
                     File.WriteAllLines("./Maps/PathStrings_Sorted.txt", PathStrings.Distinct().OrderBy(p => p));
@@ -410,6 +412,7 @@ namespace AnimeStudio.CLI
                 {
                     loadedBatchCount++;
                     ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(assetsManager.assetsFileList);
+                    RendererIndexJsonlWriter.Current?.WriteLoadedRenderers(assetsManager.assetsFileList);
                     using (LoadTiming.Measure(LoadTiming.Id.BuildAssetData))
                     {
                         BuildAssetData(typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);

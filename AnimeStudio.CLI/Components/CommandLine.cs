@@ -41,6 +41,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.DummyDllFolder,
                 optionsBinder.MonoBehaviourTypeTreePriorityOption,
                 optionsBinder.ObjectIndexJsonl,
+                optionsBinder.RendererIndexJsonl,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Texture2DNativePayload,
                 optionsBinder.Input,
@@ -80,6 +81,7 @@ namespace AnimeStudio.CLI
         public DirectoryInfo DummyDllFolder { get; set; }
         public MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriority { get; set; }
         public FileInfo ObjectIndexJsonl { get; set; }
+        public FileInfo RendererIndexJsonl { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public bool Texture2DNativePayload { get; set; }
         public FileInfo Input { get; set; }
@@ -108,6 +110,7 @@ namespace AnimeStudio.CLI
         public readonly Option<DirectoryInfo> DummyDllFolder;
         public readonly Option<MonoBehaviourTypeTreePriority> MonoBehaviourTypeTreePriorityOption;
         public readonly Option<FileInfo> ObjectIndexJsonl;
+        public readonly Option<FileInfo> RendererIndexJsonl;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Option<bool> Texture2DNativePayload;
         public readonly Argument<FileInfo> Input;
@@ -134,6 +137,7 @@ namespace AnimeStudio.CLI
             DummyDllFolder = new Option<DirectoryInfo>("--dummy_dlls", "Specify DummyDll path.").LegalFilePathsOnly();
             MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
             ObjectIndexJsonl = new Option<FileInfo>("--object_index_jsonl", "Write a compact original-data object/PPtr/MonoScript JSONL index while exporting JSON.");
+            RendererIndexJsonl = new Option<FileInfo>("--renderer_index_jsonl", "Write exact serialized GameObject renderer Mesh/Material PPtr relationships as JSONL.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Texture2DNativePayload = new Option<bool>(
                 "--texture2d_native_payload",
@@ -294,6 +298,7 @@ namespace AnimeStudio.CLI
             DummyDllFolder = bindingContext.ParseResult.GetValueForOption(DummyDllFolder),
             MonoBehaviourTypeTreePriority = bindingContext.ParseResult.GetValueForOption(MonoBehaviourTypeTreePriorityOption),
             ObjectIndexJsonl = bindingContext.ParseResult.GetValueForOption(ObjectIndexJsonl),
+            RendererIndexJsonl = bindingContext.ParseResult.GetValueForOption(RendererIndexJsonl),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Texture2DNativePayload = bindingContext.ParseResult.GetValueForOption(Texture2DNativePayload),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),
