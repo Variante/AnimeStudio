@@ -1,5 +1,6 @@
 ﻿using AnimeStudio.PInvoke;
 using SharpGen.Runtime;
+using AnimeStudio.ShaderRecovery;
 using Smolv;
 using SpirV;
 using System;
@@ -9,7 +10,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -182,7 +182,7 @@ namespace AnimeStudio
                     ["rawSourceOffset"] = sourceOffset ?? 0,
                     ["rawSourceSize"] = sourceSize ?? payload.Length,
                     ["byteCount"] = payload.Length,
-                    ["sha256"] = System.Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
+                    ["sha256"] = ShaderRecoveryContract.ComputeSha256Hex(payload),
                     ["shaderCab"] = ShaderCab,
                     ["shaderPathId"] = ShaderPathId,
                     ["shaderName"] = ShaderName,
@@ -269,7 +269,7 @@ namespace AnimeStudio
             }
         }
 
-        private sealed class RuriDescriptorBindingMetadata
+        private sealed class ShaderDescriptorBindingMetadata
         {
             public string Name { get; set; } = string.Empty;
             public int NameIndex { get; set; }
@@ -279,16 +279,16 @@ namespace AnimeStudio
             public uint PackedInfo { get; set; }
         }
 
-        private sealed class RuriDescriptorSetMetadata
+        private sealed class ShaderDescriptorSetMetadata
         {
             public string Name { get; set; } = string.Empty;
             public int NameIndex { get; set; } = -1;
             public int SetId { get; set; }
             public int MaxBindingIndex { get; set; }
-            public List<RuriDescriptorBindingMetadata> Bindings { get; set; } = new List<RuriDescriptorBindingMetadata>();
+            public List<ShaderDescriptorBindingMetadata> Bindings { get; set; } = new List<ShaderDescriptorBindingMetadata>();
         }
 
-        private sealed class RuriConstantFieldMetadata
+        private sealed class ShaderConstantFieldMetadata
         {
             public string Name { get; set; } = string.Empty;
             public int NameIndex { get; set; } = -1;
@@ -300,12 +300,12 @@ namespace AnimeStudio
             public bool IsMatrix { get; set; }
         }
 
-        private sealed class RuriConstantBufferMetadata
+        private sealed class ShaderConstantBufferMetadata
         {
             public string Name { get; set; } = string.Empty;
             public int NameIndex { get; set; } = -1;
-            public List<RuriConstantFieldMetadata> MatrixParameters { get; set; } = new List<RuriConstantFieldMetadata>();
-            public List<RuriConstantFieldMetadata> VectorParameters { get; set; } = new List<RuriConstantFieldMetadata>();
+            public List<ShaderConstantFieldMetadata> MatrixParameters { get; set; } = new List<ShaderConstantFieldMetadata>();
+            public List<ShaderConstantFieldMetadata> VectorParameters { get; set; } = new List<ShaderConstantFieldMetadata>();
             public List<object> StructParameters { get; set; } = new List<object>();
             public int Size { get; set; }
             public bool IsPartialCB { get; set; }
@@ -470,7 +470,7 @@ namespace AnimeStudio
             return (value ?? "Unnamed Shader").Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
-        private static string BuildRuriProgramMetadataJson(
+        private static string BuildShaderRecoveryMetadataJson(
             SerializedProgramParameters commonParameters,
             SerializedProgramParameters variantParameters,
             EndfieldShaderParameterRecord endfieldParameterRecord,
@@ -578,9 +578,9 @@ namespace AnimeStudio
             var samplers = MergeParameters(parameters => parameters.m_Samplers).ToList();
             var serializedDescriptorSets = MergeParameters(parameters => parameters.m_DescriptorSetParams).ToList();
 
-            RuriConstantFieldMetadata ConvertVector(VectorParameter parameter)
+            ShaderConstantFieldMetadata ConvertVector(VectorParameter parameter)
             {
-                return new RuriConstantFieldMetadata
+                return new ShaderConstantFieldMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
@@ -593,9 +593,9 @@ namespace AnimeStudio
                 };
             }
 
-            RuriConstantFieldMetadata ConvertMatrix(MatrixParameter parameter)
+            ShaderConstantFieldMetadata ConvertMatrix(MatrixParameter parameter)
             {
-                return new RuriConstantFieldMetadata
+                return new ShaderConstantFieldMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
@@ -633,9 +633,9 @@ namespace AnimeStudio
                 };
             }
 
-            RuriConstantBufferMetadata ConvertConstantBuffer(ConstantBuffer parameter)
+            ShaderConstantBufferMetadata ConvertConstantBuffer(ConstantBuffer parameter)
             {
-                return new RuriConstantBufferMetadata
+                return new ShaderConstantBufferMetadata
                 {
                     Name = ResolveName(parameter.m_NameIndex),
                     NameIndex = parameter.m_NameIndex,
@@ -659,7 +659,7 @@ namespace AnimeStudio
                 {
                     if (!constantBuffersByName.TryGetValue(recoveredBuffer.Name, out var target))
                     {
-                        target = new RuriConstantBufferMetadata
+                        target = new ShaderConstantBufferMetadata
                         {
                             Name = recoveredBuffer.Name,
                             Size = recoveredBuffer.Size,
@@ -682,7 +682,7 @@ namespace AnimeStudio
                     foreach (var recoveredField in recoveredBuffer.Fields)
                     {
                         var isMatrix = recoveredField.RowCount > 1 && recoveredField.ColumnCount > 1;
-                        var converted = new RuriConstantFieldMetadata
+                        var converted = new ShaderConstantFieldMetadata
                         {
                             Name = recoveredField.Name,
                             Index = recoveredField.ByteOffset,
@@ -719,8 +719,8 @@ namespace AnimeStudio
                 }
             }
 
-            var descriptorSets = new Dictionary<int, RuriDescriptorSetMetadata>();
-            var descriptorBindings = new Dictionary<(int Set, int Binding, int Type), RuriDescriptorBindingMetadata>();
+            var descriptorSets = new Dictionary<int, ShaderDescriptorSetMetadata>();
+            var descriptorBindings = new Dictionary<(int Set, int Binding, int Type), ShaderDescriptorBindingMetadata>();
 
             void AddDescriptorBinding(
                 int setId,
@@ -740,7 +740,7 @@ namespace AnimeStudio
 
                 if (!descriptorSets.TryGetValue(setId, out var set))
                 {
-                    set = new RuriDescriptorSetMetadata
+                    set = new ShaderDescriptorSetMetadata
                     {
                         Name = setName ?? string.Empty,
                         NameIndex = setNameIndex,
@@ -762,7 +762,7 @@ namespace AnimeStudio
                 var key = (setId, bindingIndex, descriptorType);
                 if (!descriptorBindings.TryGetValue(key, out var binding))
                 {
-                    binding = new RuriDescriptorBindingMetadata
+                    binding = new ShaderDescriptorBindingMetadata
                     {
                         Name = name ?? string.Empty,
                         NameIndex = nameIndex,
@@ -1287,7 +1287,7 @@ namespace AnimeStudio
                                 sb.Append("\" {\n");
                                 if (TryGetShaderSubProgram(shaderPrograms, i, subProgram.m_BlobIndex, out var parsedSubProgram))
                                 {
-                                    var metadataJson = BuildRuriProgramMetadataJson(
+                                    var metadataJson = BuildShaderRecoveryMetadataJson(
                                         commonParameters,
                                         subProgram.m_Parameters,
                                         null,
@@ -1390,7 +1390,7 @@ namespace AnimeStudio
                                             mappedSubProgram.ParameterBlobIndex.Value,
                                             out endfieldParameterRecord);
                                     }
-                                    var metadataJson = BuildRuriProgramMetadataJson(
+                                    var metadataJson = BuildShaderRecoveryMetadataJson(
                                         commonParameters,
                                         null,
                                         endfieldParameterRecord,

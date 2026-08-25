@@ -14,6 +14,11 @@ namespace AnimeStudio.CLI
     {
         public static void Main(string[] args)
         {
+            if (RecoveryCli.TryRun(args, out var recoveryExitCode))
+            {
+                Environment.ExitCode = recoveryExitCode;
+                return;
+            }
             if (EndfieldVfsCli.TryRun(args, out var exitCode))
             {
                 Environment.ExitCode = exitCode;

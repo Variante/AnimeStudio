@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using AnimeStudio;
+using AnimeStudio.ShaderRecovery;
 
 static class Program
 {
@@ -11,6 +12,8 @@ static class Program
         TestSpirVSnippetBoundsFailClosed();
         TestEndfieldConstantBufferTable();
         TestEndfieldConstantBufferTableFailsClosed();
+        TestShaderRecoveryContract();
+        TestSpirvHlslEmitter();
         Console.WriteLine("Shader boundary synthetic tests passed.");
         return 0;
     }
@@ -113,6 +116,48 @@ static class Program
         AssertEqual(true, EndfieldShaderParameterRecord.TryParse(unsupportedStruct, out var parsedStruct), "descriptor tail survives unsupported struct table");
         AssertEqual(false, parsedStruct.ConstantBufferTableParsed, "unsupported struct table fails closed");
     }
+
+    private static void TestShaderRecoveryContract()
+    {
+        var input = new byte[] { 0x01, 0x02, 0x03 };
+        var provenance = new ShaderRecoveryProvenance("AnimeStudio", "test", string.Empty);
+        var output = ShaderRecoveryOutput.FromText(
+            input,
+            "line 1\r\nline 2\rline 3",
+            provenance,
+            new[] { new ShaderRecoveryDiagnostic("test", "synthetic") });
+
+        AssertEqual("animestudio.shader-recovery.v1", output.Schema, "shader recovery schema");
+        AssertEqual("line 1\nline 2\nline 3", output.SourceText, "shader recovery line endings");
+        AssertEqual(ShaderRecoveryContract.ComputeSha256Hex(input), output.Provenance.InputSha256, "shader recovery input hash");
+        AssertEqual(1, output.Diagnostics.Count, "shader recovery diagnostics");
+    }
+
+    private static void TestSpirvHlslEmitter()
+    {
+        var words = new uint[]
+        {
+            0x07230203, 0x00010000, 0, 6, 0,
+            0x00020011, 1,
+            0x0003000E, 0, 100,
+            0x0005000F, 0, 4, 0x6E69616D, 0,
+            0x00020013, 1,
+            0x00040021, 2, 1, 1,
+            0x00050036, 1, 4, 0, 2,
+            0x000200F8, 5,
+            0x000100FD,
+            0x00010038,
+        };
+        var spirv = new byte[words.Length * sizeof(uint)];
+        Buffer.BlockCopy(words, 0, spirv, 0, spirv.Length);
+
+        AssertEqual(true,
+            SpirvHlslEmitter.TryEmit(spirv, "main", 0, 50, out var hlsl, out var diagnostic),
+            $"SPIRV-Cross HLSL emission: {diagnostic}");
+        if (!hlsl.Contains("main", StringComparison.Ordinal))
+            throw new InvalidOperationException("SPIRV-Cross HLSL emission did not contain the entry point.");
+    }
+
 
     private static byte[] BuildEndfieldParameterRecord(int structCount, int secondFieldOffset)
     {

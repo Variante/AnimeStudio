@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\AnimeStudio.ShaderRecovery\AnimeStudio.ShaderRecovery.csproj" />
     <ProjectReference Include="..\AnimeStudio.Utility\AnimeStudio.Utility.csproj" />
   </ItemGroup>
 </Project>

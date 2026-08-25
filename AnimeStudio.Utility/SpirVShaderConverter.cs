@@ -1,5 +1,6 @@
 ﻿using Smolv;
 using SpirV;
+using AnimeStudio.ShaderRecovery;
 using System;
 using System.IO;
 using System.Text;
@@ -60,9 +61,16 @@ namespace AnimeStudio
                 if (SmolvDecoder.Decode(stream, size, decodedStream))
                 {
                     decodedStream.Position = 0;
+                    var spirv = decodedStream.ToArray();
+                    if (SpirvHlslEmitter.TryEmit(spirv, null, 0, 50, out var hlsl, out var diagnostic))
+                    {
+                        return hlsl;
+                    }
+
                     var module = Module.ReadFrom(decodedStream);
                     var disassembler = new Disassembler();
-                    return disassembler.Disassemble(module, DisassemblyOptions.Default).Replace("\r\n", "\n");
+                    var disassembly = disassembler.Disassemble(module, DisassemblyOptions.Default).Replace("\r\n", "\n");
+                    return $"// AnimeStudio: SPIRV-Cross HLSL emission unavailable: {diagnostic}\n{disassembly}";
                 }
                 else
                 {

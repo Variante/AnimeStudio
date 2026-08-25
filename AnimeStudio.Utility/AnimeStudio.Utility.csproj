@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\AnimeStudio.ShaderRecovery\AnimeStudio.ShaderRecovery.csproj" />
     <ProjectReference Include="..\AnimeStudio.PInvoke\AnimeStudio.PInvoke.csproj" />
     <ProjectReference Include="..\AnimeStudio.FBXWrapper\AnimeStudio.FBXWrapper.csproj" />
     <ProjectReference Include="..\AnimeStudio\AnimeStudio.csproj" />
