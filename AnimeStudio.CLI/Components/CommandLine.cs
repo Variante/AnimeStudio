@@ -41,6 +41,9 @@ namespace AnimeStudio.CLI
                 optionsBinder.DummyDllFolder,
                 optionsBinder.MonoBehaviourTypeTreePriorityOption,
                 optionsBinder.ObjectIndexJsonl,
+                optionsBinder.ManagedReferenceDiagnosticsJsonl,
+                optionsBinder.ManagedReferenceDiagnosticTypes,
+                optionsBinder.ManagedReferenceDiagnosticsIncludeExactMatches,
                 optionsBinder.RendererIndexJsonl,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Texture2DNativePayload,
@@ -81,6 +84,9 @@ namespace AnimeStudio.CLI
         public DirectoryInfo DummyDllFolder { get; set; }
         public MonoBehaviourTypeTreePriority MonoBehaviourTypeTreePriority { get; set; }
         public FileInfo ObjectIndexJsonl { get; set; }
+        public FileInfo ManagedReferenceDiagnosticsJsonl { get; set; }
+        public Regex[] ManagedReferenceDiagnosticTypes { get; set; }
+        public bool ManagedReferenceDiagnosticsIncludeExactMatches { get; set; }
         public FileInfo RendererIndexJsonl { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public bool Texture2DNativePayload { get; set; }
@@ -110,6 +116,9 @@ namespace AnimeStudio.CLI
         public readonly Option<DirectoryInfo> DummyDllFolder;
         public readonly Option<MonoBehaviourTypeTreePriority> MonoBehaviourTypeTreePriorityOption;
         public readonly Option<FileInfo> ObjectIndexJsonl;
+        public readonly Option<FileInfo> ManagedReferenceDiagnosticsJsonl;
+        public readonly Option<Regex[]> ManagedReferenceDiagnosticTypes;
+        public readonly Option<bool> ManagedReferenceDiagnosticsIncludeExactMatches;
         public readonly Option<FileInfo> RendererIndexJsonl;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Option<bool> Texture2DNativePayload;
@@ -137,6 +146,20 @@ namespace AnimeStudio.CLI
             DummyDllFolder = new Option<DirectoryInfo>("--dummy_dlls", "Specify DummyDll path.").LegalFilePathsOnly();
             MonoBehaviourTypeTreePriorityOption = new Option<MonoBehaviourTypeTreePriority>("--mono_behaviour_type_tree_priority", "MonoBehaviour TypeTree priority: SerializedFirst or ScriptFirst.");
             ObjectIndexJsonl = new Option<FileInfo>("--object_index_jsonl", "Write a compact original-data object/PPtr/MonoScript JSONL index while exporting JSON.");
+            ManagedReferenceDiagnosticsJsonl = new Option<FileInfo>(
+                "--managed_reference_diagnostics_jsonl",
+                "Write opt-in exact partial managed-reference payload/cursor evidence as atomic JSONL.");
+            ManagedReferenceDiagnosticTypes = new Option<Regex[]>(
+                "--managed_reference_diagnostic_types",
+                ParseRegexFilters,
+                false,
+                "Limit managed-reference diagnostics to matching assembly::namespace.class identities.")
+            {
+                AllowMultipleArgumentsPerToken = true,
+            };
+            ManagedReferenceDiagnosticsIncludeExactMatches = new Option<bool>(
+                "--managed_reference_diagnostics_include_exact_matches",
+                "Include exact decoded references matching --managed_reference_diagnostic_types; requires at least one type filter.");
             RendererIndexJsonl = new Option<FileInfo>("--renderer_index_jsonl", "Write exact serialized GameObject renderer Mesh/Material PPtr relationships as JSONL.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Texture2DNativePayload = new Option<bool>(
@@ -155,6 +178,7 @@ namespace AnimeStudio.CLI
             SecondaryTypeFilter.AddValidator(FilterValidator);
             NameFilter.AddValidator(FilterValidator);
             ContainerFilter.AddValidator(FilterValidator);
+            ManagedReferenceDiagnosticTypes.AddValidator(FilterValidator);
             Key.AddValidator(result =>
             {
                 var value = result.Tokens.Single().Value;
@@ -298,6 +322,9 @@ namespace AnimeStudio.CLI
             DummyDllFolder = bindingContext.ParseResult.GetValueForOption(DummyDllFolder),
             MonoBehaviourTypeTreePriority = bindingContext.ParseResult.GetValueForOption(MonoBehaviourTypeTreePriorityOption),
             ObjectIndexJsonl = bindingContext.ParseResult.GetValueForOption(ObjectIndexJsonl),
+            ManagedReferenceDiagnosticsJsonl = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticsJsonl),
+            ManagedReferenceDiagnosticTypes = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticTypes),
+            ManagedReferenceDiagnosticsIncludeExactMatches = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticsIncludeExactMatches),
             RendererIndexJsonl = bindingContext.ParseResult.GetValueForOption(RendererIndexJsonl),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Texture2DNativePayload = bindingContext.ParseResult.GetValueForOption(Texture2DNativePayload),

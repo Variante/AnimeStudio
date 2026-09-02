@@ -5,6 +5,7 @@ using System;
 using System.Collections;
 using System.Collections.Specialized;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -732,9 +733,12 @@ namespace AnimeStudio.CLI
                 OrderedDictionary recoveredManagedReferences = null;
                 OrderedDictionary managedReferenceRecoveryFailure = null;
                 OrderedDictionary rawPayloadDecodeDiagnostic = null;
+                OrderedDictionary managedReferenceRegistryValidationFailure = null;
                 HashSet<long> expectedManagedReferenceRids = null;
                 var recoveredManagedReferencesTail = false;
                 var recoveredManagedReferencesFullyDecoded = false;
+                var recoveredManagedReferencesAfterValidationFailure = false;
+                long recoveredManagedReferencesStartOffset = -1;
                 var recoveredManagedReferencesStatus = "notRecovered";
                 var rawPayloadDecodedEntryCount = 0;
                 string partialTypeTreeSourceLabel = null;
@@ -839,18 +843,29 @@ namespace AnimeStudio.CLI
 
                 var rawData = m_MonoBehaviour.GetRawData();
                 var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                var hasFinalManagedReferencesRegistry = IsFinalTopLevelTypeTreeField(
+                    exportTypeTree,
+                    "references",
+                    "ManagedReferencesRegistry");
                 if (type != null
                     && partialTypeTreeException != null
                     && TryExtractPartialDecodeStoppedAt(type, out partialTypeTreeStoppedAt)
                     && TryGetPartialDecodeStart(partialTypeTreeStoppedAt, "references", "ManagedReferencesRegistry", out var referencesStartOffset)
-                    && IsFinalTopLevelTypeTreeField(exportTypeTree, "references", "ManagedReferencesRegistry"))
+                    && hasFinalManagedReferencesRegistry)
                 {
                     expectedManagedReferenceRids = CollectManagedReferenceRids(type);
-                    if (TryRecoverManagedReferences(rawData, referencesStartOffset, expectedManagedReferenceRids, out var recoveredReferences, out var recoveryFailure))
+                    if (TryRecoverManagedReferences(
+                        rawData,
+                        referencesStartOffset,
+                        expectedManagedReferenceRids,
+                        out var recoveredReferences,
+                        out var recoveryFailure,
+                        m_MonoBehaviour.assetsFile))
                     {
                         recoveredManagedReferences = recoveredReferences;
                         type["references"] = recoveredReferences;
                         recoveredManagedReferencesTail = true;
+                        recoveredManagedReferencesStartOffset = referencesStartOffset;
                         recoveredManagedReferencesStatus = GetManagedReferenceRecoveryStatus(recoveredReferences);
                         recoveredManagedReferencesFullyDecoded = string.Equals(recoveredManagedReferencesStatus, "fullyDecoded", StringComparison.Ordinal);
                     }
@@ -864,11 +879,75 @@ namespace AnimeStudio.CLI
                     && TryEnrichKnownManagedReferencePayloadsFromRawData(
                         type,
                         rawData,
+                        m_MonoBehaviour.assetsFile,
                         out var enrichedReferences,
                         out rawPayloadDecodeDiagnostic,
                         out rawPayloadDecodedEntryCount))
                 {
                     type["references"] = enrichedReferences;
+                }
+                if (type != null
+                    && hasFinalManagedReferencesRegistry
+                    && !recoveredManagedReferencesTail
+                    && !TryValidateManagedReferenceRegistry(type, out var initialRegistryValidationFailure))
+                {
+                    if (m_MonoBehaviour.TryReadTypePrefixBeforeField(
+                        exportTypeTree,
+                        "references",
+                        "ManagedReferencesRegistry",
+                        out var prefix,
+                        out var validationReferencesStartOffset,
+                        out var prefixReadException))
+                    {
+                        expectedManagedReferenceRids = CollectManagedReferenceRids(prefix);
+                        if (TryRecoverManagedReferences(
+                            rawData,
+                            validationReferencesStartOffset,
+                            expectedManagedReferenceRids,
+                            out var recoveredReferences,
+                            out var recoveryFailure,
+                            m_MonoBehaviour.assetsFile))
+                        {
+                            recoveredManagedReferences = recoveredReferences;
+                            type["references"] = recoveredReferences;
+                            recoveredManagedReferencesTail = true;
+                            recoveredManagedReferencesAfterValidationFailure = true;
+                            recoveredManagedReferencesStartOffset = validationReferencesStartOffset;
+                            recoveredManagedReferencesStatus = GetManagedReferenceRecoveryStatus(recoveredReferences);
+                            recoveredManagedReferencesFullyDecoded = string.Equals(
+                                recoveredManagedReferencesStatus,
+                                "fullyDecoded",
+                                StringComparison.Ordinal);
+                        }
+                        else
+                        {
+                            managedReferenceRecoveryFailure = recoveryFailure;
+                        }
+                    }
+                    else
+                    {
+                        managedReferenceRecoveryFailure = BuildManagedReferenceRecoveryFailure(
+                            "registryPrefixDecodeFailed",
+                            validationReferencesStartOffset,
+                            rawData?.Length ?? -1,
+                            detail: prefixReadException == null
+                                ? "final ManagedReferencesRegistry field was not reached"
+                                : $"{prefixReadException.GetType().Name}: {prefixReadException.Message}");
+                    }
+
+                    if (!recoveredManagedReferencesTail)
+                    {
+                        managedReferenceRegistryValidationFailure = initialRegistryValidationFailure;
+                    }
+                }
+                if (type != null
+                    && hasFinalManagedReferencesRegistry
+                    && !TryValidateManagedReferenceRegistry(type, out managedReferenceRegistryValidationFailure))
+                {
+                    Logger.Warning(
+                        $"ManagedReferencesRegistry validation failed for MonoBehaviour {item.Text}: " +
+                        $"{managedReferenceRegistryValidationFailure?["reason"] ?? "unknown"}"
+                    );
                 }
 
                 if (type == null)
@@ -1008,6 +1087,30 @@ namespace AnimeStudio.CLI
                         }
                     }
                 }
+                if (recoveredManagedReferencesAfterValidationFailure)
+                {
+                    meta["managedReferencesRegistryRecovered"] = true;
+                    meta["managedReferencesRegistryFullyDecoded"] = recoveredManagedReferencesFullyDecoded;
+                    meta["managedReferencesRegistryRecovery"] = new OrderedDictionary
+                    {
+                        { "field", "references" },
+                        { "type", "ManagedReferencesRegistry" },
+                        { "status", recoveredManagedReferencesStatus },
+                        { "source", typeTreeSource },
+                        { "trigger", "registryValidationFailure" },
+                        { "registryStartOffset", recoveredManagedReferencesStartOffset },
+                        { "expectedRidCount", expectedManagedReferenceRids?.Count ?? 0 },
+                        { "registryCount", recoveredManagedReferences?["count"] ?? 0 },
+                        { "recoveredRidCount", recoveredManagedReferences?["RefIds"] is ICollection recoveredRefIds
+                            ? recoveredRefIds.Count
+                            : 0 },
+                    };
+                }
+                else if (managedReferenceRecoveryFailure != null && partialTypeTreeException == null)
+                {
+                    meta["managedReferencesRegistryRecoveryAttempted"] = true;
+                    meta["managedReferencesRegistryRecoveryFailure"] = managedReferenceRecoveryFailure;
+                }
                 if (rawPayloadDecodedEntryCount > 0)
                 {
                     meta["managedReferencesRawPayloadDecoded"] = true;
@@ -1017,14 +1120,29 @@ namespace AnimeStudio.CLI
                         meta["managedReferencesRawPayloadDecode"] = rawPayloadDecodeDiagnostic;
                     }
                 }
+                if (managedReferenceRegistryValidationFailure != null)
+                {
+                    meta["managedReferencesRegistryValidationFailed"] = true;
+                    meta["managedReferencesRegistryValidationFailure"] = managedReferenceRegistryValidationFailure;
+                }
+                var managedReferenceRegistryInvalid = managedReferenceRegistryValidationFailure != null;
+                var decodeIsPartial = (partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded)
+                    || (recoveredManagedReferencesAfterValidationFailure && !recoveredManagedReferencesFullyDecoded)
+                    || managedReferenceRegistryInvalid;
+                var decodeError = partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded
+                    ? $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}"
+                    : recoveredManagedReferencesAfterValidationFailure && !recoveredManagedReferencesFullyDecoded
+                        ? $"ManagedReferencesRegistry recovery status: {recoveredManagedReferencesStatus}"
+                    : managedReferenceRegistryInvalid
+                        ? $"ManagedReferencesRegistry validation failed: {managedReferenceRegistryValidationFailure["reason"]}"
+                        : null;
+                ManagedReferenceDiagnosticsJsonlWriter.Current?.WriteObject(item, type, rawData);
                 ObjectIndexJsonlWriter.Current?.WriteObject(
                     item,
                     type,
                     meta,
-                    partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded ? "partial" : "decoded",
-                    partialTypeTreeException != null && !recoveredManagedReferencesFullyDecoded
-                        ? $"{partialTypeTreeException.GetType().Name}: {partialTypeTreeException.Message}"
-                        : null
+                    decodeIsPartial ? "partial" : "decoded",
+                    decodeError
                 );
                 type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
@@ -1090,7 +1208,7 @@ namespace AnimeStudio.CLI
             return startOffset >= 0;
         }
 
-        private static bool IsFinalTopLevelTypeTreeField(TypeTree typeTree, string fieldName, string fieldType)
+        internal static bool IsFinalTopLevelTypeTreeField(TypeTree typeTree, string fieldName, string fieldType)
         {
             var nodes = typeTree?.m_Nodes;
             if (nodes == null)
@@ -1205,6 +1323,7 @@ namespace AnimeStudio.CLI
         private static bool TryEnrichKnownManagedReferencePayloadsFromRawData(
             OrderedDictionary type,
             byte[] rawData,
+            SerializedFile serializedFile,
             out OrderedDictionary enrichedReferences,
             out OrderedDictionary diagnostic,
             out int decodedEntryCount
@@ -1270,7 +1389,13 @@ namespace AnimeStudio.CLI
                     continue;
                 }
 
-                if (!TryRecoverManagedReferences(rawData, startOffset, expectedRids, out var recoveredReferences, out _)
+                if (!TryRecoverManagedReferences(
+                    rawData,
+                    startOffset,
+                    expectedRids,
+                    out var recoveredReferences,
+                    out _,
+                    serializedFile)
                     || !TryGetManagedReferenceEntries(recoveredReferences, out var recoveredEntries)
                     || recoveredEntries.Count != expectedCount)
                 {
@@ -1347,6 +1472,7 @@ namespace AnimeStudio.CLI
                     existingEntry,
                     rawData,
                     expectedRids,
+                    serializedFile,
                     out var decodedData,
                     out var dataOffset,
                     out var dataLength))
@@ -1382,6 +1508,7 @@ namespace AnimeStudio.CLI
             OrderedDictionary existingEntry,
             byte[] rawData,
             IReadOnlySet<long> expectedRids,
+            SerializedFile serializedFile,
             out OrderedDictionary decodedData,
             out int dataOffset,
             out int dataLength
@@ -1429,7 +1556,8 @@ namespace AnimeStudio.CLI
                     dataLength,
                     recoveredByRid,
                     ref remainingStringHintBudget,
-                    ref remainingRidLinkBudget);
+                    ref remainingRidLinkBudget,
+                    serializedFile);
                 if (!IsDecodedManagedReferenceData(data))
                 {
                     continue;
@@ -1558,6 +1686,134 @@ namespace AnimeStudio.CLI
             return true;
         }
 
+        internal static bool TryValidateManagedReferenceRegistry(
+            OrderedDictionary type,
+            out OrderedDictionary diagnostic
+        )
+        {
+            diagnostic = null;
+            if (type == null || !type.Contains("references"))
+            {
+                return true;
+            }
+            if (type["references"] is not OrderedDictionary references)
+            {
+                diagnostic = BuildManagedReferenceValidationFailure("registryIsNotObject");
+                return false;
+            }
+            if (!TryGetDictionaryValue(references, "version", out var versionValue)
+                || !TryConvertToInt64(versionValue, out var version)
+                || version < 1
+                || version > 3)
+            {
+                diagnostic = BuildManagedReferenceValidationFailure("invalidRegistryVersion");
+                return false;
+            }
+            if (!TryGetDictionaryValue(references, "RefIds", out var refIdsValue)
+                || refIdsValue is string
+                || refIdsValue is not IEnumerable refIds)
+            {
+                diagnostic = BuildManagedReferenceValidationFailure("refIdsIsNotArray");
+                return false;
+            }
+
+            var seenRids = new HashSet<long>();
+            var entryIndex = 0;
+            foreach (var value in refIds)
+            {
+                if (value is not OrderedDictionary entry)
+                {
+                    diagnostic = BuildManagedReferenceValidationFailure("entryIsNotObject", entryIndex);
+                    return false;
+                }
+                if (!TryGetManagedReferenceRid(entry, out var rid) || rid == 0)
+                {
+                    diagnostic = BuildManagedReferenceValidationFailure("invalidRid", entryIndex, rid);
+                    return false;
+                }
+                if (!seenRids.Add(rid))
+                {
+                    diagnostic = BuildManagedReferenceValidationFailure("duplicateRid", entryIndex, rid);
+                    return false;
+                }
+                if (!TryGetManagedReferenceTypeStrings(entry, out var className, out var namespaceName, out var assemblyName))
+                {
+                    diagnostic = BuildManagedReferenceValidationFailure("missingType", entryIndex, rid);
+                    return false;
+                }
+
+                var isNullSentinel = rid < 0
+                    && string.IsNullOrEmpty(className)
+                    && string.IsNullOrEmpty(namespaceName)
+                    && string.IsNullOrEmpty(assemblyName);
+                if ((rid < 0 && !isNullSentinel)
+                    || (rid > 0
+                        && (!LooksLikeManagedReferenceClassName(className)
+                            || !LooksLikeManagedReferenceNamespace(namespaceName)
+                            || !LooksLikeManagedReferenceAssemblyName(assemblyName))))
+                {
+                    diagnostic = BuildManagedReferenceValidationFailure(
+                        "invalidTypeHeader",
+                        entryIndex,
+                        rid,
+                        className,
+                        namespaceName,
+                        assemblyName);
+                    return false;
+                }
+                entryIndex++;
+            }
+
+            if (TryGetDictionaryValue(references, "count", out var countValue)
+                && (!TryConvertToInt64(countValue, out var count) || count != entryIndex))
+            {
+                diagnostic = BuildManagedReferenceValidationFailure("registryCountMismatch");
+                diagnostic["actualCount"] = entryIndex;
+                diagnostic["declaredCount"] = countValue?.ToString() ?? string.Empty;
+                return false;
+            }
+            return true;
+        }
+
+        private static OrderedDictionary BuildManagedReferenceValidationFailure(
+            string reason,
+            int? entryIndex = null,
+            long? rid = null,
+            string className = null,
+            string namespaceName = null,
+            string assemblyName = null
+        )
+        {
+            var diagnostic = new OrderedDictionary
+            {
+                { "reason", reason },
+                { "field", "references" },
+                { "type", "ManagedReferencesRegistry" },
+            };
+            if (entryIndex.HasValue)
+            {
+                diagnostic["entryIndex"] = entryIndex.Value;
+            }
+            if (rid.HasValue)
+            {
+                diagnostic["rid"] = rid.Value;
+            }
+            if (className != null)
+            {
+                diagnostic["class"] = BoundManagedReferenceDiagnosticString(className);
+                diagnostic["namespace"] = BoundManagedReferenceDiagnosticString(namespaceName);
+                diagnostic["assembly"] = BoundManagedReferenceDiagnosticString(assemblyName);
+            }
+            return diagnostic;
+        }
+
+        private static string BoundManagedReferenceDiagnosticString(string value)
+        {
+            value ??= string.Empty;
+            const int maxLength = 120;
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+        }
+
         private static bool IsDecodedManagedReferenceData(object data)
         {
             return data is OrderedDictionary dictionary
@@ -1602,7 +1858,8 @@ namespace AnimeStudio.CLI
             long startOffset,
             IReadOnlySet<long> expectedRids,
             out OrderedDictionary references,
-            out OrderedDictionary diagnostic
+            out OrderedDictionary diagnostic,
+            SerializedFile serializedFile = null
         )
         {
             references = null;
@@ -1686,7 +1943,8 @@ namespace AnimeStudio.CLI
                         dataLength,
                         recoveredByRid,
                         ref remainingStringHintBudget,
-                        ref remainingRidLinkBudget) },
+                        ref remainingRidLinkBudget,
+                        serializedFile) },
                 });
             }
 
@@ -1960,7 +2218,8 @@ namespace AnimeStudio.CLI
             int length,
             IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
             ref int remainingStringHintBudget,
-            ref int remainingRidLinkBudget
+            ref int remainingRidLinkBudget,
+            SerializedFile serializedFile = null
         )
         {
             if (header?.IsNullSentinel == true && length == 0)
@@ -1972,6 +2231,24 @@ namespace AnimeStudio.CLI
                     { "offset", offset },
                     { "length", length },
                 };
+            }
+
+            // These large layouts previously needed hand-maintained semantic readers because
+            // ReferencedObjectData has no inline TypeTree size. Once the exact serialized
+            // managed-reference TypeTree is available, prefer it when it consumes the whole
+            // bounded payload; the existing guarded readers remain the fail-closed fallback for
+            // builds whose serialized layout differs from the resolved TypeTree.
+            if (ShouldPreferExactSerializedManagedReferenceTypeTree(header)
+                && TryDecodeSerializedManagedReferenceTypeTree(
+                    serializedFile,
+                    header,
+                    rawData,
+                    offset,
+                    length,
+                    out var exactTypeTreeData,
+                    out _))
+            {
+                return exactTypeTreeData;
             }
 
             if (TryDecodeDialogMainFlowData(
@@ -2034,6 +2311,7 @@ namespace AnimeStudio.CLI
                 recoveredByRid,
                 out decodedData))
             {
+                MarkExactTypeTreeDecoded(decodedData);
                 return decodedData;
             }
 
@@ -2275,6 +2553,18 @@ namespace AnimeStudio.CLI
                 return decodedData;
             }
 
+            if (TryDecodeSerializedManagedReferenceTypeTree(
+                serializedFile,
+                header,
+                rawData,
+                offset,
+                length,
+                out decodedData,
+                out var serializedTypeTreeDecodeFailure))
+            {
+                return decodedData;
+            }
+
             var data = new OrderedDictionary
             {
                 { "$unparsed", true },
@@ -2282,6 +2572,10 @@ namespace AnimeStudio.CLI
                 { "offset", offset },
                 { "length", length },
             };
+            if (!string.IsNullOrEmpty(serializedTypeTreeDecodeFailure))
+            {
+                data["serializedTypeTreeDecodeFailure"] = serializedTypeTreeDecodeFailure;
+            }
             if (TryBuildDialogActionTimingPrefix(header, rawData, offset, length, out var actionTimingPrefix))
             {
                 data["inferredActionTimingPrefix"] = actionTimingPrefix;
@@ -2317,6 +2611,209 @@ namespace AnimeStudio.CLI
             }
 
             return data;
+        }
+
+        private static bool ShouldPreferExactSerializedManagedReferenceTypeTree(
+            ManagedReferenceHeader header)
+        {
+            if (header == null
+                || !string.Equals(header.AssemblyName, "Gameplay.Beyond", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return (header.Namespace, header.ClassName) switch
+            {
+                ("Beyond.Gameplay", "AbilityEntityTemplateData") => true,
+                ("Beyond.Gameplay", "LineFollower") => true,
+                ("Beyond.Gameplay", "RemoteFactoryEntityTemplateData") => true,
+                ("Beyond.Gameplay.Actions", "BlendToCameraTransform") => true,
+                ("Beyond.Gameplay.Actions", "CreateEffectAtPosition") => true,
+                ("Beyond.Gameplay.Core", "CharacterMovementComponentData") => true,
+                ("Beyond.Gameplay.Core", "CheckBuffStackNumAdvanced/Data") => true,
+                ("Beyond.Gameplay.Core", "CreateBuffAction/Data") => true,
+                ("Beyond.Gameplay.Core", "ProjectileComponentData") => true,
+                ("Beyond.Gameplay.InteractiveEvent", "AttachToInstigator") => true,
+                ("Beyond.Gameplay.InteractiveEvent", "EnterThrowMode") => true,
+                ("Beyond.Gameplay.InteractiveEvent", "InteractiveEventComponentData") => true,
+                ("Beyond.Gameplay.View", "CameraControlAutoPitchConfig") => true,
+                ("Beyond.Gameplay.View", "CameraControlAutoYawConfig") => true,
+                ("Beyond.Gameplay.View", "CameraControlAutoZoomConfig") => true,
+                ("Beyond.Gameplay.View", "CameraControlFightOrbitConfig") => true,
+                ("Beyond.Gameplay.View", "CameraControlWaterDroneConfig") => true,
+                ("Beyond.Gameplay.View", "CameraControlWaterLimitConfig") => true,
+                _ => false,
+            };
+        }
+
+        private static bool TryDecodeSerializedManagedReferenceTypeTree(
+            SerializedFile serializedFile,
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data,
+            out string failure)
+        {
+            data = null;
+            failure = null;
+            if (serializedFile == null || header == null || rawData == null)
+            {
+                return false;
+            }
+
+            var assemblyName = NormalizeManagedReferenceAssemblyName(header.AssemblyName);
+            var matches = (serializedFile.m_RefTypes ?? new List<SerializedType>())
+                .Where(candidate => candidate?.m_Type?.m_Nodes != null
+                    && string.Equals(candidate.m_KlassName ?? string.Empty, header.ClassName, StringComparison.Ordinal)
+                    && string.Equals(candidate.m_NameSpace ?? string.Empty, header.Namespace, StringComparison.Ordinal)
+                    && string.Equals(
+                        NormalizeManagedReferenceAssemblyName(candidate.m_AsmName),
+                        assemblyName,
+                        StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count != 1)
+            {
+                if (matches.Count > 1)
+                {
+                    failure = $"serialized managed-reference TypeTree is ambiguous ({matches.Count} matches)";
+                }
+                return false;
+            }
+
+            var typeTree = matches[0].m_Type;
+            var registryNodes = typeTree.m_Nodes
+                .Select((node, index) => (Node: node, Index: index))
+                .Where(item => string.Equals(
+                    item.Node.m_Type,
+                    "ManagedReferencesRegistry",
+                    StringComparison.Ordinal))
+                .ToList();
+            var payloadTypeTree = typeTree;
+            var omittedFinalRegistry = false;
+            if (registryNodes.Count > 0)
+            {
+                if (registryNodes.Count != 1
+                    || registryNodes[0].Node.m_Level != 1
+                    || !IsFinalTopLevelTypeTreeField(
+                        typeTree,
+                        registryNodes[0].Node.m_Name,
+                        "ManagedReferencesRegistry"))
+                {
+                    failure = "serialized managed-reference TypeTree contains a non-final or nested ManagedReferencesRegistry";
+                    return false;
+                }
+                payloadTypeTree = new TypeTree
+                {
+                    m_Nodes = typeTree.m_Nodes.Take(registryNodes[0].Index).ToList(),
+                    m_StringBuffer = typeTree.m_StringBuffer,
+                };
+                omittedFinalRegistry = true;
+            }
+
+            try
+            {
+                var fields = TypeTreeHelper.ReadTypePayload(
+                    payloadTypeTree,
+                    rawData,
+                    offset,
+                    length,
+                    out var bytesRead);
+                if (bytesRead != length)
+                {
+                    failure = $"serialized managed-reference TypeTree consumed {bytesRead} of {length} bytes";
+                    return false;
+                }
+
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "exactTypeTreeDecoded", true },
+                    { "layout", $"{header.Namespace}.{header.ClassName}".TrimStart('.') },
+                    { "serializedLayoutSource", "managed-reference TypeTree" },
+                    { "serializedTypeTreeNodeCount", typeTree.m_Nodes.Count },
+                    { "offset", offset },
+                    { "length", length },
+                };
+                foreach (DictionaryEntry entry in fields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+                if (omittedFinalRegistry)
+                {
+                    data["serializedManagedReferencesRegistry"] = "stored outside this individual reference payload";
+                }
+                data["observedPayloadStatus"] = "all serialized managed-reference TypeTree fields consumed";
+                return true;
+            }
+            catch (Exception ex) when (ex is EndOfStreamException
+                || ex is InvalidDataException
+                || ex is ArgumentException)
+            {
+                failure = $"{ex.GetType().Name}: {ex.Message}";
+                data = null;
+                return false;
+            }
+        }
+
+        private static string NormalizeManagedReferenceAssemblyName(string value)
+        {
+            var normalized = value ?? string.Empty;
+            return normalized.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                ? normalized.Substring(0, normalized.Length - 4)
+                : normalized;
+        }
+
+        internal static OrderedDictionary DecodeManagedReferencePayloadForTesting(
+            string className,
+            string namespaceName,
+            string assemblyName,
+            byte[] payload
+        )
+        {
+            payload ??= Array.Empty<byte>();
+            var header = new ManagedReferenceHeader
+            {
+                Rid = 1,
+                ClassName = className ?? string.Empty,
+                Namespace = namespaceName ?? string.Empty,
+                AssemblyName = assemblyName ?? string.Empty,
+                HeaderStart = 0,
+                DataStart = 0,
+            };
+            var recoveredByRid = new Dictionary<long, ManagedReferenceHeader>
+            {
+                { header.Rid, header },
+            };
+            var remainingStringHintBudget = MaxHeuristicStringHintsPerReference;
+            var remainingRidLinkBudget = MaxHeuristicRidLinksPerReference;
+            return BuildManagedReferenceData(
+                header,
+                payload,
+                0,
+                payload.Length,
+                recoveredByRid,
+                ref remainingStringHintBudget,
+                ref remainingRidLinkBudget);
+        }
+
+        private static void MarkExactTypeTreeDecoded(OrderedDictionary data)
+        {
+            if (data == null
+                || !data.Contains("$decoded")
+                || data["$decoded"] is not bool decoded
+                || !decoded)
+            {
+                return;
+            }
+            foreach (var marker in new[] { "$partial", "$unparsed", "$heuristic" })
+            {
+                if (data.Contains(marker) && data[marker] is bool value && value)
+                {
+                    return;
+                }
+            }
+            data["exactTypeTreeDecoded"] = true;
         }
 
         private static bool ShouldEmitFullManagedReferencePayloadTrace(ManagedReferenceHeader header)
@@ -2875,6 +3372,9 @@ namespace AnimeStudio.CLI
             private readonly byte[] rawData;
             private readonly int start;
             private readonly int end;
+            private string activeField;
+            private string lastCompletedField;
+            private int lastCompletedCursor;
 
             public ManagedReferencePayloadReader(byte[] rawData, int offset, int length)
             {
@@ -2900,7 +3400,8 @@ namespace AnimeStudio.CLI
             {
                 if (position < start || position > end)
                 {
-                    throw new InvalidDataException("payload reader position is outside payload bounds");
+                    BeginField("$position");
+                    throw CreateException("payload reader position is outside payload bounds");
                 }
                 Position = position;
             }
@@ -2909,72 +3410,100 @@ namespace AnimeStudio.CLI
             {
                 if (Position != end)
                 {
-                    throw new InvalidDataException($"payload parser stopped at {Position}, expected {end}");
+                    BeginField("$end");
+                    throw CreateException($"payload parser stopped at {Position}, expected {end}");
                 }
+            }
+
+            public InvalidDataException CreateFailure(
+                string fieldName,
+                string message,
+                int? requestedBytes = null
+            )
+            {
+                BeginField(fieldName);
+                return CreateException(message, requestedBytes: requestedBytes);
             }
 
             public int ReadInt32(string fieldName)
             {
+                BeginField(fieldName);
                 EnsureAvailable(4, fieldName);
                 var value = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4));
                 Position += 4;
+                CompleteField();
                 return value;
             }
 
             public long ReadInt64(string fieldName)
             {
+                BeginField(fieldName);
                 EnsureAvailable(8, fieldName);
                 var value = BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(Position, 8));
                 Position += 8;
+                CompleteField();
                 return value;
             }
 
             public float ReadFloat(string fieldName)
             {
-                var value = BitConverter.Int32BitsToSingle(ReadInt32(fieldName));
+                BeginField(fieldName);
+                EnsureAvailable(4, fieldName);
+                var value = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4)));
+                Position += 4;
                 if (float.IsNaN(value) || float.IsInfinity(value))
                 {
-                    throw new InvalidDataException($"invalid float in {fieldName}");
+                    throw CreateException($"invalid float in {fieldName}");
                 }
+                CompleteField();
                 return value;
             }
 
             public double ReadDouble(string fieldName)
             {
+                BeginField(fieldName);
                 EnsureAvailable(8, fieldName);
                 var value = BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(rawData.AsSpan(Position, 8)));
                 Position += 8;
                 if (double.IsNaN(value) || double.IsInfinity(value))
                 {
-                    throw new InvalidDataException($"invalid double in {fieldName}");
+                    throw CreateException($"invalid double in {fieldName}");
                 }
+                CompleteField();
                 return value;
             }
 
             public bool ReadBool32(string fieldName)
             {
-                var value = ReadInt32(fieldName);
+                BeginField(fieldName);
+                EnsureAvailable(4, fieldName);
+                var value = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4));
+                Position += 4;
                 if (value != 0 && value != 1)
                 {
-                    throw new InvalidDataException($"invalid bool32 {value} in {fieldName}");
+                    throw CreateException($"invalid bool32 {value} in {fieldName}");
                 }
+                CompleteField();
                 return value != 0;
             }
 
             public string ReadAlignedAsciiString(string fieldName)
             {
+                BeginField(fieldName);
                 var stringOffset = Position;
-                var length = ReadInt32(fieldName);
+                EnsureAvailable(4, fieldName);
+                var length = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4));
+                Position += 4;
                 if (length < 0 || length > 512)
                 {
-                    throw new InvalidDataException($"invalid string length {length} in {fieldName}");
+                    throw CreateException($"invalid string length {length} in {fieldName}");
                 }
                 EnsureAvailable(length, fieldName);
                 for (var i = Position; i < Position + length; i++)
                 {
                     if (rawData[i] < 0x20 || rawData[i] > 0x7E)
                     {
-                        throw new InvalidDataException($"non-ASCII byte in {fieldName} at {i}");
+                        throw CreateException($"non-ASCII byte in {fieldName} at {i}");
                     }
                 }
 
@@ -2982,18 +3511,22 @@ namespace AnimeStudio.CLI
                 Position = (Position + length + 3) & ~3;
                 if (Position > end)
                 {
-                    throw new InvalidDataException($"aligned string {fieldName} at {stringOffset} passes payload end");
+                    throw CreateException($"aligned string {fieldName} at {stringOffset} passes payload end");
                 }
+                CompleteField();
                 return value;
             }
 
             public string ReadAlignedUtf8String(string fieldName)
             {
+                BeginField(fieldName);
                 var stringOffset = Position;
-                var length = ReadInt32(fieldName);
+                EnsureAvailable(4, fieldName);
+                var length = BinaryPrimitives.ReadInt32LittleEndian(rawData.AsSpan(Position, 4));
+                Position += 4;
                 if (length < 0 || length > 1024)
                 {
-                    throw new InvalidDataException($"invalid string length {length} in {fieldName}");
+                    throw CreateException($"invalid string length {length} in {fieldName}");
                 }
                 EnsureAvailable(length, fieldName);
 
@@ -3004,14 +3537,15 @@ namespace AnimeStudio.CLI
                 }
                 catch (DecoderFallbackException ex)
                 {
-                    throw new InvalidDataException($"invalid UTF-8 bytes in {fieldName}", ex);
+                    throw CreateException($"invalid UTF-8 bytes in {fieldName}", ex);
                 }
 
                 Position = (Position + length + 3) & ~3;
                 if (Position > end)
                 {
-                    throw new InvalidDataException($"aligned string {fieldName} at {stringOffset} passes payload end");
+                    throw CreateException($"aligned string {fieldName} at {stringOffset} passes payload end");
                 }
+                CompleteField();
                 return value;
             }
 
@@ -3019,8 +3553,41 @@ namespace AnimeStudio.CLI
             {
                 if (byteCount < 0 || Position > end - byteCount)
                 {
-                    throw new InvalidDataException($"not enough bytes for {fieldName}");
+                    throw CreateException($"not enough bytes for {fieldName}", requestedBytes: byteCount);
                 }
+            }
+
+            private void BeginField(string fieldName)
+            {
+                activeField = string.IsNullOrWhiteSpace(fieldName) ? "$unknown" : fieldName;
+            }
+
+            private void CompleteField()
+            {
+                lastCompletedField = activeField;
+                lastCompletedCursor = Position;
+                activeField = null;
+            }
+
+            private InvalidDataException CreateException(
+                string message,
+                Exception innerException = null,
+                int? requestedBytes = null
+            )
+            {
+                var exception = new InvalidDataException(message, innerException);
+                exception.Data["managedReference.entryStart"] = start;
+                exception.Data["managedReference.entryEnd"] = end;
+                exception.Data["managedReference.absoluteCursor"] = Position;
+                exception.Data["managedReference.relativeCursor"] = Position - start;
+                exception.Data["managedReference.activeField"] = activeField ?? string.Empty;
+                exception.Data["managedReference.lastCompletedField"] = lastCompletedField ?? string.Empty;
+                exception.Data["managedReference.lastCompletedCursor"] = lastCompletedCursor;
+                if (requestedBytes.HasValue)
+                {
+                    exception.Data["managedReference.requestedBytes"] = requestedBytes.Value;
+                }
+                return exception;
             }
         }
 
@@ -3274,6 +3841,62 @@ namespace AnimeStudio.CLI
                         { "offset", offset },
                         { "length", length },
                         { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isRootGuideCondition
+                    && string.Equals(header.ClassName, "CheckIsPortableDeviceActive", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "exactTypeTreeDecoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.CheckIsPortableDeviceActive" },
+                        { "serializedLayoutSource", "managed-reference TypeTree" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "_itemId", ReadGuideActionParamString(reader, "_itemId") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnDomainDepotMainPanelOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnDomainDepotMainPanelOpen" },
+                        { "serializedLayoutSource", "managed-reference TypeTree" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "_domainId", ReadGuideActionParamString(reader, "_domainId") },
+                        { "_waitAnimationIn", ReadGuideActionParamBool(reader, "_waitAnimationIn") },
+                    };
+                    reader.EnsureComplete();
+                    return true;
+                }
+
+                if (isGuideCondition
+                    && string.Equals(header.ClassName, "OnFacBlueprintTabOpen", StringComparison.Ordinal))
+                {
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.Conditions.OnFacBlueprintTabOpen" },
+                        { "serializedLayoutSource", "managed-reference TypeTree" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "conditionBase", ReadGuideConditionBase(reader, "conditionBase") },
+                        { "_tabType", ReadGuideActionParamInt(reader, "_tabType") },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -4542,6 +5165,7 @@ namespace AnimeStudio.CLI
             }
             catch (InvalidDataException ex)
             {
+                RecordManagedReferenceDecodeFailure(header, offset, length, ex);
                 data = BuildKnownManagedReferenceDecodeFailureData(
                     rawData,
                     offset,
@@ -4583,6 +5207,28 @@ namespace AnimeStudio.CLI
                 data = CreateGuideActionData(header, offset, length);
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
                 data["systemId"] = ReadGuideActionParamString(reader, "systemId");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "UIToggleSetValue", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["_togglePath"] = ReadGuideActionParamString(reader, "_togglePath");
+                data["_isOn"] = ReadGuideActionParamBool(reader, "_isOn");
+                reader.EnsureComplete();
+                return true;
+            }
+
+            if (string.Equals(header.ClassName, "GenUIScrollListCellArea", StringComparison.Ordinal))
+            {
+                data = CreateGuideActionData(header, offset, length);
+                data["serializedLayoutSource"] = "managed-reference TypeTree";
+                data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
+                data["_listPath"] = ReadGuideActionParamString(reader, "_listPath");
+                data["_startIndex"] = ReadGuideActionParamInt(reader, "_startIndex");
+                data["_endIndex"] = ReadGuideActionParamInt(reader, "_endIndex");
                 reader.EnsureComplete();
                 return true;
             }
@@ -4867,11 +5513,14 @@ namespace AnimeStudio.CLI
             if (string.Equals(header.ClassName, "BlendOutFromCamera", StringComparison.Ordinal))
             {
                 data = CreateGuideActionData(header, offset, length);
+                data["serializedLayoutSource"] = "managed-reference TypeTree";
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
-                data["blendTime"] = ReadGuideActionParamFloat(reader, "blendTime");
+                data["_blendTime"] = ReadGuideActionParamFloat(reader, "_blendTime");
                 data["overrideBlend"] = ReadGuideActionParamBool(reader, "overrideBlend");
                 data["blendStyle"] = ReadGuideActionParamInt(reader, "blendStyle");
+                data["blendCurveKey"] = ReadGuideActionParamString(reader, "blendCurveKey");
                 data["useBlackScreen"] = ReadGuideActionParamBool(reader, "useBlackScreen");
+                data["_resetType"] = ReadGuideActionParamInt(reader, "_resetType");
                 reader.EnsureComplete();
                 return true;
             }
@@ -4894,6 +5543,8 @@ namespace AnimeStudio.CLI
                 data["actionBase"] = ReadGuideActionBase(reader, "actionBase");
                 data["pos"] = ReadGuideActionParamVector3(reader, "pos");
                 data["rot"] = ReadGuideActionParamVector3(reader, "rot");
+                data["_useAngleMin"] = ReadGuideActionParamBool(reader, "_useAngleMin");
+                data["_alternativeCameraPoses"] = ReadGuideActionParamPosRotList(reader, "_alternativeCameraPoses");
                 data["fov"] = ReadGuideActionParamFloat(reader, "fov");
                 data["duration"] = ReadGuideActionParamFloat(reader, "duration");
                 data["needInterruptMainHudAction"] = ReadGuideActionParamBool(reader, "needInterruptMainHudAction");
@@ -4901,9 +5552,12 @@ namespace AnimeStudio.CLI
                 data["tweenTime"] = ReadGuideActionParamFloat(reader, "tweenTime");
                 data["overrideBlend"] = ReadGuideActionParamBool(reader, "overrideBlend");
                 data["blendStyle"] = ReadGuideActionParamInt(reader, "blendStyle");
+                data["blendCurveKey"] = ReadGuideActionParamString(reader, "blendCurveKey");
                 data["useYawCheck"] = ReadGuideActionParamBool(reader, "useYawCheck");
                 data["advancedMode"] = ReadGuideActionParamBool(reader, "advancedMode");
                 data["ignoreProtect"] = ReadGuideActionParamBool(reader, "ignoreProtect");
+                data["sceneViewOverrideFov"] = ReadGuideActionParamBool(reader, "sceneViewOverrideFov");
+                data["serializedLayoutSource"] = "managed-reference TypeTree";
                 reader.EnsureComplete();
                 return true;
             }
@@ -5050,6 +5704,8 @@ namespace AnimeStudio.CLI
         {
             return string.Equals(className, "RecoverMainHud", StringComparison.Ordinal)
                 || string.Equals(className, "ExitFacBuildMode", StringComparison.Ordinal)
+                || string.Equals(className, "FacResetBlueprintFilter", StringComparison.Ordinal)
+                || string.Equals(className, "ClearManualCraftFilterRecord", StringComparison.Ordinal)
                 || string.Equals(className, "EnterFacBeltBuildMode", StringComparison.Ordinal)
                 || string.Equals(className, "FacMainHudCloseMobileBox", StringComparison.Ordinal)
                 || string.Equals(className, "HideItemTips", StringComparison.Ordinal)
@@ -5288,6 +5944,7 @@ namespace AnimeStudio.CLI
             }
             catch (InvalidDataException ex) when (IsCoreProjectileComponentData(header))
             {
+                RecordManagedReferenceDecodeFailure(header, offset, length, ex);
                 data = BuildKnownManagedReferenceDecodeFailureData(
                     rawData,
                     offset,
@@ -5356,6 +6013,82 @@ namespace AnimeStudio.CLI
 
             return data;
         }
+
+        private static OrderedDictionary BuildManagedReferenceDecodeFailureDiagnostic(
+            Exception exception,
+            int entryStart,
+            int entryLength
+        )
+        {
+            var diagnostic = new OrderedDictionary
+            {
+                { "exceptionType", exception?.GetType().Name ?? "InvalidDataException" },
+                { "message", exception?.Message ?? "managed-reference decoder failed" },
+                { "entryStart", entryStart },
+                { "entryEnd", (long)entryStart + entryLength },
+            };
+            if (exception?.Data == null
+                || !exception.Data.Contains("managedReference.absoluteCursor"))
+            {
+                diagnostic["cursorAvailable"] = false;
+                return diagnostic;
+            }
+
+            var stageStart = Convert.ToInt32(exception.Data["managedReference.entryStart"], CultureInfo.InvariantCulture);
+            var stageEnd = Convert.ToInt32(exception.Data["managedReference.entryEnd"], CultureInfo.InvariantCulture);
+            var absoluteCursor = Convert.ToInt32(exception.Data["managedReference.absoluteCursor"], CultureInfo.InvariantCulture);
+            var lastCompletedCursor = Convert.ToInt32(exception.Data["managedReference.lastCompletedCursor"], CultureInfo.InvariantCulture);
+            diagnostic["cursorAvailable"] = true;
+            diagnostic["absoluteCursor"] = absoluteCursor;
+            diagnostic["relativeCursor"] = absoluteCursor - entryStart;
+            diagnostic["stageStart"] = stageStart;
+            diagnostic["stageEnd"] = stageEnd;
+            diagnostic["stageRelativeCursor"] = absoluteCursor - stageStart;
+            diagnostic["activeField"] = Convert.ToString(exception.Data["managedReference.activeField"], CultureInfo.InvariantCulture) ?? string.Empty;
+            diagnostic["lastCompletedField"] = Convert.ToString(exception.Data["managedReference.lastCompletedField"], CultureInfo.InvariantCulture) ?? string.Empty;
+            diagnostic["lastCompletedCursor"] = lastCompletedCursor;
+            diagnostic["lastCompletedRelativeCursor"] = lastCompletedCursor - entryStart;
+            diagnostic["lastCompletedStageRelativeCursor"] = lastCompletedCursor - stageStart;
+            diagnostic["remainingBytes"] = ((long)entryStart + entryLength) - absoluteCursor;
+            if (exception.Data.Contains("managedReference.requestedBytes"))
+            {
+                diagnostic["requestedBytes"] = Convert.ToInt32(exception.Data["managedReference.requestedBytes"], CultureInfo.InvariantCulture);
+            }
+            return diagnostic;
+        }
+
+        private static void RecordManagedReferenceDecodeFailure(
+            ManagedReferenceHeader header,
+            int offset,
+            int length,
+            Exception exception,
+            string stage = null,
+            OrderedDictionary context = null
+        )
+        {
+            if (header == null || ManagedReferenceDiagnosticsJsonlWriter.Current == null)
+            {
+                return;
+            }
+            var diagnostic = BuildManagedReferenceDecodeFailureDiagnostic(exception, offset, length);
+            if (!string.IsNullOrEmpty(stage))
+            {
+                diagnostic["stage"] = stage;
+            }
+            if (context != null && context.Count > 0)
+            {
+                diagnostic["context"] = context;
+            }
+            ManagedReferenceDiagnosticsJsonlWriter.Current.RecordDecodeFailure(
+                header.Rid,
+                header.ClassName,
+                header.Namespace,
+                header.AssemblyName,
+                offset,
+                length,
+                diagnostic);
+        }
+
         private static bool TryDecodeProjectileComponentData(
             ManagedReferenceHeader header,
             ManagedReferencePayloadReader reader,
@@ -7758,19 +8491,7 @@ namespace AnimeStudio.CLI
                 if (string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyCastSkillResponse/EnemyCastSkillResponseData", StringComparison.Ordinal))
                 {
-                    data = new OrderedDictionary
-                    {
-                        { "$decoded", true },
-                        { "$inferred", true },
-                        { "layout", "Beyond.Gameplay.AI.EnemyCastSkillResponse/EnemyCastSkillResponseData" },
-                        { "offset", offset },
-                        { "length", length },
-                        { "baseInterval", reader.ReadFloat("baseInterval") },
-                        { "skillId", reader.ReadAlignedAsciiString("skillId") },
-                        { "skillTarget", ReadPayloadNamedEnum32(reader, "skillTarget", new[] { "None", "Source", "Self", "Target", "MainChar" }) },
-                        { "interruptSkill", reader.ReadBool32("interruptSkill") },
-                    };
-                    reader.EnsureComplete();
+                    data = ReadEnemyCastSkillResponseManagedReferenceData(reader, offset, length);
                     return true;
                 }
 
@@ -7864,6 +8585,8 @@ namespace AnimeStudio.CLI
                         { "baseInterval", reader.ReadFloat("baseInterval") },
                         { "skillId", reader.ReadAlignedAsciiString("skillId") },
                         { "skillRange", reader.ReadFloat("skillRange") },
+                        { "changeCD", reader.ReadBool32("changeCD") },
+                        { "cd", reader.ReadFloat("cd") },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -8090,7 +8813,7 @@ namespace AnimeStudio.CLI
                         { "length", length },
                         { "targetType", ReadPayloadNamedEnum32(reader, "targetType", new[] { "Self", "Source" }) },
                         { "checkTagType", ReadPayloadNamedEnum32(reader, "checkTagType", new[] { "And", "Or" }) },
-                        { "tagInfo", ReadPayloadInvertGameplayTagList(reader, "tagInfo", "tag", 64) },
+                        { "tagInfo", ReadPayloadInvertGameplayTagIdOnlyList(reader, "tagInfo", "tag", 64) },
                     };
                     reader.EnsureComplete();
                     return true;
@@ -9707,8 +10430,8 @@ namespace AnimeStudio.CLI
                         { "length", length },
                         { "baseInterval", reader.ReadFloat("baseInterval") },
                         { "canvasGraph", ReadPayloadPPtr(reader, "canvasGraph") },
-                        { "battleTag", ReadPayloadGameplayTag(reader, "battleTag") },
-                        { "patrolTag", ReadPayloadGameplayTag(reader, "patrolTag") },
+                        { "battleTag", ReadPayloadGameplayTagIdOnly(reader, "battleTag") },
+                        { "patrolTag", ReadPayloadGameplayTagIdOnly(reader, "patrolTag") },
                         { "searchCoreRadius", reader.ReadFloat("searchCoreRadius") },
                         { "searchCoreHeight", reader.ReadFloat("searchCoreHeight") },
                         { "searchMode", BuildPayloadHash32(reader.ReadInt32("searchMode")) },
@@ -9741,13 +10464,66 @@ namespace AnimeStudio.CLI
                     return true;
                 }
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
+                if (IsFocusedAIManagedReferenceData(header))
+                {
+                    RecordManagedReferenceDecodeFailure(header, offset, length, ex);
+                }
                 data = null;
                 return false;
             }
 
             return false;
+        }
+
+        private static bool IsFocusedAIManagedReferenceData(ManagedReferenceHeader header)
+        {
+            if (header == null || !string.Equals(header.Namespace, "Beyond.Gameplay.AI", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            return string.Equals(header.ClassName, "EnemyCastSkillResponse/EnemyCastSkillResponseData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "EnemySimpleAttackBehavior/EnemySimpleAttackBehaviorData", StringComparison.Ordinal)
+                || string.Equals(header.ClassName, "EnemyCheckGameplayTag/EnemyCheckGameplayTagData", StringComparison.Ordinal);
+        }
+
+        private static OrderedDictionary ReadEnemyCastSkillResponseManagedReferenceData(
+            ManagedReferencePayloadReader reader,
+            int offset,
+            int length
+        )
+        {
+            var data = new OrderedDictionary
+            {
+                { "$decoded", true },
+                { "$inferred", true },
+                { "layout", "Beyond.Gameplay.AI.EnemyCastSkillResponse/EnemyCastSkillResponseData" },
+                { "offset", offset },
+                { "length", length },
+                { "baseInterval", reader.ReadFloat("baseInterval") },
+                { "skillId", reader.ReadAlignedAsciiString("skillId") },
+                { "skillTarget", ReadPayloadNamedEnum32(reader, "skillTarget", new[] { "None", "Source", "Self", "Target", "MainChar" }) },
+                { "interruptSkill", reader.ReadBool32("interruptSkill") },
+                { "waitFinish", reader.ReadBool32("waitFinish") },
+            };
+            reader.EnsureComplete();
+            return data;
+        }
+
+        internal static OrderedDictionary DecodeEnemyCastSkillResponseFailureForTesting(byte[] payload)
+        {
+            payload ??= Array.Empty<byte>();
+            var reader = new ManagedReferencePayloadReader(payload, 0, payload.Length);
+            try
+            {
+                ReadEnemyCastSkillResponseManagedReferenceData(reader, 0, payload.Length);
+                throw new InvalidOperationException("payload decoded successfully; no failure diagnostic exists");
+            }
+            catch (InvalidDataException ex)
+            {
+                return BuildManagedReferenceDecodeFailureDiagnostic(ex, 0, payload.Length);
+            }
         }
 
         private static bool IsKnownAIBaseIntervalOnlyManagedReferenceData(ManagedReferenceHeader header)
@@ -9834,6 +10610,47 @@ namespace AnimeStudio.CLI
                 if (length == 0 && IsKnownEmptyViewManagedReferenceData(header))
                 {
                     data = BuildEmptyManagedReferenceData(header, offset, length);
+                    return true;
+                }
+
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.View", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "CameraControlLockEnemyConfig", StringComparison.Ordinal))
+                {
+                    var lockEnemyReader = new ManagedReferencePayloadReader(rawData, offset, length);
+                    data = new OrderedDictionary
+                    {
+                        { "$decoded", true },
+                        { "exactTypeTreeDecoded", true },
+                        { "$inferred", true },
+                        { "layout", "Beyond.Gameplay.View.CameraControlLockEnemyConfig" },
+                        { "serializedLayoutSource", "managed-reference TypeTree" },
+                        { "offset", offset },
+                        { "length", length },
+                        { "limitToInputType", lockEnemyReader.ReadBool32("limitToInputType") },
+                        { "supportInputTypeKeyboard", lockEnemyReader.ReadBool32("supportInputTypeKeyboard") },
+                        { "supportInputTypeTouch", lockEnemyReader.ReadBool32("supportInputTypeTouch") },
+                        { "supportInputTypeController", lockEnemyReader.ReadBool32("supportInputTypeController") },
+                        { "horizontalBaseAngleMin", lockEnemyReader.ReadFloat("horizontalBaseAngleMin") },
+                        { "horizontalBaseAngleMax", lockEnemyReader.ReadFloat("horizontalBaseAngleMax") },
+                        { "verticalRelativeToTarget", lockEnemyReader.ReadBool32("verticalRelativeToTarget") },
+                        { "verticalBaseValue", lockEnemyReader.ReadFloat("verticalBaseValue") },
+                        { "verticalBaseValueMin", lockEnemyReader.ReadFloat("verticalBaseValueMin") },
+                        { "verticalBaseValueMax", lockEnemyReader.ReadFloat("verticalBaseValueMax") },
+                        { "noInputDampingTime", lockEnemyReader.ReadFloat("noInputDampingTime") },
+                        { "mountPoint", BuildPayloadHash32(lockEnemyReader.ReadInt32("mountPoint")) },
+                        { "changeDuration", lockEnemyReader.ReadFloat("changeDuration") },
+                        { "changeDurationByDeltaYaw", ReadPayloadAnimationCurveFloat(lockEnemyReader, "changeDurationByDeltaYaw") },
+                        { "changeBlendCurve", ReadPayloadAnimationCurveFloat(lockEnemyReader, "changeBlendCurve") },
+                        { "alpha", lockEnemyReader.ReadFloat("alpha") },
+                        { "autoLockBlendInTimeFactor", lockEnemyReader.ReadFloat("autoLockBlendInTimeFactor") },
+                        { "autoLockBlendOutTimeFactor", lockEnemyReader.ReadFloat("autoLockBlendOutTimeFactor") },
+                        { "enteringStyle", BuildPayloadHash32(lockEnemyReader.ReadInt32("enteringStyle")) },
+                        { "enteringCurve", ReadPayloadAnimationCurveFloat(lockEnemyReader, "enteringCurve") },
+                        { "enteringTimeType", BuildPayloadHash32(lockEnemyReader.ReadInt32("enteringTimeType")) },
+                        { "enteringTime", lockEnemyReader.ReadFloat("enteringTime") },
+                        { "enteringTimeByDeltaYaw", ReadPayloadAnimationCurveFloat(lockEnemyReader, "enteringTimeByDeltaYaw") },
+                    };
+                    lockEnemyReader.EnsureComplete();
                     return true;
                 }
 
@@ -12453,52 +13270,153 @@ namespace AnimeStudio.CLI
                             },
                             { "modeConfig", ReadAbilitySystemModeConfig(reader) },
                         };
-                        if (TryReadAbilitySystemSkillDataBundle(reader, recoveredByRid, out var skillDataBundle))
+                        var stageTrace = new OrderedDictionary
+                        {
+                            { "afterShapeData", 8 },
+                            { "afterModeConfig", reader.Position - offset },
+                        };
+                        if (TryReadAbilitySystemSkillDataBundle(
+                            reader,
+                            recoveredByRid,
+                            out var skillDataBundle,
+                            out var skillDataBundleFailure))
                         {
                             data["skillDataBundle"] = skillDataBundle;
-                            if (TryReadAbilitySystemUIData(reader, out var uiData))
+                            stageTrace["afterSkillDataBundle"] = reader.Position - offset;
+                            if (TryReadAbilitySystemUIData(reader, out var uiData, out var uiDataFailure))
                             {
                                 data["uiData"] = uiData;
-                                if (TryReadAbilitySystemBuffInputLists(reader, out var buffInputLists))
+                                stageTrace["afterUIData"] = reader.Position - offset;
+                                if (TryReadAbilitySystemBuffInputLists(
+                                    reader,
+                                    out var buffInputLists,
+                                    out var buffInputListsFailure))
                                 {
+                                    stageTrace["afterBuffInputLists"] = reader.Position - offset;
                                     foreach (DictionaryEntry entry in buffInputLists)
                                     {
                                         data[entry.Key] = entry.Value;
                                     }
 
-                                    if (TryReadAbilitySystemPostBuffFields(reader, out var postBuffFields))
+                                    if (TryReadAbilitySystemPostBuffFields(
+                                        reader,
+                                        out var postBuffFields,
+                                        out var postBuffFieldsFailure))
                                     {
+                                        stageTrace["afterPostBuffFields"] = reader.Position - offset;
                                         foreach (DictionaryEntry entry in postBuffFields)
                                         {
                                             data[entry.Key] = entry.Value;
                                         }
 
-                                        if (TryReadAbilitySystemEntityBlackboardSection(reader, out var entityBlackboardSection))
+                                        if (TryReadAbilitySystemEntityBlackboardSection(
+                                            reader,
+                                            out var entityBlackboardSection,
+                                            out var entityBlackboardFailure))
                                         {
+                                            stageTrace["afterEntityBlackboard"] = reader.Position - offset;
                                             foreach (DictionaryEntry entry in entityBlackboardSection)
                                             {
                                                 data[entry.Key] = entry.Value;
                                             }
 
-                                            if (TryReadAbilitySystemSkillCameraConfigSection(reader, out var skillCameraConfigSection))
+                                            if (TryReadAbilitySystemSkillCameraConfigSection(
+                                                reader,
+                                                out var skillCameraConfigSection,
+                                                out var skillCameraConfigFailure))
                                             {
+                                                stageTrace["afterSkillCameraConfig"] = reader.Position - offset;
                                                 foreach (DictionaryEntry entry in skillCameraConfigSection)
                                                 {
                                                     data[entry.Key] = entry.Value;
                                                 }
 
-                                                if (TryReadAbilitySystemPostCameraFields(reader, out var postCameraFields))
+                                                if (TryReadAbilitySystemPostCameraFields(
+                                                    reader,
+                                                    out var postCameraFields,
+                                                    out var postCameraFieldsFailure))
                                                 {
                                                     foreach (DictionaryEntry entry in postCameraFields)
                                                     {
                                                         data[entry.Key] = entry.Value;
                                                     }
+                                                    stageTrace["afterPostCameraFields"] = reader.Position - offset;
+                                                }
+                                                else if (postCameraFieldsFailure != null)
+                                                {
+                                                    RecordManagedReferenceDecodeFailure(
+                                                        header,
+                                                        offset,
+                                                        length,
+                                                        postCameraFieldsFailure,
+                                                        "postCameraFields",
+                                                        stageTrace);
                                                 }
                                             }
+                                            else if (skillCameraConfigFailure != null)
+                                            {
+                                                RecordManagedReferenceDecodeFailure(
+                                                    header,
+                                                    offset,
+                                                    length,
+                                                    skillCameraConfigFailure,
+                                                    "skillCameraConfig",
+                                                    stageTrace);
+                                            }
+                                        }
+                                        else if (entityBlackboardFailure != null)
+                                        {
+                                            RecordManagedReferenceDecodeFailure(
+                                                header,
+                                                offset,
+                                                length,
+                                                entityBlackboardFailure,
+                                                "entityBlackboard",
+                                                stageTrace);
                                         }
                                     }
+                                    else if (postBuffFieldsFailure != null)
+                                    {
+                                        RecordManagedReferenceDecodeFailure(
+                                            header,
+                                            offset,
+                                            length,
+                                            postBuffFieldsFailure,
+                                            "postBuffFields",
+                                            stageTrace);
+                                    }
+                                }
+                                else if (buffInputListsFailure != null)
+                                {
+                                    RecordManagedReferenceDecodeFailure(
+                                        header,
+                                        offset,
+                                        length,
+                                        buffInputListsFailure,
+                                        "buffInputLists",
+                                        stageTrace);
                                 }
                             }
+                            else if (uiDataFailure != null)
+                            {
+                                RecordManagedReferenceDecodeFailure(
+                                    header,
+                                    offset,
+                                    length,
+                                    uiDataFailure,
+                                    "uiData",
+                                    stageTrace);
+                            }
+                        }
+                        else if (skillDataBundleFailure != null)
+                        {
+                            RecordManagedReferenceDecodeFailure(
+                                header,
+                                offset,
+                                length,
+                                skillDataBundleFailure,
+                                "skillDataBundle",
+                                stageTrace);
                         }
                         var remainingStringHints = CollectAbilitySystemRemainingStringHints(rawData, reader.Position, reader.Remaining, 128);
                         data["remainingStringHints"] = remainingStringHints;
@@ -12529,6 +13447,7 @@ namespace AnimeStudio.CLI
                     }
                     catch (InvalidDataException ex)
                     {
+                        RecordManagedReferenceDecodeFailure(header, offset, length, ex);
                         var fallback = BuildPartialAbilitySystemDataDiagnostic(
                             rawData,
                             offset,
@@ -12843,10 +13762,21 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "EnemyPartsRootComponentData", StringComparison.Ordinal))
                 {
+                    if (TryReadEnemyPartsRootComponentDataExact(
+                        rawData,
+                        offset,
+                        length,
+                        out data,
+                        out var exactEnemyPartsRootFailure))
+                    {
+                        return true;
+                    }
                     if (TryReadEnemyPartsRootComponentData(rawData, offset, length, 8, out data)
                         || TryReadEnemyPartsRootComponentData(rawData, offset, length, 10, out data)
                         || TryReadEnemyPartsRootComponentDataWithPartIdList(rawData, offset, length, out data))
                     {
+                        data["exactTypeTreeDecodeFailure"] = exactEnemyPartsRootFailure?.Message
+                            ?? "exact EnemyPartsRootComponentData decoder rejected payload";
                         return true;
                     }
                     throw new InvalidDataException("unsupported EnemyPartsRootComponentData prefix variant");
@@ -12855,6 +13785,17 @@ namespace AnimeStudio.CLI
                     && string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
                     && string.Equals(header.ClassName, "AbilitySystemForEnemyPartData", StringComparison.Ordinal))
                 {
+                    if (TryReadAbilitySystemForEnemyPartDataExact(
+                        rawData,
+                        offset,
+                        length,
+                        recoveredByRid,
+                        out data,
+                        out var exactEnemyPartFailure))
+                    {
+                        return true;
+                    }
+
                     var reader = new ManagedReferencePayloadReader(rawData, offset, length);
                     if ((length % 4) != 0)
                     {
@@ -12865,11 +13806,16 @@ namespace AnimeStudio.CLI
                     data = new OrderedDictionary
                     {
                         { "$decoded", true },
+                        { "$partial", true },
                         { "$inferred", true },
                         { "layout", "Beyond.Gameplay.Core.AbilitySystemForEnemyPartData" },
                         { "offset", offset },
                         { "length", length },
                     };
+                    if (exactEnemyPartFailure != null)
+                    {
+                        data["exactTypeTreeDecodeFailure"] = exactEnemyPartFailure.Message;
+                    }
 
                     if (TryReadEnemyPartAbilityDynamicScalarLayout(reader, wordCount, data))
                     {
@@ -12960,8 +13906,13 @@ namespace AnimeStudio.CLI
                     return true;
                 }
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
+                if (string.Equals(header.Namespace, "Beyond.Gameplay.Core", StringComparison.Ordinal)
+                    && string.Equals(header.ClassName, "AbilitySystemData", StringComparison.Ordinal))
+                {
+                    RecordManagedReferenceDecodeFailure(header, offset, length, ex);
+                }
                 data = null;
                 return false;
             }
@@ -13504,6 +14455,25 @@ namespace AnimeStudio.CLI
 
             diagnostic = null;
             return true;
+        }
+
+        internal static OrderedDictionary RecoverManagedReferencesForTesting(
+            byte[] rawData,
+            long startOffset,
+            params long[] expectedRids)
+        {
+            if (!TryRecoverManagedReferences(
+                rawData,
+                startOffset,
+                new HashSet<long>(expectedRids ?? Array.Empty<long>()),
+                out var references,
+                out var diagnostic))
+            {
+                throw new InvalidDataException(
+                    $"ManagedReferencesRegistry test recovery failed: " +
+                    $"{diagnostic?["reason"] ?? "unknown"}");
+            }
+            return references;
         }
 
         private static bool TryValidateLinkedAbilityEntitySurroundingMovementMirror(
@@ -14577,6 +15547,17 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static OrderedDictionary ReadPayloadGameplayTagIdOnly(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            return new OrderedDictionary
+            {
+                { "tagId", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.tagId")) },
+            };
+        }
+
         private static OrderedDictionary ReadPayloadGameplayTagWithZeroPadding(
             ManagedReferencePayloadReader reader,
             string fieldName,
@@ -14610,6 +15591,31 @@ namespace AnimeStudio.CLI
                 {
                     { "invert", reader.ReadBool32($"{fieldName}[{i}].invert") },
                     { tagFieldName, ReadPayloadGameplayTag(reader, $"{fieldName}[{i}].{tagFieldName}") },
+                });
+            }
+            return items;
+        }
+
+        private static List<OrderedDictionary> ReadPayloadInvertGameplayTagIdOnlyList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            string tagFieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var items = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                items.Add(new OrderedDictionary
+                {
+                    { "invert", reader.ReadBool32($"{fieldName}[{i}].invert") },
+                    { tagFieldName, ReadPayloadGameplayTagIdOnly(reader, $"{fieldName}[{i}].{tagFieldName}") },
                 });
             }
             return items;
@@ -14781,6 +15787,36 @@ namespace AnimeStudio.CLI
                 { "value", ReadGuideParamStringValue(reader, $"{fieldName}.value") },
                 { "idRef", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef")) },
             };
+        }
+
+        private static OrderedDictionary ReadGuideActionParamPosRotList(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var parameter = new OrderedDictionary
+            {
+                { "paramSource", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.paramSource")) },
+                { "path", reader.ReadAlignedAsciiString($"{fieldName}.path") },
+            };
+            var count = reader.ReadInt32($"{fieldName}.value.count");
+            if (count < 0 || count > 64)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}.value");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "position", ReadPayloadVector3(reader, $"{fieldName}.value[{i}].position") },
+                    { "eulerAngles", ReadPayloadVector3(reader, $"{fieldName}.value[{i}].eulerAngles") },
+                });
+            }
+            parameter["value"] = values;
+            parameter["idRef"] = BuildPayloadHash32(reader.ReadInt32($"{fieldName}.idRef"));
+            return parameter;
         }
 
         private static OrderedDictionary ReadGuideActionParamVector3(
@@ -15333,7 +16369,11 @@ namespace AnimeStudio.CLI
         {
             if (count < 0 || count > 1024)
             {
-                throw new InvalidDataException($"invalid word count {count} for {fieldName}");
+                throw reader.CreateFailure(
+                    fieldName,
+                    $"invalid word count {count} for {fieldName}",
+                    requestedBytes: count >= 0 && count <= int.MaxValue / 4 ? count * 4 : null
+                );
             }
 
             var values = new List<OrderedDictionary>(count);
@@ -15396,6 +16436,151 @@ namespace AnimeStudio.CLI
             {
                 return false;
             }
+        }
+
+        private static bool TryReadAbilitySystemForEnemyPartDataExact(
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            out OrderedDictionary data,
+            out InvalidDataException failure
+        )
+        {
+            data = null;
+            failure = null;
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "exactTypeTreeDecoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.AbilitySystemForEnemyPartData" },
+                    { "serializedLayoutSource", "managed-reference TypeTree" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "shapeData", new OrderedDictionary
+                        {
+                            { "detectedRadius", reader.ReadFloat("shapeData.detectedRadius") },
+                            { "detectedHeight", reader.ReadFloat("shapeData.detectedHeight") },
+                        }
+                    },
+                    { "modeConfig", ReadAbilitySystemModeConfig(reader) },
+                };
+
+                if (!TryReadAbilitySystemSkillDataBundle(
+                    reader,
+                    recoveredByRid,
+                    out var skillDataBundle,
+                    out var skillDataBundleFailure))
+                {
+                    throw skillDataBundleFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData skillDataBundle failed");
+                }
+                data["skillDataBundle"] = skillDataBundle;
+
+                if (!TryReadAbilitySystemUIData(reader, out var uiData, out var uiDataFailure))
+                {
+                    throw uiDataFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData uiData failed");
+                }
+                data["uiData"] = uiData;
+
+                if (!TryReadAbilitySystemBuffInputLists(reader, out var buffInputs, out var buffInputsFailure))
+                {
+                    throw buffInputsFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData buff inputs failed");
+                }
+                foreach (DictionaryEntry entry in buffInputs)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+
+                if (!TryReadAbilitySystemPostBuffFields(reader, out var postBuffFields, out var postBuffFailure))
+                {
+                    throw postBuffFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData post-buff fields failed");
+                }
+                foreach (DictionaryEntry entry in postBuffFields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+
+                if (!TryReadAbilitySystemEntityBlackboardSection(
+                    reader,
+                    out var entityBlackboardFields,
+                    out var entityBlackboardFailure))
+                {
+                    throw entityBlackboardFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData entity blackboard failed");
+                }
+                foreach (DictionaryEntry entry in entityBlackboardFields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+
+                if (!TryReadAbilitySystemSkillCameraConfigSection(
+                    reader,
+                    out var skillCameraFields,
+                    out var skillCameraFailure))
+                {
+                    throw skillCameraFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData skill camera config failed");
+                }
+                foreach (DictionaryEntry entry in skillCameraFields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+
+                if (!TryReadAbilitySystemPostCameraFields(
+                    reader,
+                    out var postCameraFields,
+                    out var postCameraFailure,
+                    requireComplete: false))
+                {
+                    throw postCameraFailure ?? new InvalidDataException("AbilitySystemForEnemyPartData post-camera fields failed");
+                }
+                foreach (DictionaryEntry entry in postCameraFields)
+                {
+                    data[entry.Key] = entry.Value;
+                }
+
+                data["defaultEnabled"] = reader.ReadBool32("defaultEnabled");
+                data["asIndividualInExcludeTargetProcessor"] = reader.ReadBool32("asIndividualInExcludeTargetProcessor");
+                data["partAttributes"] = ReadEnemyPartAttributeList(reader);
+                foreach (DictionaryEntry entry in ReadEnemyPartAbilityPostAttributeScalarFields(reader))
+                {
+                    data[entry.Key] = entry.Value;
+                }
+                reader.EnsureComplete();
+                data["observedPayloadStatus"] = "all inherited AbilitySystemData and derived enemy-part fields consumed";
+                return true;
+            }
+            catch (InvalidDataException ex)
+            {
+                data = null;
+                failure = ex;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartAttributeList(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var count = reader.ReadInt32("partAttributes.count");
+            if (count < 0 || count > 256 || count > reader.Remaining / 12)
+            {
+                throw new InvalidDataException($"invalid count {count} for partAttributes");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "attributeType", BuildPayloadHash32(reader.ReadInt32($"partAttributes[{i}].attributeType")) },
+                    { "overrideType", BuildPayloadHash32(reader.ReadInt32($"partAttributes[{i}].overrideType")) },
+                    { "value", reader.ReadFloat($"partAttributes[{i}].value") },
+                });
+            }
+            return values;
         }
 
         private static OrderedDictionary ReadEnemyPartAbilityScalarFields(ManagedReferencePayloadReader reader)
@@ -15600,7 +16785,10 @@ namespace AnimeStudio.CLI
         {
             if ((reader.Remaining % 4) != 0)
             {
-                throw new InvalidDataException($"remaining bytes for {fieldName} are not word-aligned");
+                throw reader.CreateFailure(
+                    fieldName,
+                    $"remaining bytes for {fieldName} are not word-aligned"
+                );
             }
 
             return ReadPayloadRawInt32Words(reader, fieldName, reader.Remaining / 4);
@@ -15694,10 +16882,20 @@ namespace AnimeStudio.CLI
             };
         }
 
+        internal static OrderedDictionary DecodeAbilitySystemModeConfigForTesting(byte[] payload)
+        {
+            payload ??= Array.Empty<byte>();
+            var reader = new ManagedReferencePayloadReader(payload, 0, payload.Length);
+            var data = ReadAbilitySystemModeConfig(reader);
+            reader.EnsureComplete();
+            return data;
+        }
+
         private static OrderedDictionary ReadAbilitySystemModeData(ManagedReferencePayloadReader reader)
         {
             var item = new OrderedDictionary
             {
+                { "serializedLayoutSource", "managed-reference TypeTree" },
                 { "modeId", reader.ReadAlignedAsciiString("modeConfig.modes.modeId") },
                 { "defaultEnable", reader.ReadBool32("modeConfig.modes.defaultEnable") },
                 { "modeLayer", reader.ReadAlignedAsciiString("modeConfig.modes.modeLayer") },
@@ -15716,61 +16914,53 @@ namespace AnimeStudio.CLI
                 { "animBoolName", reader.ReadAlignedAsciiString("modeConfig.modes.animBoolName") },
             };
 
-            if (!TryReadAbilitySystemModeExtendedTail(reader, item))
-            {
-                var compactTail = ReadAbilitySystemModeCompactTail(reader);
-                if (compactTail.Count > 0)
-                {
-                    item["compactTailRawWords"] = compactTail;
-                }
-            }
+            item["overrideStateClip"] = reader.ReadBool32("modeConfig.modes.overrideStateClip");
+            item["overrideClipMapping"] = ReadAbilitySystemModeOverrideClipMapping(
+                reader,
+                "modeConfig.modes.overrideClipMapping"
+            );
+            item["overrideAnimCfg"] = reader.ReadBool32("modeConfig.modes.overrideAnimCfg");
+            item["animCfgPath"] = reader.ReadAlignedAsciiString("modeConfig.modes.animCfgPath");
+            item["overrideModelKey"] = reader.ReadBool32("modeConfig.modes.overrideModelKey");
+            item["modelKey"] = reader.ReadAlignedAsciiString("modeConfig.modes.modelKey");
+            item["mountPointDefIndex"] = reader.ReadInt32("modeConfig.modes.mountPointDefIndex");
+            item["overrideWeaponVisibilityProfile"] = reader.ReadBool32("modeConfig.modes.overrideWeaponVisibilityProfile");
+            item["weaponVisibilityProfile"] = ReadAbilitySystemWeaponVisibilityProfile(
+                reader,
+                "modeConfig.modes.weaponVisibilityProfile"
+            );
+            item["overrideCmdMapping"] = reader.ReadBool32("modeConfig.modes.overrideCmdMapping");
+            item["cmdMapping"] = ReadAbilitySystemBattleCommandStringDictionary(
+                reader,
+                "modeConfig.modes.cmdMapping",
+                8
+            );
             return item;
         }
 
-        private static bool TryReadAbilitySystemModeExtendedTail(
+        private static OrderedDictionary ReadAbilitySystemWeaponVisibilityProfile(
             ManagedReferencePayloadReader reader,
-            OrderedDictionary item
+            string fieldName
         )
         {
-            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
-            var tail = new OrderedDictionary();
-            try
+            return new OrderedDictionary
             {
-                var overrideStateClip = local.ReadBool32("modeConfig.modes.overrideStateClip");
-                tail["overrideStateClip"] = overrideStateClip;
-                if (overrideStateClip)
-                {
-                    tail["overrideClipMapping"] = ReadAbilitySystemModeOverrideClipMapping(
-                        local,
-                        "modeConfig.modes.overrideClipMapping"
-                    );
-                }
+                { "layout", "Beyond.Gameplay.WeaponVisibilityProfile" },
+                { "slots", ReadPayloadObjectList(reader, $"{fieldName}.slots", 16, ReadAbilitySystemWeaponVisibilityProfileSlot) },
+            };
+        }
 
-                tail["overrideAnimCfg"] = local.ReadBool32("modeConfig.modes.overrideAnimCfg");
-                tail["animCfgPath"] = local.ReadAlignedAsciiString("modeConfig.modes.animCfgPath");
-                tail["overrideModelKey"] = local.ReadBool32("modeConfig.modes.overrideModelKey");
-                tail["modelKey"] = local.ReadAlignedAsciiString("modeConfig.modes.modelKey");
-                tail["mountPointDefIndex"] = local.ReadInt32("modeConfig.modes.mountPointDefIndex");
-                var overrideCmdMapping = local.ReadBool32("modeConfig.modes.overrideCmdMapping");
-                tail["overrideCmdMapping"] = overrideCmdMapping;
-                tail["cmdMapping"] = ReadAbilitySystemModeCmdMapping(
-                    local,
-                    "modeConfig.modes.cmdMapping",
-                    8,
-                    overrideCmdMapping,
-                    overrideStateClip
-                );
-                foreach (DictionaryEntry entry in tail)
-                {
-                    item[entry.Key] = entry.Value;
-                }
-                reader.SetPosition(local.Position);
-                return true;
-            }
-            catch (InvalidDataException)
+        private static OrderedDictionary ReadAbilitySystemWeaponVisibilityProfileSlot(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            return new OrderedDictionary
             {
-                return false;
-            }
+                { "layout", "Beyond.Gameplay.WeaponVisibilityProfileSlot" },
+                { "weaponIndex", reader.ReadInt32("modeConfig.modes.weaponVisibilityProfile.slots.weaponIndex") },
+                { "showWhenIdle", reader.ReadBool32("modeConfig.modes.weaponVisibilityProfile.slots.showWhenIdle") },
+                { "showWhenFight", reader.ReadBool32("modeConfig.modes.weaponVisibilityProfile.slots.showWhenFight") },
+            };
         }
 
         private static OrderedDictionary ReadAbilitySystemModeOverrideClipMapping(
@@ -15828,81 +17018,6 @@ namespace AnimeStudio.CLI
             };
         }
 
-        private static OrderedDictionary ReadAbilitySystemModeCmdMapping(
-            ManagedReferencePayloadReader reader,
-            string fieldName,
-            int maxMappedValues,
-            bool overrideCmdMapping,
-            bool preferTwoWordEmpty
-        )
-        {
-            if (overrideCmdMapping)
-            {
-                return ReadAbilitySystemBattleCommandStringDictionary(reader, fieldName, maxMappedValues);
-            }
-
-            if (preferTwoWordEmpty && TryReadAbilitySystemEmptyTwoCountDictionary(reader, fieldName, out var emptyDictionary))
-            {
-                return emptyDictionary;
-            }
-
-            var headerWords = ReadPayloadRawInt32Words(reader, $"{fieldName}.headerRawWords", 4);
-            var data = new OrderedDictionary
-            {
-                { "headerRawWords", headerWords },
-            };
-
-            if (PayloadRawWordsEqual(headerWords, 0, 0, 0, 0))
-            {
-                return data;
-            }
-
-            if (!PayloadRawWordsEqual(headerWords, 0, 1, 1, 0))
-            {
-                data["layoutNote"] = "unrecognized cmdMapping header; no value list consumed";
-                return data;
-            }
-
-            data["values"] = ReadPayloadStringList(reader, $"{fieldName}.values", maxMappedValues);
-            return data;
-        }
-
-        private static bool TryReadAbilitySystemEmptyTwoCountDictionary(
-            ManagedReferencePayloadReader reader,
-            string fieldName,
-            out OrderedDictionary data
-        )
-        {
-            data = null;
-            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
-            var keyCount = local.ReadInt32($"{fieldName}.keys.count");
-            var valueCount = local.ReadInt32($"{fieldName}.values.count");
-            if (keyCount != 0 || valueCount != 0)
-            {
-                return false;
-            }
-
-            reader.SetPosition(local.Position);
-            data = new OrderedDictionary
-            {
-                { "layout", "SerializeFieldDictionary<BattleCommandType, string>" },
-                { "serializationShape", "two-count-empty-dictionary" },
-                { "keys", new OrderedDictionary
-                    {
-                        { "count", keyCount },
-                        { "entries", new List<OrderedDictionary>() },
-                    }
-                },
-                { "values", new OrderedDictionary
-                    {
-                        { "count", valueCount },
-                        { "entries", new List<string>() },
-                    }
-                },
-                { "entries", new List<OrderedDictionary>() },
-            };
-            return true;
-        }
 
         private static OrderedDictionary ReadAbilitySystemBattleCommandStringDictionary(
             ManagedReferencePayloadReader reader,
@@ -15976,22 +17091,6 @@ namespace AnimeStudio.CLI
             return item;
         }
 
-        private static bool PayloadRawWordsEqual(List<OrderedDictionary> words, params int[] expected)
-        {
-            if (words == null || words.Count != expected.Length)
-            {
-                return false;
-            }
-
-            for (var i = 0; i < expected.Length; i++)
-            {
-                if (!words[i].Contains("value") || words[i]["value"] is not int value || value != expected[i])
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
 
         private static OrderedDictionary ReadWeaponDecoData(ManagedReferencePayloadReader reader, string fieldName)
         {
@@ -16162,10 +17261,12 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemUIData(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -16186,9 +17287,10 @@ namespace AnimeStudio.CLI
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
@@ -16214,10 +17316,12 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemBuffInputLists(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -16230,9 +17334,10 @@ namespace AnimeStudio.CLI
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
@@ -16319,10 +17424,12 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemPostBuffFields(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -16344,9 +17451,10 @@ namespace AnimeStudio.CLI
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
@@ -16393,10 +17501,12 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemEntityBlackboardSection(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -16410,9 +17520,10 @@ namespace AnimeStudio.CLI
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
@@ -16496,7 +17607,10 @@ namespace AnimeStudio.CLI
             var valueCount = reader.ReadInt32($"{fieldName}.values.count");
             if (valueCount != keyCount)
             {
-                throw new InvalidDataException($"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}");
+                throw reader.CreateFailure(
+                    $"{fieldName}.values.count",
+                    $"mismatched key/value counts {keyCount}/{valueCount} for {fieldName}"
+                );
             }
 
             var values = new List<OrderedDictionary>(valueCount);
@@ -16660,10 +17774,12 @@ namespace AnimeStudio.CLI
 
         private static bool TryReadAbilitySystemSkillCameraConfigSection(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -16674,9 +17790,10 @@ namespace AnimeStudio.CLI
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
@@ -16801,15 +17918,15 @@ namespace AnimeStudio.CLI
                 { "posRefMP", ReadAbilitySystemShapeMountPoint(reader, $"{fieldName}.posRefMP") },
                 { "directionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.directionRef", false, (0, "OwnerForward"), (2, "OwnerMountPoint"), (4, "InputDirection")) },
                 { "dirRefMountPoint", ReadAbilitySystemShapeMountPoint(reader, $"{fieldName}.dirRefMountPoint") },
-                { "centerOffset", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.centerOffset") },
-                { "eulerAngle", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.eulerAngle") },
-                { "size", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.size") },
-                { "radius", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.radius") },
-                { "height", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.height") },
+                { "centerOffset", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.centerOffset") },
+                { "eulerAngle", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.eulerAngle") },
+                { "size", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.size") },
+                { "radius", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.radius") },
+                { "height", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.height") },
                 { "limitAngle", reader.ReadBool32($"{fieldName}.limitAngle") },
-                { "angle", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.angle") },
+                { "angle", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.angle") },
                 { "limitHeight", reader.ReadBool32($"{fieldName}.limitHeight") },
-                { "maxHeight", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.maxHeight") },
+                { "maxHeight", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.maxHeight") },
                 { "useDirection", reader.ReadBool32($"{fieldName}.useDirection") },
                 { "castDirection", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.castDirection", false, (0, "ZForward"), (2, "ZBackward"), (4, "XForward"), (6, "XBackward"), (8, "YForward"), (10, "YBackward")) },
                 { "enablePreview", reader.ReadBool32($"{fieldName}.enablePreview") },
@@ -16943,138 +18060,141 @@ namespace AnimeStudio.CLI
             throw new InvalidDataException($"invalid enum32 {value} in {fieldName}");
         }
 
+        private static OrderedDictionary ReadAbilitySystemHealthType(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var value = ReadPayloadEnum32(reader, "healthType", 0, 2);
+            var rawValue = Convert.ToInt32(value["value"], CultureInfo.InvariantCulture);
+            if (rawValue == 0)
+            {
+                value["name"] = "Normal";
+            }
+            else if (rawValue == 2)
+            {
+                value["name"] = "Independent";
+            }
+            else
+            {
+                value["nameStatus"] = "unresolved";
+            }
+            return value;
+        }
+
         private static bool TryReadAbilitySystemPostCameraFields(
             ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
-        )
-        {
-            if (TryReadAbilitySystemPostCameraFieldsWithoutOverride(reader, out data))
-            {
-                return true;
-            }
-
-            if (TryReadAbilitySystemPostCameraFieldsWithOverrideDeadEffect(reader, out data))
-            {
-                return true;
-            }
-
-            data = null;
-            return false;
-        }
-
-        private static bool TryReadAbilitySystemPostCameraFieldsWithoutOverride(
-            ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure,
+            bool requireComplete = true
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
                 data = new OrderedDictionary
                 {
-                    { "layoutNote", "IL2CPP metadata lists overrideDeadEffect before deadEffect, but most focused Unity payloads start directly with deadEffect." },
-                    { "deadEffect", ReadAbilitySystemEffectActionCfg(local, "deadEffect") },
-                    { "effectScale", local.ReadFloat("effectScale") },
-                    { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
-                    { "hitFlashAsset", local.ReadAlignedAsciiString("hitFlashAsset") },
-                    { "healthType", ReadPayloadSparseNamedEnum32(local, "healthType", false, (0, "Normal"), (2, "Independent")) },
-                    { "preloadAbilityEntities", ReadPayloadStringIntDictionary(local, "preloadAbilityEntities", 8) },
-                    { "maxPotentialEffectBuffId", local.ReadAlignedAsciiString("maxPotentialEffectBuffId") },
-                };
-                reader.SetPosition(local.Position);
-                return true;
-            }
-            catch (InvalidDataException)
-            {
-                data = null;
-                return false;
-            }
-        }
-
-        private static bool TryReadAbilitySystemPostCameraFieldsWithOverrideDeadEffect(
-            ManagedReferencePayloadReader reader,
-            out OrderedDictionary data
-        )
-        {
-            data = null;
-            var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
-            try
-            {
-                data = new OrderedDictionary
-                {
-                    { "layoutNote", "Validated AbilitySystemData post-camera variant serializes overrideDeadEffect before deadEffect; the deadEffect body uses the 104-word post-name EffectActionCfg shape that omits useScaleBB and centerOffset." },
+                    { "$decoded", true },
+                    { "serializedLayoutSource", "managed-reference TypeTree" },
                     { "overrideDeadEffect", local.ReadBool32("overrideDeadEffect") },
-                    { "deadEffect", ReadAbilitySystemEffectActionCfgOmitScaleFlagBody(local, "deadEffect") },
+                    { "deadEffect", ReadAbilitySystemEffectActionCfg(local, "deadEffect") },
+                    { "deadEffects", ReadAbilitySystemEffectActionCfgList(local, "deadEffects", 16) },
                     { "effectScale", local.ReadFloat("effectScale") },
                     { "isPlayHitFlash", local.ReadBool32("isPlayHitFlash") },
                     { "hitFlashAsset", local.ReadAlignedAsciiString("hitFlashAsset") },
-                    { "healthType", ReadPayloadSparseNamedEnum32(local, "healthType", false, (0, "Normal"), (2, "Independent")) },
+                    { "healthType", ReadAbilitySystemHealthType(local) },
                     { "preloadAbilityEntities", ReadPayloadStringIntDictionary(local, "preloadAbilityEntities", 8) },
                     { "maxPotentialEffectBuffId", local.ReadAlignedAsciiString("maxPotentialEffectBuffId") },
+                    { "checkAllyBlockableMoveCollider", local.ReadBool32("checkAllyBlockableMoveCollider") },
+                    { "layoutNote", "All post-camera AbilitySystemData fields are consumed in the exact managed-reference TypeTree order. The enclosing managed-reference registry is stored outside this individual reference payload." },
                 };
-                local.EnsureComplete();
+                if (requireComplete)
+                {
+                    local.EnsureComplete();
+                }
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
         }
 
-        private static OrderedDictionary ReadAbilitySystemEffectActionCfgOmitScaleFlagBody(
+        private static OrderedDictionary ReadAbilitySystemEffectActionCfgList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw reader.CreateFailure(
+                    $"{fieldName}.count",
+                    $"invalid EffectActionCfg count {count} in {fieldName}"
+                );
+            }
+
+            var entries = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                entries.Add(ReadAbilitySystemEffectActionCfg(reader, $"{fieldName}[{i}]"));
+            }
+
+            return new OrderedDictionary
+            {
+                { "count", count },
+                { "entries", entries },
+            };
+        }
+
+        private static OrderedDictionary ReadAbilitySystemBlackboardVector3Exact(
             ManagedReferencePayloadReader reader,
             string fieldName
         )
         {
-            const int postNameWordCount = 118;
-            var start = reader.Position;
-            var data = new OrderedDictionary
+            var x = ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.x");
+            var y = ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.y");
+            var z = ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.z");
+            return new OrderedDictionary
             {
-                { "$partial", true },
-                { "$inferred", true },
-                { "layout", "Beyond.Gameplay.EffectActionCfg" },
-                { "layoutVariant", "omitUseScaleBBPostName118" },
-                { "layoutNote", "AbilitySystemData deadEffect variant: fxType/effectName followed by the current 118-word post-name EffectActionCfg body; useScaleBB and centerOffset are not serialized in this body." },
-                { "observedPayloadStatus", "fixed 118-word post-name AbilitySystemData deadEffect variant consumed by this reader" },
-                { "partialReasons", new List<string>
+                { "layout", "Beyond.Blackboard.BlackboardVector3" },
+                { "serializedLayoutSource", "managed-reference TypeTree" },
+                { "x", x },
+                { "y", y },
+                { "z", z },
+                { "valueCandidate", new OrderedDictionary
                     {
-                        "BlackboardDouble internals remain emitted as raw 3-word wrappers.",
-                        "IL2CPP metadata lists useScaleBB and centerOffset, but this focused AbilitySystemData deadEffect payload omits both fields.",
+                        { "x", x["valueFloatCandidate"] },
+                        { "y", y["valueFloatCandidate"] },
+                        { "z", z["valueFloatCandidate"] },
                     }
                 },
-                { "omittedSerializedFields", new List<string> { "useScaleBB", "centerOffset" } },
-                { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
-                { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
             };
+        }
 
-            if (reader.Remaining < postNameWordCount * 4)
+        private static OrderedDictionary ReadAbilitySystemBlackboardDoubleExact(
+            ManagedReferencePayloadReader reader,
+            string fieldName
+        )
+        {
+            var useBlackboardKey = reader.ReadBool32($"{fieldName}.useBlackboardKey");
+            var value = reader.ReadFloat($"{fieldName}.value");
+            var blackboardKey = reader.ReadAlignedAsciiString($"{fieldName}.blackboardKey");
+            return new OrderedDictionary
             {
-                throw new InvalidDataException($"not enough bytes for {fieldName} post-name EffectActionCfg body");
-            }
-
-            var postNameReader = new ManagedReferencePayloadReader(reader.RawData, reader.Position, postNameWordCount * 4);
-            if (!TryReadProjectileAlertEffectActionCfgPrefix(postNameReader, fieldName, out var prefix))
-            {
-                throw new InvalidDataException($"{fieldName} post-name prefix does not match the 28+90 word omit-useScaleBB shape");
-            }
-
-            data["prefixStatus"] = "decoded 28-word omit-useScaleBB prefix";
-            data["prefixWordCount"] = prefix.WordCount;
-            foreach (DictionaryEntry entry in prefix.Fields)
-            {
-                data[entry.Key] = entry.Value;
-            }
-
-            data["effectActionTailStatus"] = "decoded 90-word post-prefix EffectActionCfg tail";
-            var tail = ReadAbilitySystemOmitUseScaleBBEffectActionCfgTail(postNameReader, $"{fieldName}.effectActionTail");
-            data["effectActionTail"] = tail;
-            postNameReader.EnsureComplete();
-            reader.SetPosition(postNameReader.Position);
-            data["serializedWordCount"] = (reader.Position - start) / 4;
-            return data;
+                { "layout", "Beyond.Blackboard.BlackboardDouble" },
+                { "serializationShape", "bool-float-key" },
+                { "serializedLayoutSource", "managed-reference TypeTree" },
+                { "useBlackboardKey", useBlackboardKey },
+                { "value", value },
+                { "blackboardKey", blackboardKey },
+                { "valueFloatCandidate", value },
+            };
         }
 
         private static OrderedDictionary ReadAbilitySystemEffectActionCfg(
@@ -17086,28 +18206,26 @@ namespace AnimeStudio.CLI
             var data = new OrderedDictionary
             {
                 { "$partial", true },
-                { "$inferred", true },
                 { "layout", "Beyond.Gameplay.EffectActionCfg" },
-                { "layoutNote", "Unity MonoBehaviour payload follows IL2CPP metadata field order except centerOffset is omitted in observed AbilitySystemData rows. BlackboardDouble internals remain exposed as raw 3-word wrappers." },
-                { "observedPayloadStatus", "fixed 107-word AbilitySystemData EffectActionCfg variant consumed by this reader" },
+                { "serializedLayoutSource", "managed-reference TypeTree" },
+                { "layoutNote", "The EffectActionCfg field order and serialized presence come from the exact managed-reference TypeTree. Blackboard wrapper values remain partial only where their enum/key semantics are not named." },
                 { "partialReasons", new List<string>
                     {
-                        "BlackboardDouble internals remain emitted as raw 3-word wrappers",
-                        "IL2CPP metadata lists centerOffset, but observed AbilitySystemData rows omit it",
-                        "AbilitySystemData overrideDeadEffect variant is not proven in focused samples",
+                        "Some enum/hash numeric values are not yet joined to runtime names.",
+                        "Blackboard wrapper keys and values are structurally decoded but their gameplay meaning is not inferred.",
                     }
                 },
-                { "omittedSerializedFields", new List<string> { "centerOffset" } },
                 { "fxType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.fxType", true, (0, "Normal"), (2, "Alert"), (4, "BottomScreen"), (6, "WeaponVfx")) },
                 { "effectName", reader.ReadAlignedAsciiString($"{fieldName}.effectName") },
                 { "guardEffect", reader.ReadBool32($"{fieldName}.guardEffect") },
-                { "forceGuardEffect", reader.ReadBool32($"{fieldName}.forceGuardEffect") },
                 { "isCenterChangeLod", reader.ReadBool32($"{fieldName}.isCenterChangeLod") },
                 { "useScaleBB", reader.ReadBool32($"{fieldName}.useScaleBB") },
                 { "scale", ReadPayloadVector3(reader, $"{fieldName}.scale") },
-                { "scaleBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.scaleBB") },
+                { "scaleBB", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.scaleBB") },
                 { "useLengthBB", reader.ReadBool32($"{fieldName}.useLengthBB") },
-                { "lengthBB", ReadAbilitySystemBlackboardDouble(reader, $"{fieldName}.lengthBB") },
+                { "lengthBB", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.lengthBB") },
+                { "useDurationScaleBB", reader.ReadBool32($"{fieldName}.useDurationScaleBB") },
+                { "durationScaleBB", ReadAbilitySystemBlackboardDoubleExact(reader, $"{fieldName}.durationScaleBB") },
                 { "releaseByAction", reader.ReadBool32($"{fieldName}.releaseByAction") },
                 { "ignoreOwnerTimeScale", reader.ReadBool32($"{fieldName}.ignoreOwnerTimeScale") },
                 { "interruptTime", reader.ReadFloat($"{fieldName}.interruptTime") },
@@ -17123,11 +18241,20 @@ namespace AnimeStudio.CLI
                 { "isUltimateShow", reader.ReadBool32($"{fieldName}.isUltimateShow") },
                 { "visibleWithEntity", reader.ReadBool32($"{fieldName}.visibleWithEntity") },
                 { "visibleWithEntityType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.visibleWithEntityType", true, (0, "Source"), (2, "Target")) },
+                { "ignoreEntityDither", reader.ReadBool32($"{fieldName}.ignoreEntityDither") },
                 { "moveType", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.moveType", true, (0, "Stationary"), (2, "FollowTarget"), (4, "FollowCamera"), (6, "FollowSlot")) },
+                { "useCameraViewportAnchor", reader.ReadBool32($"{fieldName}.useCameraViewportAnchor") },
+                { "cameraViewportPosition", ReadPayloadVector2(reader, $"{fieldName}.cameraViewportPosition") },
+                { "cameraAnchorDistance", reader.ReadFloat($"{fieldName}.cameraAnchorDistance") },
+                { "cameraScreenSizeScaleMode", BuildPayloadHash32(reader.ReadInt32($"{fieldName}.cameraScreenSizeScaleMode")) },
+                { "cameraReferenceFov", reader.ReadFloat($"{fieldName}.cameraReferenceFov") },
+                { "cameraReferenceAspect", reader.ReadFloat($"{fieldName}.cameraReferenceAspect") },
                 { "positionRef", ReadPayloadSparseNamedEnum32(reader, $"{fieldName}.positionRef", true, (0, "Target"), (2, "Source")) },
                 { "grounded", reader.ReadBool32($"{fieldName}.grounded") },
                 { "followGrounded", reader.ReadBool32($"{fieldName}.followGrounded") },
                 { "followGroundedMaxDistance", reader.ReadFloat($"{fieldName}.followGroundedMaxDistance") },
+                { "lerpToTargetTrans", reader.ReadBool32($"{fieldName}.lerpToTargetTrans") },
+                { "lerpDuration", reader.ReadFloat($"{fieldName}.lerpDuration") },
                 { "followHideTarget", reader.ReadBool32($"{fieldName}.followHideTarget") },
                 { "visibleWhenHideTarget", reader.ReadBool32($"{fieldName}.visibleWhenHideTarget") },
                 { "slotIndex", reader.ReadInt32($"{fieldName}.slotIndex") },
@@ -17142,7 +18269,7 @@ namespace AnimeStudio.CLI
                 { "offsetDirRevert", reader.ReadBool32($"{fieldName}.offsetDirRevert") },
                 { "usePositionOffsetBB", reader.ReadBool32($"{fieldName}.usePositionOffsetBB") },
                 { "positionOffset", ReadPayloadVector3(reader, $"{fieldName}.positionOffset") },
-                { "positionOffsetBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.positionOffsetBB") },
+                { "positionOffsetBB", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.positionOffsetBB") },
                 { "useTargetRotation", reader.ReadBool32($"{fieldName}.useTargetRotation") },
                 { "scaleWithTargetSize", reader.ReadBool32($"{fieldName}.scaleWithTargetSize") },
                 { "fxSize", reader.ReadFloat($"{fieldName}.fxSize") },
@@ -17158,7 +18285,7 @@ namespace AnimeStudio.CLI
                 { "revertDir", reader.ReadBool32($"{fieldName}.revertDir") },
                 { "useSelfRotationBB", reader.ReadBool32($"{fieldName}.useSelfRotationBB") },
                 { "selfRotation", ReadPayloadVector3(reader, $"{fieldName}.selfRotation") },
-                { "selfRotationBB", ReadAbilitySystemBlackboardVector3(reader, $"{fieldName}.selfRotationBB") },
+                { "selfRotationBB", ReadAbilitySystemBlackboardVector3Exact(reader, $"{fieldName}.selfRotationBB") },
                 { "lockYRotation", reader.ReadBool32($"{fieldName}.lockYRotation") },
                 { "unpackRotDelayFrame", reader.ReadInt32($"{fieldName}.unpackRotDelayFrame") },
                 { "unpackFollowTargetRotOnRelease", reader.ReadBool32($"{fieldName}.unpackFollowTargetRotOnRelease") },
@@ -17306,10 +18433,12 @@ namespace AnimeStudio.CLI
         private static bool TryReadAbilitySystemSkillDataBundle(
             ManagedReferencePayloadReader reader,
             IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
-            out OrderedDictionary data
+            out OrderedDictionary data,
+            out InvalidDataException failure
         )
         {
             data = null;
+            failure = null;
             var local = new ManagedReferencePayloadReader(reader.RawData, reader.Position, reader.Remaining);
             try
             {
@@ -17317,6 +18446,7 @@ namespace AnimeStudio.CLI
                 {
                     { "$decoded", true },
                     { "layout", "Beyond.Gameplay.Core.SkillDataBundle" },
+                    { "serializedLayoutSource", "managed-reference TypeTree" },
                     { "allNormalAttackId", ReadPayloadStringList(local, "skillDataBundle.allNormalAttackId", 256) },
                     { "allActiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allActiveSkillId", 256) },
                     { "allPassiveSkillId", ReadPayloadStringList(local, "skillDataBundle.allPassiveSkillId", 256) },
@@ -17330,6 +18460,9 @@ namespace AnimeStudio.CLI
                     { "dodgeSkillId", local.ReadAlignedAsciiString("skillDataBundle.dodgeSkillId") },
                 };
 
+                data["comboSkillPriorityType"] = BuildPayloadHash32(
+                    local.ReadInt32("skillDataBundle.comboSkillPriorityType")
+                );
                 var comboSkillConditionCount = local.ReadInt32("skillDataBundle.comboSkillConditions.count");
                 data["comboSkillConditions"] = ReadAbilitySystemComboSkillConditionList(
                     local,
@@ -17337,19 +18470,48 @@ namespace AnimeStudio.CLI
                     comboSkillConditionCount,
                     recoveredByRid
                 );
+                data["enableComboSkillBlackboard"] = local.ReadBool32("skillDataBundle.enableComboSkillBlackboard");
+                data["comboSkillBlackboard"] = ReadAbilitySystemEntityBlackboard(
+                    local,
+                    "skillDataBundle.comboSkillBlackboard",
+                    64
+                );
                 data["comboSkillId"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillId");
                 data["comboSkillSpecialNodeName"] = local.ReadAlignedAsciiString("skillDataBundle.comboSkillSpecialNodeName");
                 data["defaultCmdMapping"] = ReadAbilitySystemBattleCommandStringDictionary(local, "skillDataBundle.defaultCmdMapping", 8);
-                data["layoutNote"] = "SkillDataBundle fields are consumed through defaultCmdMapping. Nested comboSkillConditions may still contain partial action/condition payloads, and later AbilitySystemData fields are decoded by the parent AbilitySystemData reader.";
+                data["hudPanelName"] = local.ReadAlignedAsciiString("skillDataBundle.hudPanelName");
+                data["activeSkillTypeOverrides"] = ReadPayloadStringIntDictionary(
+                    local,
+                    "skillDataBundle.activeSkillTypeOverrides",
+                    256
+                );
+                data["layoutNote"] = "All serialized SkillDataBundle fields are consumed in the exact managed-reference TypeTree order. Nested comboSkillConditions may still contain partial action/condition semantics, and later AbilitySystemData fields are decoded by the parent AbilitySystemData reader.";
 
                 reader.SetPosition(local.Position);
                 return true;
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException ex)
             {
                 data = null;
+                failure = ex;
                 return false;
             }
+        }
+
+        internal static OrderedDictionary DecodeAbilitySystemSkillDataBundleForTesting(byte[] payload)
+        {
+            payload ??= Array.Empty<byte>();
+            var reader = new ManagedReferencePayloadReader(payload, 0, payload.Length);
+            if (!TryReadAbilitySystemSkillDataBundle(
+                reader,
+                new Dictionary<long, ManagedReferenceHeader>(),
+                out var data,
+                out var failure))
+            {
+                throw failure ?? new InvalidDataException("AbilitySystemData SkillDataBundle was not decoded");
+            }
+            reader.EnsureComplete();
+            return data;
         }
 
         private static OrderedDictionary ReadAbilitySystemComboSkillConditionList(
@@ -17479,39 +18641,6 @@ namespace AnimeStudio.CLI
             return ReadPayloadRawInt32Words(reader, fieldName, count);
         }
 
-        private static List<OrderedDictionary> ReadAbilitySystemModeCompactTail(ManagedReferencePayloadReader reader)
-        {
-            var words = new List<OrderedDictionary>();
-            while (reader.Remaining >= 4)
-            {
-                if (LooksLikeAbilitySystemSectionString(reader, out _))
-                {
-                    break;
-                }
-
-                words.Add(BuildPayloadHash32(reader.ReadInt32("modeConfig.modes.compactTailRawWords")));
-            }
-            return words;
-        }
-
-        private static bool LooksLikeAbilitySystemSectionString(ManagedReferencePayloadReader reader, out string value)
-        {
-            value = null;
-            if (reader.Remaining < 4)
-            {
-                return false;
-            }
-
-            var pos = reader.Position;
-            if (!TryReadAlignedAsciiString(reader.RawData, ref pos, out value) || pos > reader.End || value.Length == 0)
-            {
-                value = null;
-                return false;
-            }
-
-            return value.Length >= 3 && IsLikelyAbilitySystemSectionString(value);
-        }
-
         private static bool IsLikelyAbilitySystemSectionString(string value)
         {
             return value.StartsWith("Skill", StringComparison.Ordinal)
@@ -17569,7 +18698,11 @@ namespace AnimeStudio.CLI
             var count = reader.Remaining / 4;
             if (count < 0 || count > maxCount)
             {
-                throw new InvalidDataException($"invalid word count {count} for {fieldName}");
+                throw reader.CreateFailure(
+                    fieldName,
+                    $"invalid word count {count} for {fieldName}",
+                    requestedBytes: count >= 0 && count <= int.MaxValue / 4 ? count * 4 : null
+                );
             }
 
             var values = new List<OrderedDictionary>(count);
@@ -17588,6 +18721,175 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static bool TryReadEnemyPartsRootComponentDataExact(
+            byte[] rawData,
+            int offset,
+            int length,
+            out OrderedDictionary data,
+            out InvalidDataException failure
+        )
+        {
+            data = null;
+            failure = null;
+            try
+            {
+                var reader = new ManagedReferencePayloadReader(rawData, offset, length);
+                data = new OrderedDictionary
+                {
+                    { "$decoded", true },
+                    { "exactTypeTreeDecoded", true },
+                    { "$inferred", true },
+                    { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
+                    { "serializedLayoutSource", "managed-reference TypeTree" },
+                    { "offset", offset },
+                    { "length", length },
+                    { "mountPointData", ReadPayloadIntStringDictionary(
+                        reader,
+                        "mountPointData",
+                        "mountPoint",
+                        "name",
+                        256) },
+                    { "extraMountPointBundles", ReadEnemyPartMountPointBundleList(reader) },
+                    { "subGameObjects", ReadEnemyPartSubGameObjectList(reader) },
+                    { "modelParts", ReadEnemyPartModelPartsDictionary(reader) },
+                    { "snapMountPointToSurface", reader.ReadBool32("snapMountPointToSurface") },
+                    { "needToSnapMountPoints", ReadPayloadHash32List(reader, "needToSnapMountPoints", 256) },
+                    { "partName", reader.ReadAlignedAsciiString("partName") },
+                    { "partTags", ReadPayloadGameplayTagIdOnlyList(reader, "partTags", 64) },
+                };
+                reader.EnsureComplete();
+                data["observedPayloadStatus"] = "all EnemyPartsRootComponentData TypeTree fields consumed";
+                return true;
+            }
+            catch (InvalidDataException ex)
+            {
+                data = null;
+                failure = ex;
+                return false;
+            }
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartMountPointBundleList(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var count = reader.ReadInt32("extraMountPointBundles.count");
+            if (count < 0 || count > 64)
+            {
+                throw new InvalidDataException($"invalid count {count} for extraMountPointBundles");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "index", reader.ReadInt32($"extraMountPointBundles[{i}].index") },
+                    { "mountPointToName", ReadPayloadIntStringDictionary(
+                        reader,
+                        $"extraMountPointBundles[{i}].mountPointToName",
+                        "mountPoint",
+                        "name",
+                        256) },
+                });
+            }
+            return values;
+        }
+
+        private static List<OrderedDictionary> ReadEnemyPartSubGameObjectList(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var count = reader.ReadInt32("subGameObjects.count");
+            if (count < 0 || count > 256)
+            {
+                throw new InvalidDataException($"invalid count {count} for subGameObjects");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(new OrderedDictionary
+                {
+                    { "objectName", reader.ReadAlignedAsciiString($"subGameObjects[{i}].objectName") },
+                    { "localPosition", ReadPayloadVector3(reader, $"subGameObjects[{i}].localPosition") },
+                    { "localRotation", new OrderedDictionary
+                        {
+                            { "x", reader.ReadFloat($"subGameObjects[{i}].localRotation.x") },
+                            { "y", reader.ReadFloat($"subGameObjects[{i}].localRotation.y") },
+                            { "z", reader.ReadFloat($"subGameObjects[{i}].localRotation.z") },
+                            { "w", reader.ReadFloat($"subGameObjects[{i}].localRotation.w") },
+                        }
+                    },
+                });
+            }
+            return values;
+        }
+
+        private static OrderedDictionary ReadEnemyPartModelPartsDictionary(
+            ManagedReferencePayloadReader reader
+        )
+        {
+            var rawKeys = ReadPayloadInt32List(reader, "modelParts.keys", 256);
+            var valueCount = reader.ReadInt32("modelParts.values.count");
+            if (valueCount != rawKeys.Count)
+            {
+                throw new InvalidDataException("key/value count mismatch for modelParts");
+            }
+
+            var keys = rawKeys.Select(BuildPayloadHash32).ToList();
+            var values = new List<List<string>>(valueCount);
+            var entries = new List<OrderedDictionary>(valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                var names = ReadPayloadStringList(reader, $"modelParts.values[{i}].modelPartsNameList", 256);
+                values.Add(names);
+                entries.Add(new OrderedDictionary
+                {
+                    { "modelPart", keys[i] },
+                    { "names", names },
+                });
+            }
+
+            return new OrderedDictionary
+            {
+                { "keys", keys },
+                { "values", values },
+                { "entries", entries },
+            };
+        }
+
+        private static List<OrderedDictionary> ReadPayloadHash32List(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            return ReadPayloadInt32List(reader, fieldName, maxCount)
+                .Select(BuildPayloadHash32)
+                .ToList();
+        }
+
+        private static List<OrderedDictionary> ReadPayloadGameplayTagIdOnlyList(
+            ManagedReferencePayloadReader reader,
+            string fieldName,
+            int maxCount
+        )
+        {
+            var count = reader.ReadInt32($"{fieldName}.count");
+            if (count < 0 || count > maxCount)
+            {
+                throw new InvalidDataException($"invalid count {count} for {fieldName}");
+            }
+
+            var values = new List<OrderedDictionary>(count);
+            for (var i = 0; i < count; i++)
+            {
+                values.Add(ReadPayloadGameplayTagIdOnly(reader, $"{fieldName}[{i}]"));
+            }
+            return values;
+        }
+
         private static bool TryReadEnemyPartsRootComponentData(
             byte[] rawData,
             int offset,
@@ -17603,6 +18905,7 @@ namespace AnimeStudio.CLI
                 data = new OrderedDictionary
                 {
                     { "$decoded", true },
+                    { "$partial", true },
                     { "$inferred", true },
                     { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
                     { "layoutVariant", $"prefixWords{prefixWordCount}" },
@@ -17635,6 +18938,7 @@ namespace AnimeStudio.CLI
                 data = new OrderedDictionary
                 {
                     { "$decoded", true },
+                    { "$partial", true },
                     { "$inferred", true },
                     { "layout", "Beyond.Gameplay.Core.EnemyPartsRootComponentData" },
                     { "layoutVariant", "prefixWords6PartIdList" },

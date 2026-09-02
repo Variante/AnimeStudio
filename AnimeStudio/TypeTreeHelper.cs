@@ -221,6 +221,85 @@ namespace AnimeStudio
             return obj;
         }
 
+        public static bool TryReadTopLevelPrefixBeforeField(
+            TypeTree m_Types,
+            ObjectReader reader,
+            string fieldName,
+            string fieldType,
+            out OrderedDictionary prefix,
+            out long bytesRead,
+            out Exception readException)
+        {
+            prefix = new OrderedDictionary();
+            bytesRead = 0;
+            readException = null;
+            if (m_Types?.m_Nodes == null || reader == null)
+            {
+                return false;
+            }
+
+            reader.Reset();
+            var nodes = m_Types.m_Nodes;
+            for (int i = 1; i < nodes.Count; i++)
+            {
+                var node = nodes[i];
+                if (node.m_Level == 1
+                    && string.Equals(node.m_Name, fieldName, StringComparison.Ordinal)
+                    && string.Equals(node.m_Type, fieldType, StringComparison.Ordinal))
+                {
+                    bytesRead = reader.Position - reader.byteStart;
+                    return true;
+                }
+
+                try
+                {
+                    prefix[node.m_Name] = ReadValue(nodes, reader, ref i);
+                }
+                catch (Exception ex)
+                {
+                    readException = ex;
+                    bytesRead = reader.Position - reader.byteStart;
+                    return false;
+                }
+            }
+
+            bytesRead = reader.Position - reader.byteStart;
+            return false;
+        }
+
+        public static OrderedDictionary ReadTypePayload(
+            TypeTree m_Types,
+            byte[] rawData,
+            int offset,
+            int length,
+            out long bytesRead)
+        {
+            if (m_Types?.m_Nodes == null)
+            {
+                throw new ArgumentNullException(nameof(m_Types));
+            }
+            if (rawData == null)
+            {
+                throw new ArgumentNullException(nameof(rawData));
+            }
+            if (offset < 0 || length < 0 || offset > rawData.Length - length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(offset));
+            }
+
+            using var stream = new MemoryStream(rawData, offset, length, false);
+            using var reader = new EndianBinaryReader(stream, EndianType.LittleEndian);
+            var obj = new OrderedDictionary();
+            var nodes = m_Types.m_Nodes;
+            for (int i = 1; i < nodes.Count; i++)
+            {
+                var node = nodes[i];
+                obj[node.m_Name] = ReadValue(nodes, reader, ref i);
+            }
+            bytesRead = reader.Position;
+            return obj;
+        }
+
         private static object ReadValue(List<TypeTreeNode> m_Nodes, EndianBinaryReader reader, ref int i)
         {
             var m_Node = m_Nodes[i];

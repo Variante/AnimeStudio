@@ -4,8 +4,10 @@ using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using AnimeStudio.ShaderRecovery;
+using Mono.Cecil;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -34,6 +36,7 @@ internal static class RecoveryCli
                 "inspect-object" => InspectObject(args),
                 "audit-refs" => AuditRefs(args),
                 "certify-index" => CertifyIndex(args),
+                "dummydll-index" => DummyDllIndex(args),
                 "replay" => Replay(args),
                 "schema-diff" => SchemaDiff(args),
                 _ => 1,
@@ -52,6 +55,7 @@ internal static class RecoveryCli
         || value.Equals("inspect-object", StringComparison.OrdinalIgnoreCase)
         || value.Equals("audit-refs", StringComparison.OrdinalIgnoreCase)
         || value.Equals("certify-index", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("dummydll-index", StringComparison.OrdinalIgnoreCase)
         || value.Equals("replay", StringComparison.OrdinalIgnoreCase)
         || value.Equals("schema-diff", StringComparison.OrdinalIgnoreCase);
 
@@ -166,6 +170,106 @@ internal static class RecoveryCli
         };
         Console.WriteLine(JsonConvert.SerializeObject(report, Formatting.Indented));
         return report.certified ? 0 : 2;
+    }
+
+    private static int DummyDllIndex(string[] args)
+    {
+        var input = RequiredPath(args, "--input", 1);
+        var output = OptionalPath(args, "--output")
+            ?? throw new ArgumentException("Missing --output <PATH>.");
+        if (!Directory.Exists(input))
+            throw new DirectoryNotFoundException($"DummyDll directory does not exist: {input}");
+
+        var assemblies = new List<object>();
+        var errors = new List<object>();
+        var totalTypes = 0;
+        var totalInvalidTypes = 0;
+        foreach (var file in Directory.EnumerateFiles(input, "*.dll", SearchOption.AllDirectories)
+                     .OrderBy(path => Path.GetRelativePath(input, path), StringComparer.OrdinalIgnoreCase))
+        {
+            var relativePath = Path.GetRelativePath(input, file).Replace('\\', '/');
+            try
+            {
+                using var assembly = AssemblyDefinition.ReadAssembly(file, new ReaderParameters
+                {
+                    ReadingMode = ReadingMode.Immediate,
+                    ReadSymbols = false,
+                });
+                var definitions = EnumerateTypes(assembly.MainModule.Types)
+                    .Where(type => type.Name != "<Module>")
+                    .ToArray();
+                var invalidTypeCount = definitions.Count(type => string.IsNullOrWhiteSpace(type.FullName));
+                var types = definitions
+                    .Where(type => !string.IsNullOrWhiteSpace(type.FullName))
+                    .Select(type => new
+                    {
+                        fullName = type.FullName.Replace('/', '+'),
+                        type.Namespace,
+                        type.Name,
+                        token = $"0x{type.MetadataToken.ToInt32():x8}",
+                    })
+                    .OrderBy(type => type.fullName, StringComparer.Ordinal)
+                    .ToArray();
+                totalTypes += types.Length;
+                totalInvalidTypes += invalidTypeCount;
+                var info = new FileInfo(file);
+                assemblies.Add(new
+                {
+                    path = relativePath,
+                    module = assembly.MainModule.Name,
+                    bytes = info.Length,
+                    sha256 = Sha256File(file),
+                    typeCount = types.Length,
+                    invalidTypeCount,
+                    types,
+                });
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new { path = relativePath, error = $"{ex.GetType().Name}: {ex.Message}" });
+            }
+        }
+
+        var payload = new
+        {
+            schema = "animestudio.dummydll-index.v1",
+            complete = errors.Count == 0,
+            input,
+            assemblyCount = assemblies.Count,
+            typeCount = totalTypes,
+            invalidTypeCount = totalInvalidTypes,
+            assemblies,
+            errors,
+        };
+        WriteJson(output, payload);
+        Console.WriteLine(JsonConvert.SerializeObject(new
+        {
+            payload.schema,
+            payload.complete,
+            payload.input,
+            output,
+            payload.assemblyCount,
+            payload.typeCount,
+            payload.invalidTypeCount,
+            errorCount = errors.Count,
+        }, Formatting.Indented));
+        return errors.Count == 0 ? 0 : 2;
+    }
+
+    private static IEnumerable<TypeDefinition> EnumerateTypes(IEnumerable<TypeDefinition> roots)
+    {
+        foreach (var type in roots)
+        {
+            yield return type;
+            foreach (var nested in EnumerateTypes(type.NestedTypes))
+                yield return nested;
+        }
+    }
+
+    private static string Sha256File(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     private static int Replay(string[] args)

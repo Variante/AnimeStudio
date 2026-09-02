@@ -83,7 +83,47 @@ namespace AnimeStudio.CLI
                     Environment.ExitCode = 1;
                     return;
                 }
+                if (o.ManagedReferenceDiagnosticsJsonl != null && !HasMonoBehaviourJsonTarget(o, typeFilterPlan))
+                {
+                    Console.Error.WriteLine(
+                        "--managed_reference_diagnostics_jsonl requires a JSON export target selecting MonoBehaviour."
+                    );
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                if (o.ManagedReferenceDiagnosticsJsonl == null && !o.ManagedReferenceDiagnosticTypes.IsNullOrEmpty())
+                {
+                    Console.Error.WriteLine(
+                        "--managed_reference_diagnostic_types requires --managed_reference_diagnostics_jsonl."
+                    );
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                if (o.ManagedReferenceDiagnosticsIncludeExactMatches
+                    && o.ManagedReferenceDiagnosticsJsonl == null)
+                {
+                    Console.Error.WriteLine(
+                        "--managed_reference_diagnostics_include_exact_matches requires --managed_reference_diagnostics_jsonl."
+                    );
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                if (o.ManagedReferenceDiagnosticsIncludeExactMatches
+                    && o.ManagedReferenceDiagnosticTypes.IsNullOrEmpty())
+                {
+                    Console.Error.WriteLine(
+                        "--managed_reference_diagnostics_include_exact_matches requires at least one --managed_reference_diagnostic_types filter."
+                    );
+                    Environment.ExitCode = 1;
+                    return;
+                }
                 using var objectIndex = ObjectIndexJsonlWriter.Open(o.ObjectIndexJsonl, o.Input);
+                using var managedReferenceDiagnostics = ManagedReferenceDiagnosticsJsonlWriter.Open(
+                    o.ManagedReferenceDiagnosticsJsonl,
+                    o.Input,
+                    o.ManagedReferenceDiagnosticTypes,
+                    o.ManagedReferenceDiagnosticsIncludeExactMatches
+                );
                 using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
 
                 if (o.Key != default)
@@ -132,6 +172,7 @@ namespace AnimeStudio.CLI
                     indexComplete = !exportHadErrors;
                 }
                 objectIndex?.Complete(indexComplete);
+                managedReferenceDiagnostics?.Complete(indexComplete);
                 rendererIndex?.Complete(indexComplete);
                 if (Properties.Settings.Default.scrapeMonos)
                 {
@@ -381,6 +422,23 @@ namespace AnimeStudio.CLI
             return (options.AssetExportType == ExportType.JSON && ContainsIndexableType(plan.PrimaryExportTypes))
                 || (options.SecondaryAssetExportType == ExportType.JSON
                     && ContainsIndexableType(plan.SecondaryExportTypes));
+        }
+
+        private static bool HasMonoBehaviourJsonTarget(Options options, TypeFilterPlan plan)
+        {
+            bool ContainsMonoBehaviour(ClassIDType[] types)
+            {
+                if (types.IsNullOrEmpty())
+                {
+                    return ClassIDType.MonoBehaviour.CanExport();
+                }
+                return types.Contains(ClassIDType.MonoBehaviour);
+            }
+
+            return (options.AssetExportType == ExportType.JSON && ContainsMonoBehaviour(plan.PrimaryExportTypes))
+                || (options.SecondaryOutput != null
+                    && options.SecondaryAssetExportType == ExportType.JSON
+                    && ContainsMonoBehaviour(plan.SecondaryExportTypes));
         }
 
         private static bool RunExportPlan(

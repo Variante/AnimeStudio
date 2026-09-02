@@ -111,6 +111,31 @@ namespace AnimeStudio
             return null;
         }
 
+        public bool TryReadTypePrefixBeforeField(
+            TypeTree m_Type,
+            string fieldName,
+            string fieldType,
+            out OrderedDictionary prefix,
+            out long bytesRead,
+            out Exception readException)
+        {
+            if (m_Type != null)
+            {
+                return TypeTreeHelper.TryReadTopLevelPrefixBeforeField(
+                    m_Type,
+                    reader,
+                    fieldName,
+                    fieldType,
+                    out prefix,
+                    out bytesRead,
+                    out readException);
+            }
+            prefix = null;
+            bytesRead = 0;
+            readException = null;
+            return false;
+        }
+
         public byte[] GetRawData()
         {
             Logger.Verbose($"Dumping raw bytes of the object with {m_PathID} in file {assetsFile.fileName}...");
