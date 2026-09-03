@@ -11,6 +11,10 @@ static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length >= 4 && string.Equals(args[0], "table-sweep", StringComparison.OrdinalIgnoreCase))
+        {
+            return RunTableSweep(args[1], args[2], args[3], args.Length >= 5 ? args[4] : null);
+        }
         if (args.Length >= 3 && string.Equals(args[0], "lua-sweep", StringComparison.OrdinalIgnoreCase))
         {
             return RunLuaSweep(args[1], args[2]);
@@ -158,6 +162,167 @@ static class Program
         File.WriteAllText(outputPath, json, new UTF8Encoding(false));
         Console.WriteLine($"Lua certification: {rows.Count} rows, {wrapperCounts.GetValueOrDefault("base64_xxtea")} Base64+XXTEA, {wrapperCounts.GetValueOrDefault("plain_utf8")} plain UTF-8, {rows.Count(row => row.ContainsKey("failure"))} failures");
         return rows.Any(row => row.ContainsKey("failure")) ? 1 : 0;
+    }
+
+    private static int RunTableSweep(
+        string primaryAssetsPath,
+        string fallbackAssetsPath,
+        string outputPath,
+        string? inputSetSha256)
+    {
+        var rows = new List<Dictionary<string, object?>>();
+        var sourceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var statusCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var declaredBytes = 0L;
+        var actualBytes = 0L;
+        EndfieldVfsBlockMainInfo blockInfo;
+
+        try
+        {
+            var loader = new EndfieldVfsLoader(primaryAssetsPath, fallbackAssetsPath);
+            blockInfo = loader.LoadBlockInfo(EndfieldVfsBlockType.Table);
+            foreach (var chunk in blockInfo.Chunks)
+            {
+                foreach (var file in chunk.Files)
+                {
+                    declaredBytes = checked(declaredBytes + file.Length);
+                    var row = new Dictionary<string, object?>
+                    {
+                        ["virtualPath"] = file.FileName,
+                        ["chunk"] = chunk.FileName,
+                        ["offset"] = file.Offset,
+                        ["declaredLength"] = file.Length,
+                        ["encrypted"] = file.UseEncrypt,
+                        ["status"] = "failed",
+                    };
+                    string? chunkPath = null;
+                    byte[]? data = null;
+                    try
+                    {
+                        chunkPath = loader.ResolveChunkPath(EndfieldVfsBlockType.Table, chunk);
+                        var primaryVfs = Path.GetFullPath(Path.Combine(primaryAssetsPath, "VFS"))
+                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                            + Path.DirectorySeparatorChar;
+                        var fallbackVfs = Path.GetFullPath(Path.Combine(fallbackAssetsPath, "VFS"))
+                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                            + Path.DirectorySeparatorChar;
+                        var fullChunkPath = Path.GetFullPath(chunkPath);
+                        var source = fullChunkPath.StartsWith(primaryVfs, StringComparison.OrdinalIgnoreCase)
+                            ? "primary"
+                            : fullChunkPath.StartsWith(fallbackVfs, StringComparison.OrdinalIgnoreCase)
+                                ? "fallback"
+                                : "unknown";
+                        row["source"] = source;
+                        row["physicalChunk"] = fullChunkPath;
+                        Increment(sourceCounts, source);
+                        data = loader.ExtractFileToBytes(
+                            EndfieldVfsBlockType.Table,
+                            chunk,
+                            file,
+                            verifyMd5: true);
+                        row["actualBytesRead"] = data.Length;
+                        actualBytes = checked(actualBytes + data.Length);
+                        var parsed = EndfieldSparkBuffer.ParseBytes(data);
+                        row["status"] = "boundary_verified";
+                        row["rootName"] = parsed.Name;
+                        row["exactEof"] = true;
+                        Increment(statusCounts, "boundary_verified");
+                    }
+                    catch (EndfieldSparkBufferException exception)
+                    {
+                        row["actualBytesRead"] = data?.Length ?? 0;
+                        row["exactEof"] = false;
+                        row["diagnostic"] = new Dictionary<string, object?>
+                        {
+                            ["code"] = "sparkbuffer_parse_failed",
+                            ["message"] = exception.Message,
+                        };
+                        Increment(statusCounts, "failed");
+                    }
+                    catch (Exception exception)
+                    {
+                        row["actualBytesRead"] = data?.Length ?? 0;
+                        row["exactEof"] = false;
+                        row["diagnostic"] = new Dictionary<string, object?>
+                        {
+                            ["code"] = exception is EndfieldVfsException
+                                ? "vfs_read_failed"
+                                : "unexpected_failure",
+                            ["message"] = exception.Message,
+                        };
+                        Increment(statusCounts, "failed");
+                    }
+                    rows.Add(row);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            var failureReport = new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = "table-sparkbuffer-sweep-v1",
+                ["inputSetSha256"] = inputSetSha256 ?? string.Empty,
+                ["status"] = "failed",
+                ["failure"] = exception.Message,
+                ["rows"] = rows,
+            };
+            WriteJsonReport(outputPath, failureReport);
+            Console.Error.WriteLine($"Table/SparkBuffer sweep failed: {exception.Message}");
+            return 1;
+        }
+
+        var failed = statusCounts.GetValueOrDefault("failed");
+        var reportComplete = failed == 0 && rows.Count == blockInfo.GroupFileInfoNum;
+        var report = new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = "table-sparkbuffer-sweep-v1",
+            ["inputSetSha256"] = inputSetSha256,
+            ["primaryAssets"] = Path.GetFullPath(primaryAssetsPath),
+            ["fallbackAssets"] = Path.GetFullPath(fallbackAssetsPath),
+            ["block"] = new Dictionary<string, object?>
+            {
+                ["numericId"] = blockInfo.BlockTypeValue,
+                ["name"] = blockInfo.BlockType.GetName(),
+                ["groupConfigName"] = blockInfo.GroupConfigName,
+                ["groupConfigHashName"] = blockInfo.GroupConfigHashName,
+                ["metadataVersion"] = blockInfo.Version,
+                ["declaredFileCount"] = blockInfo.GroupFileInfoNum,
+                ["declaredChunkCount"] = blockInfo.Chunks.Count,
+                ["declaredLogicalBytes"] = declaredBytes,
+                ["declaredChunkBytes"] = blockInfo.GroupChunksLength,
+            },
+            ["totals"] = new Dictionary<string, object?>
+            {
+                ["fileCount"] = rows.Count,
+                ["boundaryVerified"] = statusCounts.GetValueOrDefault("boundary_verified"),
+                ["failed"] = failed,
+                ["declaredBytes"] = declaredBytes,
+                ["actualBytesRead"] = actualBytes,
+                ["sourceCounts"] = sourceCounts,
+                ["statusCounts"] = statusCounts,
+            },
+            ["complete"] = reportComplete,
+            ["rows"] = rows,
+        };
+        WriteJsonReport(outputPath, report);
+        Console.WriteLine(
+            $"Table/SparkBuffer sweep: {rows.Count}/{blockInfo.GroupFileInfoNum} files, "
+            + $"{statusCounts.GetValueOrDefault("boundary_verified")} boundary_verified, {failed} failed, "
+            + $"{declaredBytes} declared bytes, {actualBytes} bytes read");
+        return reportComplete ? 0 : 1;
+    }
+
+    private static void WriteJsonReport(string outputPath, Dictionary<string, object?> report)
+    {
+        var parent = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+        File.WriteAllText(
+            outputPath,
+            JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(false));
     }
 
     private static void Increment(Dictionary<string, int> counts, string key)
