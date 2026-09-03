@@ -504,6 +504,17 @@ namespace AnimeStudio.Endfield
                 stats.MinDeclaredLength = Math.Min(stats.MinDeclaredLength, objectSize);
                 stats.MaxDeclaredLength = Math.Max(stats.MaxDeclaredLength, objectSize);
                 stats.Count = checked(stats.Count + 1);
+                if (objectType == 2)
+                {
+                    ParseType2SourcePrefix(
+                        payload,
+                        checked(cursor + 9),
+                        checked((int)objectSize - 4),
+                        bankId,
+                        ordinal,
+                        objectId,
+                        structure);
+                }
                 cursor = checked((int)objectEnd);
             }
 
@@ -512,6 +523,52 @@ namespace AnimeStudio.Endfield
                 throw new InvalidDataException(
                     $"AKPK HIRC cursor mismatch: id={bankId}, cursor={cursor}, end={bodyEnd}, trailing={bodyEnd - cursor}");
             }
+        }
+
+        private static void ParseType2SourcePrefix(
+            byte[] payload,
+            int bodyStart,
+            int bodyLength,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            if (bodyLength < 14)
+            {
+                throw new InvalidDataException(
+                    $"AKPK HIRC type 0x02 source prefix truncated: id={bankId}, ordinal={ordinal}, object={objectId}, expected=14, actual={bodyLength}");
+            }
+
+            var pluginId = BitConverter.ToUInt32(payload, bodyStart);
+            var pluginType = pluginId & 0x0F;
+            var prefixLength = 14;
+            if (pluginType == 2)
+            {
+                if (bodyLength < 18)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC type 0x02 source plugin length truncated: id={bankId}, ordinal={ordinal}, object={objectId}, expected=18, actual={bodyLength}");
+                }
+                var parameterLength = BitConverter.ToUInt32(payload, checked(bodyStart + 14));
+                if (parameterLength > (uint)(bodyLength - 18))
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC type 0x02 source plugin range out of object: id={bankId}, ordinal={ordinal}, object={objectId}, parameterLength={parameterLength}, available={bodyLength - 18}");
+                }
+                prefixLength = checked(18 + (int)parameterLength);
+            }
+
+            structure.Type2PrefixCount = checked(structure.Type2PrefixCount + 1);
+            structure.Type2PluginTypeCounts.TryGetValue(pluginType, out var pluginCount);
+            structure.Type2PluginTypeCounts[pluginType] = checked(pluginCount + 1);
+            structure.Type2PrefixBytes = checked(structure.Type2PrefixBytes + (uint)prefixLength);
+            var opaqueLength = checked(bodyLength - prefixLength);
+            structure.Type2OpaqueTailBytes = checked(structure.Type2OpaqueTailBytes + (uint)opaqueLength);
+            structure.Type2MinOpaqueTailBytes = structure.Type2PrefixCount == 1
+                ? (uint)opaqueLength
+                : Math.Min(structure.Type2MinOpaqueTailBytes, (uint)opaqueLength);
+            structure.Type2MaxOpaqueTailBytes = Math.Max(structure.Type2MaxOpaqueTailBytes, (uint)opaqueLength);
         }
 
         private static byte[] ReadBytesWithin(BinaryReader reader, int count, long end, string field)
@@ -591,6 +648,12 @@ namespace AnimeStudio.Endfield
         public uint HircObjectCount { get; set; }
         public Dictionary<byte, uint> HircObjectTypeCounts { get; } = new();
         public Dictionary<byte, EndfieldBnkObjectTypeStats> HircObjectTypeStats { get; } = new();
+        public uint Type2PrefixCount { get; set; }
+        public Dictionary<uint, uint> Type2PluginTypeCounts { get; } = new();
+        public uint Type2PrefixBytes { get; set; }
+        public uint Type2OpaqueTailBytes { get; set; }
+        public uint Type2MinOpaqueTailBytes { get; set; }
+        public uint Type2MaxOpaqueTailBytes { get; set; }
     }
 
     public sealed class EndfieldBnkObjectTypeStats

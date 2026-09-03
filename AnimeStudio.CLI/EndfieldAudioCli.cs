@@ -146,6 +146,19 @@ namespace AnimeStudio.CLI
                             ["bnkPayloads"] = package.BnkStructures.Count,
                             ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
                             ["hircObjects"] = package.BnkStructures.Sum(x => checked((long)x.HircObjectCount)),
+                            ["hircType02Prefix"] = new Dictionary<string, object?>
+                            {
+                                ["count"] = package.BnkStructures.Sum(x => (long)x.Type2PrefixCount),
+                                ["prefixBytes"] = package.BnkStructures.Sum(x => (long)x.Type2PrefixBytes),
+                                ["opaqueTailBytes"] = package.BnkStructures.Sum(x => (long)x.Type2OpaqueTailBytes),
+                                ["minOpaqueTailBytes"] = package.BnkStructures.Where(x => x.Type2PrefixCount > 0).Select(x => x.Type2MinOpaqueTailBytes).DefaultIfEmpty(0u).Min(),
+                                ["maxOpaqueTailBytes"] = package.BnkStructures.Select(x => x.Type2MaxOpaqueTailBytes).DefaultIfEmpty(0u).Max(),
+                                ["pluginTypeCounts"] = package.BnkStructures
+                                    .SelectMany(x => x.Type2PluginTypeCounts)
+                                    .GroupBy(x => x.Key)
+                                    .OrderBy(x => x.Key)
+                                    .ToDictionary(x => $"0x{x.Key:X}", x => x.Sum(y => (long)y.Value)),
+                            },
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -181,6 +194,17 @@ namespace AnimeStudio.CLI
                                     ["declaredSize"] = section.DeclaredSize,
                                 }).ToArray(),
                                 ["hircObjectCount"] = x.HircObjectCount,
+                                ["hircType02Prefix"] = new Dictionary<string, object?>
+                                {
+                                    ["count"] = x.Type2PrefixCount,
+                                    ["prefixBytes"] = x.Type2PrefixBytes,
+                                    ["opaqueTailBytes"] = x.Type2OpaqueTailBytes,
+                                    ["minOpaqueTailBytes"] = x.Type2MinOpaqueTailBytes,
+                                    ["maxOpaqueTailBytes"] = x.Type2MaxOpaqueTailBytes,
+                                    ["pluginTypeCounts"] = x.Type2PluginTypeCounts
+                                        .OrderBy(pair => pair.Key)
+                                        .ToDictionary(pair => $"0x{pair.Key:X}", pair => pair.Value),
+                                },
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(

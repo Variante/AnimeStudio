@@ -8,6 +8,7 @@ internal static class EndfieldAkpkTests
     {
         TestBankPayloadIsDecryptedAndFramed();
         TestHircObjectFramingAndUnknownTypeArePreserved();
+        TestType2SourcePrefixIsBounded();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -64,6 +65,39 @@ internal static class EndfieldAkpkTests
         AssertThrows(
             () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x2000, impossibleCount)),
             "HIRC object count exceeds HIRC");
+    }
+
+    private static void TestType2SourcePrefixIsBounded()
+    {
+        var source = new byte[18];
+        BinaryPrimitives.WriteUInt32LittleEndian(source.AsSpan(0, 4), 0x00040001);
+        source[4] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(source.AsSpan(5, 4), 0x1234);
+        BinaryPrimitives.WriteUInt32LittleEndian(source.AsSpan(9, 4), 0x20);
+        source[13] = 0x80;
+        BinaryPrimitives.WriteUInt32LittleEndian(source.AsSpan(14, 4), 0);
+        var package = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x3000, BuildBnk((0x02, 0x3001U, source))));
+        var structure = package.BnkStructures[0];
+        if (structure.Type2PrefixCount != 1
+            || structure.Type2PluginTypeCounts[1] != 1
+            || structure.Type2PrefixBytes != 14
+            || structure.Type2OpaqueTailBytes != 4)
+        {
+            throw new InvalidOperationException("type 0x02 source-prefix census mismatch");
+        }
+
+        var truncated = new byte[13];
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x3000, BuildBnk((0x02, 0x3002U, truncated)))),
+            "type 0x02 source prefix truncated");
+
+        var overrun = new byte[18];
+        BinaryPrimitives.WriteUInt32LittleEndian(overrun.AsSpan(0, 4), 0x00040002);
+        BinaryPrimitives.WriteUInt32LittleEndian(overrun.AsSpan(14, 4), 99);
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x3000, BuildBnk((0x02, 0x3003U, overrun)))),
+            "type 0x02 source plugin range out of object");
     }
 
     private static void TestBankPayloadIsDecryptedAndFramed()
