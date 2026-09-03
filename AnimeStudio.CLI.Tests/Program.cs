@@ -46,6 +46,7 @@ static class Program
         TestEndfieldCompressDataCliOutput();
         TestEndfieldLuaDecoderObservedWrappers();
         TestEndfieldLuaDecoderRejectsMalformedFrames();
+        EndfieldSparkBufferTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
     }

@@ -44,6 +44,9 @@ namespace AnimeStudio.Endfield
             var typeDefOffset = reader.ReadInt32LittleEndian();
             var rootDefOffset = reader.ReadInt32LittleEndian();
             var dataOffset = reader.ReadInt32LittleEndian();
+            reader.ValidateOffset(typeDefOffset, "type definition offset");
+            reader.ValidateOffset(rootDefOffset, "root definition offset");
+            reader.ValidateOffset(dataOffset, "data offset");
 
             reader.SeekAbsolute(typeDefOffset);
             var registry = new TypeRegistry();
@@ -64,12 +67,14 @@ namespace AnimeStudio.Endfield
                 _ => throw new EndfieldSparkBufferException($"unsupported root type: {rootDef.FieldType}"),
             };
 
+            reader.RequireReadThroughEnd();
+
             return new EndfieldSparkBufferParseResult(rootDef.Name, data);
         }
 
         private static void ParseTypeDefinitions(SparkReader reader, TypeRegistry registry)
         {
-            var typeDefCount = reader.ReadCount("type definition count");
+            var typeDefCount = reader.ReadCount("type definition count", 1);
             for (var i = 0; i < typeDefCount; i++)
             {
                 var sparkType = reader.ReadSparkType();
@@ -82,7 +87,7 @@ namespace AnimeStudio.Endfield
                         var typeHash = reader.ReadInt32LittleEndian();
                         var name = reader.ReadNullTerminatedString();
                         reader.Align4();
-                        var enumCount = reader.ReadCount("enum item count");
+                        var enumCount = reader.ReadCount("enum item count", 5);
                         var items = new List<EnumItem>(enumCount);
                         for (var j = 0; j < enumCount; j++)
                         {
@@ -100,11 +105,17 @@ namespace AnimeStudio.Endfield
                         var typeHash = reader.ReadInt32LittleEndian();
                         var name = reader.ReadNullTerminatedString();
                         reader.Align4();
-                        var fieldCount = reader.ReadCount("bean field count");
+                        var fieldCount = reader.ReadCount("bean field count", 2);
                         var fields = new List<BeanField>(fieldCount);
+                        var fieldNames = new HashSet<string>(StringComparer.Ordinal);
                         for (var j = 0; j < fieldCount; j++)
                         {
                             var fieldName = reader.ReadNullTerminatedString();
+                            if (!fieldNames.Add(fieldName))
+                            {
+                                throw new EndfieldSparkBufferException(
+                                    $"duplicate bean field name in {name}: {fieldName}");
+                            }
                             var fieldType = reader.ReadSparkType();
                             SparkType? type2 = null;
                             SparkType? type3 = null;
@@ -209,6 +220,7 @@ namespace AnimeStudio.Endfield
                 {
                     return null;
                 }
+                reader.ValidateOffset(beanOffset, "bean pointer");
                 pointerOrigin = reader.Position;
                 reader.SeekAbsolute(beanOffset);
             }
@@ -227,6 +239,7 @@ namespace AnimeStudio.Endfield
                         obj[field.Name] = JValue.CreateNull();
                         continue;
                     }
+                    reader.ValidateOffset(fieldOffset, $"array field {field.Name} offset");
                     origin = reader.Position;
                     reader.SeekAbsolute(fieldOffset);
                 }
@@ -269,7 +282,7 @@ namespace AnimeStudio.Endfield
 
         private static JToken ReadArrayValue(SparkReader reader, BeanField field, TypeRegistry registry)
         {
-            var itemCount = reader.ReadCount("array item count");
+            var itemCount = reader.ReadCount("array item count", 1);
             var arr = new JArray();
             var itemType = field.Type2 ?? throw new EndfieldSparkBufferException("array field missing type2");
 
@@ -310,6 +323,11 @@ namespace AnimeStudio.Endfield
         private static JToken ReadNestedMapValue(SparkReader reader, BeanField field, TypeRegistry registry)
         {
             var mapOffset = reader.ReadInt32LittleEndian();
+            if (mapOffset == -1)
+            {
+                return JValue.CreateNull();
+            }
+            reader.ValidateOffset(mapOffset, $"map field {field.Name} offset");
             var mapOrigin = reader.Position;
             reader.SeekAbsolute(mapOffset);
             var mapValue = ReadMapValue(reader, field, registry);
@@ -319,7 +337,7 @@ namespace AnimeStudio.Endfield
 
         private static JToken ReadMapValue(SparkReader reader, BeanField field, TypeRegistry registry)
         {
-            var keyValueCount = reader.ReadCount("map item count");
+            var keyValueCount = reader.ReadCount("map item count", 8);
             reader.SeekRelative(checked((long)keyValueCount * 8));
             var map = new SortedDictionary<string, JToken>(StringComparer.Ordinal);
             var keyType = field.Type2 ?? throw new EndfieldSparkBufferException("map field missing type2");
@@ -329,6 +347,10 @@ namespace AnimeStudio.Endfield
             {
                 var key = ReadMapKey(reader, keyType);
                 var value = ReadMapValueItem(reader, valueType, field.TypeHash2, registry);
+                if (map.ContainsKey(key))
+                {
+                    throw new EndfieldSparkBufferException($"duplicate map key: {key}");
+                }
                 map[key] = value;
             }
 
@@ -337,7 +359,7 @@ namespace AnimeStudio.Endfield
 
         private static JToken ReadRootMapValue(SparkReader reader, RootDef rootDef, TypeRegistry registry)
         {
-            var keyValueCount = reader.ReadCount("root map item count");
+            var keyValueCount = reader.ReadCount("root map item count", 8);
             reader.SeekRelative(checked((long)keyValueCount * 8));
             var map = new SortedDictionary<string, JToken>(StringComparer.Ordinal);
             var keyType = rootDef.Type2 ?? throw new EndfieldSparkBufferException("root map missing type2");
@@ -347,6 +369,10 @@ namespace AnimeStudio.Endfield
             {
                 var key = ReadMapKey(reader, keyType);
                 var value = ReadMapValueItem(reader, valueType, rootDef.TypeHash2, registry);
+                if (map.ContainsKey(key))
+                {
+                    throw new EndfieldSparkBufferException($"duplicate root map key: {key}");
+                }
                 map[key] = value;
             }
 
@@ -526,6 +552,8 @@ namespace AnimeStudio.Endfield
         private sealed class SparkReader : IDisposable
         {
             private readonly BinaryReader reader;
+            private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+            private long maxReadPosition;
 
             public SparkReader(Stream stream)
             {
@@ -534,21 +562,47 @@ namespace AnimeStudio.Endfield
 
             public long Position => reader.BaseStream.Position;
 
+            public long Length => reader.BaseStream.Length;
+
             public void Dispose() => reader.Dispose();
 
-            public int ReadInt32LittleEndian() => reader.ReadInt32();
+            public int ReadInt32LittleEndian()
+            {
+                EnsureAvailable(sizeof(int), "Int32");
+                var value = reader.ReadInt32();
+                MarkRead(sizeof(int));
+                return value;
+            }
 
-            public long ReadInt64LittleEndian() => reader.ReadInt64();
+            public long ReadInt64LittleEndian()
+            {
+                EnsureAvailable(sizeof(long), "Int64");
+                var value = reader.ReadInt64();
+                MarkRead(sizeof(long));
+                return value;
+            }
 
-            public float ReadSingleLittleEndian() => reader.ReadSingle();
+            public float ReadSingleLittleEndian()
+            {
+                EnsureAvailable(sizeof(float), "Single");
+                var value = reader.ReadSingle();
+                MarkRead(sizeof(float));
+                return value;
+            }
 
-            public double ReadDoubleLittleEndian() => reader.ReadDouble();
+            public double ReadDoubleLittleEndian()
+            {
+                EnsureAvailable(sizeof(double), "Double");
+                var value = reader.ReadDouble();
+                MarkRead(sizeof(double));
+                return value;
+            }
 
-            public bool ReadBoolean() => reader.ReadByte() != 0;
+            public bool ReadBoolean() => ReadByteChecked("boolean") != 0;
 
             public SparkType ReadSparkType()
             {
-                var value = reader.ReadByte();
+                var value = ReadByteChecked("spark type");
                 return value switch
                 {
                     0 => SparkType.Bool,
@@ -571,7 +625,7 @@ namespace AnimeStudio.Endfield
                 var bytes = new List<byte>();
                 while (true)
                 {
-                    var b = reader.ReadByte();
+                    var b = ReadByteChecked("null-terminated string");
                     if (b == 0)
                     {
                         break;
@@ -579,7 +633,16 @@ namespace AnimeStudio.Endfield
                     bytes.Add(b);
                 }
 
-                return Encoding.UTF8.GetString(bytes.ToArray());
+                try
+                {
+                    return StrictUtf8.GetString(bytes.ToArray());
+                }
+                catch (DecoderFallbackException exception)
+                {
+                    throw new EndfieldSparkBufferException(
+                        $"invalid UTF-8 in null-terminated string at offset {Position - bytes.Count - 1}",
+                        exception);
+                }
             }
 
             public string ReadStringAtOffset()
@@ -591,6 +654,7 @@ namespace AnimeStudio.Endfield
                 }
 
                 var oldPosition = Position;
+                ValidateOffset(offset, "string offset");
                 SeekAbsolute(offset);
                 var value = ReadNullTerminatedString();
                 SeekAbsolute(oldPosition);
@@ -611,10 +675,24 @@ namespace AnimeStudio.Endfield
 
             public int ReadCount(string fieldName)
             {
+                return ReadCount(fieldName, 0);
+            }
+
+            public int ReadCount(string fieldName, long minimumBytesPerItem)
+            {
                 var count = ReadInt32LittleEndian();
                 if (count < 0)
                 {
                     throw new EndfieldSparkBufferException($"invalid {fieldName}: {count}");
+                }
+                if (minimumBytesPerItem > 0)
+                {
+                    var remaining = Length - Position;
+                    if (count > remaining / minimumBytesPerItem)
+                    {
+                        throw new EndfieldSparkBufferException(
+                            $"invalid {fieldName}: {count} exceeds remaining-byte bound {remaining / minimumBytesPerItem}");
+                    }
                 }
                 return count;
             }
@@ -625,19 +703,85 @@ namespace AnimeStudio.Endfield
 
             public void SeekAbsolute(long offset)
             {
-                if (offset < 0)
+                if (offset < 0 || offset > Length)
                 {
-                    throw new EndfieldSparkBufferException($"invalid offset: {offset}");
+                    throw new EndfieldSparkBufferException($"invalid offset: {offset} (stream length {Length})");
                 }
                 reader.BaseStream.Seek(offset, SeekOrigin.Begin);
             }
 
-            public void SeekRelative(long offset) => reader.BaseStream.Seek(offset, SeekOrigin.Current);
+            public void SeekRelative(long offset)
+            {
+                long target;
+                try
+                {
+                    target = checked(Position + offset);
+                }
+                catch (OverflowException exception)
+                {
+                    throw new EndfieldSparkBufferException($"relative offset overflow: {offset}", exception);
+                }
+                SeekAbsolute(target);
+            }
+
+            public void ValidateOffset(long offset, string fieldName)
+            {
+                if (offset < 0 || offset >= Length)
+                {
+                    throw new EndfieldSparkBufferException(
+                        $"invalid {fieldName}: {offset} (stream length {Length})");
+                }
+            }
+
+            public void RequireReadThroughEnd()
+            {
+                if (maxReadPosition != Length)
+                {
+                    throw new EndfieldSparkBufferException(
+                        $"unconsumed SparkBuffer trailing bytes: first offset {maxReadPosition}, "
+                        + $"count {Length - maxReadPosition}, stream length {Length}");
+                }
+            }
+
+            private byte ReadByteChecked(string fieldName)
+            {
+                EnsureAvailable(1, fieldName);
+                var value = reader.ReadByte();
+                MarkRead(1);
+                return value;
+            }
+
+            private void EnsureAvailable(long count, string fieldName)
+            {
+                if (count < 0 || Position > Length - count)
+                {
+                    throw new EndfieldSparkBufferException(
+                        $"truncated {fieldName} at offset {Position}: expected {count} bytes, stream length {Length}");
+                }
+            }
+
+            private void MarkRead(long count)
+            {
+                maxReadPosition = Math.Max(maxReadPosition, checked(Position));
+            }
 
             private void Align(int alignment)
             {
-                var posMinusOne = Position - 1;
-                var aligned = posMinusOne + (alignment - (posMinusOne % alignment));
+                if (alignment <= 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(alignment));
+                }
+                var remainder = Position % alignment;
+                var aligned = remainder == 0
+                    ? Position
+                    : checked(Position + (alignment - remainder));
+                // Some current-build payloads omit terminal alignment padding.
+                // Treat an alignment request made exactly at EOF as a virtual
+                // boundary; any subsequent read still fails closed at EOF.
+                if (aligned > Length && Position == Length)
+                {
+                    aligned = Length;
+                }
                 SeekAbsolute(aligned);
             }
         }
