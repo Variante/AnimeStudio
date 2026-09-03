@@ -22,13 +22,125 @@ namespace AnimeStudio.Endfield
 
         public static void ConvertBytesToMp4(byte[] data, string outputPath)
         {
+            // Validate the CRI outer framing before handing the source to an
+            // optional helper.  A helper may produce an apparently playable
+            // file from a truncated prefix, which would hide a bad VFS
+            // boundary or an unsupported/multi-stream USM.
+            var inspection = Inspect(data);
             if (TryConvertWithUsmHelper(data, outputPath))
             {
                 return;
             }
 
-            var streams = DemuxBytes(data);
+            var streams = DemuxBytes(data, inspection);
             MuxToMp4(streams, outputPath);
+        }
+
+        internal static UsmInspection Inspect(byte[] data)
+        {
+            if (data == null)
+            {
+                throw new EndfieldVfsException("invalid USM data: input is null");
+            }
+
+            var offset = 0L;
+            var blockCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var videoStreamIds = new HashSet<byte>();
+            var audioStreamIds = new HashSet<byte>();
+            var blockOrdinal = 0;
+            while (offset < data.Length)
+            {
+                if (data.Length - offset < 8)
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: short block header at offset {offset}; expected=8 actual={data.Length - offset}");
+                }
+
+                var blockId = Encoding.ASCII.GetString(data, checked((int)offset), 4);
+                if (blockOrdinal == 0 && !string.Equals(blockId, "CRID", StringComparison.Ordinal))
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: first block must be CRID; actual={blockId} offset={offset}");
+                }
+                if (!IsKnownBlock(data, checked((int)offset)))
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: unknown block id '{blockId}' at offset {offset}; block={blockOrdinal}");
+                }
+
+                var blockSize = ReadUInt32BigEndian(data, checked((int)offset + 4));
+                var blockEnd = checked(offset + 8L + blockSize);
+                if (blockEnd > data.Length)
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: block overruns input; block={blockOrdinal} id={blockId} offset={offset} declared={blockSize} remaining={data.Length - offset - 8}");
+                }
+                if (blockSize < 24)
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: block header is truncated; block={blockOrdinal} id={blockId} offset={offset} declared={blockSize} expectedAtLeast=24");
+                }
+
+                var bodyOffset = checked((int)offset + 8);
+                var headerSize = ReadUInt16BigEndian(data, bodyOffset);
+                var footerSize = ReadUInt16BigEndian(data, bodyOffset + 2);
+                if (headerSize != 24 || headerSize > blockSize)
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: invalid header size; block={blockOrdinal} id={blockId} offset={offset} header={headerSize} expected=24 blockSize={blockSize}");
+                }
+                if ((ulong)headerSize + footerSize > blockSize)
+                {
+                    throw new EndfieldVfsException(
+                        $"invalid USM framing: header/footer exceed block; block={blockOrdinal} id={blockId} offset={offset} header={headerSize} footer={footerSize} blockSize={blockSize}");
+                }
+
+                blockCounts[blockId] = blockCounts.GetValueOrDefault(blockId) + 1;
+                var streamId = data[bodyOffset + 4];
+                if (string.Equals(blockId, "@SFV", StringComparison.Ordinal))
+                {
+                    videoStreamIds.Add(streamId);
+                }
+                else if (string.Equals(blockId, "@SFA", StringComparison.Ordinal))
+                {
+                    audioStreamIds.Add(streamId);
+                }
+
+                offset = blockEnd;
+                blockOrdinal++;
+            }
+
+            if (!blockCounts.TryGetValue("CRID", out var cridCount))
+            {
+                throw new EndfieldVfsException("invalid USM data: CRID marker not found at offset 0");
+            }
+            if (cridCount != 1)
+            {
+                throw new EndfieldVfsException($"invalid USM data: expected exactly one CRID block; actual={cridCount}");
+            }
+            if (!blockCounts.ContainsKey("@SFV"))
+            {
+                throw new EndfieldVfsException("invalid USM data: no video stream found");
+            }
+            if (videoStreamIds.Count > 1)
+            {
+                throw new EndfieldVfsException(
+                    $"unsupported USM data: multiple video streams found; streamIds={string.Join(',', videoStreamIds.OrderBy(id => id))}");
+            }
+            if (audioStreamIds.Count > 1)
+            {
+                throw new EndfieldVfsException(
+                    $"unsupported USM data: multiple audio streams found; streamIds={string.Join(',', audioStreamIds.OrderBy(id => id))}");
+            }
+
+            return new UsmInspection
+            {
+                ByteLength = data.Length,
+                BlockCount = blockOrdinal,
+                BlockCounts = blockCounts,
+                VideoStreamIds = videoStreamIds.OrderBy(id => id).ToArray(),
+                AudioStreamIds = audioStreamIds.OrderBy(id => id).ToArray(),
+            };
         }
 
         private static bool TryConvertWithUsmHelper(byte[] data, string outputPath)
@@ -113,13 +225,11 @@ namespace AnimeStudio.Endfield
                 "usm-convert.exe");
             return File.Exists(repoLocal) ? repoLocal : null;
         }
-        private static DemuxedStreams DemuxBytes(byte[] data)
+        private static DemuxedStreams DemuxBytes(byte[] data, UsmInspection inspection)
         {
-            var offset = FindPattern(data, Crid, 0);
-            if (offset < 0)
-            {
-                throw new EndfieldVfsException("invalid USM data: CRID marker not found");
-            }
+            // Inspect has already proved exact framing; keep this parser's
+            // cursor checks defensive because it is also the payload demuxer.
+            var offset = 0;
 
             var videoStreams = new Dictionary<uint, List<byte>>();
             var audioStreams = new Dictionary<uint, List<byte>>();
@@ -128,16 +238,12 @@ namespace AnimeStudio.Endfield
             {
                 var blockId = data.AsSpan(offset, 4).ToArray();
                 if (!IsKnownBlock(blockId))
-                {
-                    break;
-                }
+                    throw new EndfieldVfsException($"invalid USM data: unknown block at offset {offset}");
 
                 var blockSize = ReadUInt32BigEndian(data, offset + 4);
                 var blockEnd = offset + 8L + blockSize;
                 if (blockEnd > data.Length)
-                {
-                    break;
-                }
+                    throw new EndfieldVfsException($"invalid USM data: block at offset {offset} exceeds input");
 
                 var isVideo = blockId.SequenceEqual(Sfv);
                 var isAudio = blockId.SequenceEqual(Sfa);
@@ -146,9 +252,13 @@ namespace AnimeStudio.Endfield
                     var headerSize = ReadUInt16BigEndian(data, offset + 8);
                     var footerSize = ReadUInt16BigEndian(data, offset + 0xA);
                     var streamId = isAudio ? data[offset + 0xC] : (byte)0;
+                    if ((ulong)headerSize + footerSize > blockSize || headerSize != 24)
+                    {
+                        throw new EndfieldVfsException($"invalid USM data: invalid block header at offset {offset}");
+                    }
                     if (blockSize > headerSize + footerSize)
                     {
-                        var payloadSize = checked((int)blockSize - headerSize - footerSize);
+                        var payloadSize = checked((int)(blockSize - headerSize - footerSize));
                         var payloadStart = offset + 8 + headerSize;
                         var payloadEnd = payloadStart + payloadSize;
                         if (payloadEnd <= data.Length)
@@ -166,6 +276,11 @@ namespace AnimeStudio.Endfield
                 }
 
                 offset = checked((int)blockEnd);
+            }
+
+            if (offset != data.Length)
+            {
+                throw new EndfieldVfsException($"invalid USM data: parser consumed {offset} of {data.Length} bytes");
             }
 
             var video = videoStreams.Values.FirstOrDefault();
@@ -289,6 +404,17 @@ namespace AnimeStudio.Endfield
             id.SequenceEqual(Cue) ||
             id.SequenceEqual(Utf);
 
+        private static bool IsKnownBlock(byte[] data, int offset)
+        {
+            return data.AsSpan(offset, 4).SequenceEqual(Crid) ||
+                data.AsSpan(offset, 4).SequenceEqual(Sfv) ||
+                data.AsSpan(offset, 4).SequenceEqual(Sfa) ||
+                data.AsSpan(offset, 4).SequenceEqual(Alp) ||
+                data.AsSpan(offset, 4).SequenceEqual(Sbt) ||
+                data.AsSpan(offset, 4).SequenceEqual(Cue) ||
+                data.AsSpan(offset, 4).SequenceEqual(Utf);
+        }
+
         private static byte[] StripMarkers(byte[] data)
         {
             var headerEnd = FindPattern(data, HeaderEnd, 0);
@@ -375,6 +501,15 @@ namespace AnimeStudio.Endfield
             public byte[] Video { get; set; }
             public byte[] Audio { get; set; }
             public string AudioExtension { get; set; }
+        }
+
+        internal sealed class UsmInspection
+        {
+            public int ByteLength { get; init; }
+            public int BlockCount { get; init; }
+            public IReadOnlyDictionary<string, int> BlockCounts { get; init; }
+            public IReadOnlyList<byte> VideoStreamIds { get; init; }
+            public IReadOnlyList<byte> AudioStreamIds { get; init; }
         }
     }
 }

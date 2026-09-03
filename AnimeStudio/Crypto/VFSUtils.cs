@@ -298,31 +298,7 @@ namespace AnimeStudio
                         break;
                 }
 
-                // read name
-                var bytes = new List<byte>();
-                while (reader.Remaining > 0 && bytes.Count < 64)
-                {
-                    var bt = reader.ReadByte();
-                    if (bt == 0)
-                        break;
-                    bytes.Add(bt);
-                }
-
-                string name = "";
-
-                switch (game)
-                {
-                    case GameType.ArknightsEndfield:
-                        for (int j = 0; j < bytes.Count; j++)
-                            bytes[j] ^= (byte)((j ^ 0x97) & 0xFF);
-
-                        name = Encoding.ASCII.GetString(bytes.ToArray());
-                        break;
-                    case GameType.ArknightsEndfieldCB3:
-                        name = new string(bytes.Select(b => (char)(b ^ 0xAC)).ToArray());
-                        break;
-                }
-                //
+                var name = ReadDirectoryNodeName(reader, game, i);
 
                 switch (game)
                 {
@@ -380,6 +356,47 @@ namespace AnimeStudio
             }
 
             return nodes;
+        }
+
+        internal static string ReadDirectoryNodeName(EndianBinaryReader reader, GameType game, int nodeIndex)
+        {
+            const int maxEncodedNameBytes = 64;
+            var bytes = new List<byte>();
+            var terminated = false;
+            while (reader.Remaining > 0 && bytes.Count < maxEncodedNameBytes)
+            {
+                var value = reader.ReadByte();
+                if (value == 0)
+                {
+                    terminated = true;
+                    break;
+                }
+                bytes.Add(value);
+            }
+
+            if (!terminated)
+            {
+                throw new InvalidDataException(
+                    $"VFS node {nodeIndex} name is not null-terminated within " +
+                    $"{maxEncodedNameBytes} bytes; encodedLength={bytes.Count}, remaining={reader.Remaining}."
+                );
+            }
+
+            switch (game)
+            {
+                case GameType.ArknightsEndfield:
+                    for (int index = 0; index < bytes.Count; index++)
+                    {
+                        bytes[index] ^= (byte)((index ^ 0x97) & 0xFF);
+                    }
+                    return Encoding.ASCII.GetString(bytes.ToArray());
+                case GameType.ArknightsEndfieldCB3:
+                    return new string(bytes.Select(value => (char)(value ^ 0xAC)).ToArray());
+                default:
+                    throw new InvalidDataException(
+                        $"Unsupported game type {game} for VFS node {nodeIndex} name decoding."
+                    );
+            }
         }
 
         public static void DecryptBlock(Span<byte> buffer, GameType game)

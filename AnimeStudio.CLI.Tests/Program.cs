@@ -40,12 +40,15 @@ static class Program
         TestEndfieldVfsCatalogInvariants();
         TestEndfieldVfsMd5Verification();
         TestEndfieldVfsAuditSyntheticFixtures();
+        StreamExtensionsTests.Run();
+        VFSDirectoryInfoTests.Run();
         VFSFileType5Tests.Run();
         TestEndfieldCompressDataRecords();
         TestEndfieldCompressDataRejectsMalformedContainers();
         TestEndfieldCompressDataCliOutput();
         TestEndfieldLuaDecoderObservedWrappers();
         TestEndfieldLuaDecoderRejectsMalformedFrames();
+        TestEndfieldUsmInspectionAndFramingGuards();
         EndfieldSparkBufferTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
@@ -220,6 +223,99 @@ static class Program
         AssertEqual(false, lexical.IsValid, "lexical negative fixture status");
         AssertEqual("lua.lexical.unclosed_delimiter", lexical.DiagnosticCode, "lexical negative fixture diagnostic");
         AssertEqual(13, lexical.DiagnosticOffset, "lexical negative fixture offset");
+    }
+
+    private static void TestEndfieldUsmInspectionAndFramingGuards()
+    {
+        var valid = BuildSyntheticUsm(
+            BuildUsmBlock("CRID", 0, payloadLength: 0),
+            BuildUsmBlock("@SFV", 0, payloadLength: 16));
+        var inspection = EndfieldUsmConverter.Inspect(valid);
+        AssertEqual(valid.Length, inspection.ByteLength, "USM inspected byte length");
+        AssertEqual(2, inspection.BlockCount, "USM inspected block count");
+        AssertEqual(1, inspection.BlockCounts["@SFV"], "USM video block count");
+        AssertEqual((byte)0, inspection.VideoStreamIds[0], "USM video stream identity");
+
+        var unknown = (byte[])valid.Clone();
+        unknown[32] = (byte)'Z';
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(unknown),
+            "unknown block id",
+            "USM rejects unknown outer block");
+
+        var missingFirstCrid = BuildSyntheticUsm(
+            BuildUsmBlock("@SFV", 0, payloadLength: 0),
+            BuildUsmBlock("CRID", 0, payloadLength: 0));
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(missingFirstCrid),
+            "first block must be CRID",
+            "USM requires CRID as the first outer block");
+
+        var truncated = valid[..^1];
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(truncated),
+            "overruns input",
+            "USM rejects short final block");
+
+        var invalidHeader = BuildSyntheticUsm(
+            BuildUsmBlock("CRID", 0, payloadLength: 20, headerSize: 4),
+            BuildUsmBlock("@SFV", 0, payloadLength: 0));
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(invalidHeader),
+            "invalid header size",
+            "USM rejects undersized block header");
+
+        var unobservedHeader = BuildSyntheticUsm(
+            BuildUsmBlock("CRID", 0, payloadLength: 4, headerSize: 20),
+            BuildUsmBlock("@SFV", 0, payloadLength: 0));
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(unobservedHeader),
+            "expected=24",
+            "USM rejects unobserved block header size");
+
+        var multipleVideoStreams = BuildSyntheticUsm(
+            BuildUsmBlock("CRID", 0, payloadLength: 0),
+            BuildUsmBlock("@SFV", 0, payloadLength: 0),
+            BuildUsmBlock("@SFV", 1, payloadLength: 0));
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(multipleVideoStreams),
+            "multiple video streams",
+            "USM rejects silently merged video streams");
+
+        var multipleAudioStreams = BuildSyntheticUsm(
+            BuildUsmBlock("CRID", 0, payloadLength: 0),
+            BuildUsmBlock("@SFV", 0, payloadLength: 0),
+            BuildUsmBlock("@SFA", 0, payloadLength: 0),
+            BuildUsmBlock("@SFA", 1, payloadLength: 0));
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldUsmConverter.Inspect(multipleAudioStreams),
+            "multiple audio streams",
+            "USM rejects silently merged audio streams");
+    }
+
+    private static byte[] BuildSyntheticUsm(params byte[][] blocks)
+    {
+        using var output = new MemoryStream();
+        foreach (var block in blocks)
+        {
+            output.Write(block);
+        }
+        return output.ToArray();
+    }
+
+    private static byte[] BuildUsmBlock(string id, byte streamId, int payloadLength, int headerSize = 24)
+    {
+        var body = new byte[headerSize + payloadLength];
+        BinaryPrimitives.WriteUInt16BigEndian(body.AsSpan(0, 2), checked((ushort)headerSize));
+        body[4] = streamId;
+        var idBytes = Encoding.ASCII.GetBytes(id);
+        using var output = new MemoryStream();
+        output.Write(idBytes);
+        var size = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(size, checked((uint)body.Length));
+        output.Write(size);
+        output.Write(body);
+        return output.ToArray();
     }
 
     private static void TestEndfieldVfsTerrainTypeRegistry()

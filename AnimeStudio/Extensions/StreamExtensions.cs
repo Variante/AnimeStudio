@@ -1,5 +1,7 @@
 ﻿using System.IO;
 
+using System;
+
 namespace AnimeStudio
 {
     public static class StreamExtensions
@@ -8,16 +10,25 @@ namespace AnimeStudio
 
         public static void CopyTo(this Stream source, Stream destination, long size)
         {
-            var buffer = new byte[BufferSize];
-            for (var left = size; left > 0; left -= BufferSize)
+            if (size < 0)
             {
-                int toRead = BufferSize < left ? BufferSize : (int)left;
-                int read = source.Read(buffer, 0, toRead);
-                destination.Write(buffer, 0, read);
-                if (read != toRead)
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Copy length must be non-negative.");
+            }
+
+            var buffer = new byte[BufferSize];
+            var copied = 0L;
+            while (copied < size)
+            {
+                var toRead = (int)Math.Min(BufferSize, size - copied);
+                var read = source.Read(buffer, 0, toRead);
+                if (read == 0)
                 {
-                    return;
+                    throw new EndOfStreamException(
+                        $"Sized stream copy truncated: expected={size}, actual={copied}."
+                    );
                 }
+                destination.Write(buffer, 0, read);
+                copied += read;
             }
         }
 

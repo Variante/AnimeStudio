@@ -107,6 +107,7 @@ namespace AnimeStudio
             //
             using var blocksStream = CreateBlocksStream(path);
             ReadBlocks(reader, blocksStream, game, path);
+            ValidateDecodedBlockLength(blocksStream, path);
             ReadFiles(blocksStream, path);
         }
 
@@ -281,6 +282,23 @@ namespace AnimeStudio
                 blocksStream.Position = node.offset;
                 blocksStream.CopyTo(file.stream, node.size);
                 file.stream.Position = 0;
+            }
+        }
+
+        private void ValidateDecodedBlockLength(Stream blocksStream, string path)
+        {
+            var expectedLength = 0L;
+            foreach (var block in m_BlocksInfo)
+            {
+                expectedLength = checked(expectedLength + block.uncompressedSize);
+            }
+
+            if (blocksStream.Length != expectedLength)
+            {
+                throw new InvalidDataException(
+                    $"VFS bundle '{path}' decoded block length mismatch: " +
+                    $"expected={expectedLength}, actual={blocksStream.Length} bytes."
+                );
             }
         }
     }
