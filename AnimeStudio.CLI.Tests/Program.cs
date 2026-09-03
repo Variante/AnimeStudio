@@ -44,6 +44,7 @@ static class Program
         TestEndfieldVfsCatalogInvariants();
         TestEndfieldVfsMd5Verification();
         TestEndfieldVfsAuditSyntheticFixtures();
+        TestEndfieldAudioAuditConditionalMissing();
         StreamExtensionsTests.Run();
         VFSDirectoryInfoTests.Run();
         VFSFileType5Tests.Run();
@@ -724,9 +725,28 @@ static class Program
                 }
 
                 WriteEncryptedVfsBlockWithMissingChunk(auditAudioRoot, EndfieldVfsBlockType.AuditAudio);
+                if (!EndfieldVfsCli.TryRun(
+                        new[] { "stream", "--verify-md5", "--streaming-assets", auditAudioRoot },
+                        out var auditAudioExit)
+                    || auditAudioExit != 0)
+                {
+                    throw new InvalidOperationException(
+                        "default-all verification must exclude wholly absent AuditAudio chunks");
+                }
+                if (!EndfieldVfsCli.TryRun(
+                        new[] { "stream", "--verify-md5", "--streaming-assets", auditAudioRoot, "--block-type", "audit-audio" },
+                        out var explicitAuditAudioExit)
+                    || explicitAuditAudioExit != 0)
+                {
+                    throw new InvalidOperationException(
+                        "explicit AuditAudio verification must conditionally ignore wholly absent chunks");
+                }
+
+                WriteAuditBlock(auditAudioRoot, EndfieldVfsBlockType.AuditAudio,
+                    "audit/present-but-corrupt.pck", new byte[] { 0x41, 0x42 }, chunkContentMd5: 0);
                 AssertCliFailsForSelectedVfsFile(
                     new[] { "stream", "--verify-md5", "--streaming-assets", auditAudioRoot },
-                    "default-all verification must fail for unavailable AuditAudio");
+                    "present AuditAudio must re-enter normal integrity verification");
             }
             finally
             {
@@ -1057,6 +1077,7 @@ static class Program
         }
 
         TestEndfieldVfsAuditUnknownIdAndExcludedVoice();
+        TestEndfieldVfsAuditMissingAuditAudioExclusion();
     }
 
     private static void TestEndfieldVfsAuditCurrentMetadataAndDeterminism()
@@ -1113,7 +1134,9 @@ static class Program
             var unknownHash = EndfieldVfsHash.VfsBlockHash(unknownName, EndfieldVfsKeys.UnityHashSecret);
             WriteAuditMetadata(root, unknownHash,
                 BuildAuditMetadata(unknownName, unknownType, writer => writer.Write(0)));
-            WriteAuditBlock(root, EndfieldVfsBlockType.AudioEnglish, "voice/excluded.ogg", new byte[] { 0x42 });
+            WriteAuditBlock(root, EndfieldVfsBlockType.AudioEnglish, "voice/present.pck", new byte[] { 0x42 });
+            WriteAuditBlock(root, EndfieldVfsBlockType.AudioJapanese, "voice/missing.pck",
+                new byte[] { 0x43 }, writeChunk: false);
 
             var artifacts = RunAudit(root, "special", fallback: null, expectSuccess: true);
             var ledger = ReadGzipText(artifacts.Ledger);
@@ -1122,14 +1145,94 @@ static class Program
             {
                 throw new InvalidOperationException("unknown VFS block ID was not preserved by vfs-audit");
             }
-            var excludedNeedle = "\"status\":\"excluded_voice\"";
-            if (!ledger.Contains(excludedNeedle, StringComparison.Ordinal)
-                || !ledger.Contains("voice/excluded.ogg", StringComparison.Ordinal)
-                || !ledger.Contains("\"code\":\"excluded_voice\"", StringComparison.Ordinal))
+            if (!ledger.Contains("voice/present.pck", StringComparison.Ordinal)
+                || !ledger.Contains("voice/missing.pck", StringComparison.Ordinal)
+                || !ledger.Contains("\"status\":\"excluded_missing_voice\"", StringComparison.Ordinal)
+                || !ledger.Contains("\"boundaryStatus\":\"boundary_verified\"", StringComparison.Ordinal)
+                || ledger.Contains("\"status\":\"excluded_voice\"", StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("excluded English voice file did not emit its exact excluded row");
+                throw new InvalidOperationException(
+                    "present voice did not verify normally or missing voice lacked its conditional exclusion row");
             }
             AssertAuditPublished(artifacts, "unknown/excluded voice");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static void TestEndfieldVfsAuditMissingAuditAudioExclusion()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-missing-audit-audio-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            PrepareAuditCatalog(root);
+            WriteAuditBlock(root, EndfieldVfsBlockType.AuditAudio, "audit/missing.pck",
+                new byte[] { 0x41, 0x42 }, writeChunk: false);
+
+            var artifacts = RunAudit(root, "missing-audit-audio", fallback: null, expectSuccess: true);
+            var ledger = ReadGzipText(artifacts.Ledger);
+            var summary = File.ReadAllText(artifacts.Summary);
+            if (!ledger.Contains("\"boundaryStatus\":\"excluded_missing_audio\"", StringComparison.Ordinal)
+                || !ledger.Contains("audit/missing.pck", StringComparison.Ordinal)
+                || !summary.Contains("\"failureCount\": 0", StringComparison.Ordinal)
+                || !summary.Contains("\"excludedFileCount\": 1", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "wholly absent AuditAudio did not emit one explicit non-failing exclusion row");
+            }
+            AssertAuditPublished(artifacts, "missing AuditAudio exclusion");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static void TestEndfieldAudioAuditConditionalMissing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-audio-audit-missing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            WriteAuditBlock(root, EndfieldVfsBlockType.AudioEnglish, "voice/missing.pck",
+                new byte[] { 0x41, 0x42 }, writeChunk: false);
+            var output = Path.Combine(root, "missing.json");
+            var missingExit = EndfieldAudioCli.RunAudit(new[]
+            {
+                "audio-audit", "--streaming-assets", root,
+                "--block", "audio-english", "--hirc-only", "--output", output,
+            });
+            var missingReport = File.ReadAllText(output);
+            if (missingExit != 0
+                || !missingReport.Contains("\"status\": \"excluded_missing_audio\"", StringComparison.Ordinal)
+                || !missingReport.Contains("\"excluded\": 1", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "missing language-audio chunks were not conditionally ignored with an explicit terminal row");
+            }
+
+            WriteAuditBlock(root, EndfieldVfsBlockType.AudioEnglish, "voice/present-but-invalid.pck",
+                new byte[] { 0x41, 0x42 });
+            var invalidExit = EndfieldAudioCli.RunAudit(new[]
+            {
+                "audio-audit", "--streaming-assets", root,
+                "--block", "audio-english", "--hirc-only",
+                "--output", Path.Combine(root, "present-invalid.json"),
+            });
+            if (invalidExit == 0)
+            {
+                throw new InvalidOperationException(
+                    "present language-audio payload did not re-enter normal AKPK verification");
+            }
         }
         finally
         {

@@ -23,6 +23,7 @@ namespace AnimeStudio.Endfield
                 Environment.GetEnvironmentVariable("ANIMESTUDIO_VGMSTREAM_CLI"),
                 Path.Combine(AppContext.BaseDirectory, "vgmstream", "vgmstream-cli.exe"),
                 Path.Combine(AppContext.BaseDirectory, "vgmstream-cli.exe"),
+                Path.Combine(Environment.CurrentDirectory, "tools", "vgmstream", "vgmstream-cli.exe"),
                 Path.Combine(Environment.CurrentDirectory, "tools", "fluffy-dumper-src", "vgmstream", "bin", "windows", "vgmstream-cli.exe"),
             };
 
@@ -35,7 +36,7 @@ namespace AnimeStudio.Endfield
             }
 
             throw new FileNotFoundException(
-                "vgmstream-cli.exe not found. Set ANIMESTUDIO_VGMSTREAM_CLI or place vgmstream-cli.exe beside AnimeStudio.CLI."
+                "vgmstream-cli.exe not found. Run scripts\\animestudio\\setup_vgmstream.bat, set ANIMESTUDIO_VGMSTREAM_CLI, or place vgmstream-cli.exe beside AnimeStudio.CLI."
             );
         }
 

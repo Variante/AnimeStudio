@@ -21,9 +21,11 @@ namespace AnimeStudio.CLI
             foreach (var blockType in options.BlockTypes)
             {
                 List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> pckFiles;
+                EndfieldVfsBlockMainInfo blockInfo;
                 try
                 {
-                    pckFiles = ExtractPckFiles(loader, blockType);
+                    blockInfo = loader.LoadBlockInfo(blockType);
+                    pckFiles = ExtractPckFiles(blockInfo);
                 }
                 catch (EndfieldVfsException e)
                 {
@@ -32,6 +34,41 @@ namespace AnimeStudio.CLI
                         ["block"] = blockType.GetName(),
                         ["status"] = "missing_block",
                         ["diagnostic"] = BoundDiagnostic(e.Message),
+                    });
+                    failures++;
+                    continue;
+                }
+
+                if (IsAudioBlock(blockType)
+                    && blockInfo.Chunks.Count > 0
+                    && blockInfo.Chunks.All(chunk => IsChunkMissing(loader, blockType, chunk)))
+                {
+                    rows.Add(new Dictionary<string, object?>
+                    {
+                        ["block"] = blockType.GetName(),
+                        ["status"] = "excluded_missing_audio",
+                        ["source"] = "missing_both",
+                        ["declaredChunks"] = blockInfo.Chunks.Count,
+                        ["declaredFiles"] = blockInfo.GroupFileInfoNum,
+                        ["expected"] = "at least one declared audio chunk in primary or fallback root",
+                        ["actual"] = 0,
+                        ["diagnostic"] = "every declared audio chunk is absent from primary and fallback roots; the block is conditionally ignored",
+                    });
+                    continue;
+                }
+
+                if (pckFiles.Count == 0)
+                {
+                    rows.Add(new Dictionary<string, object?>
+                    {
+                        ["block"] = blockType.GetName(),
+                        ["status"] = "empty_block",
+                        ["source"] = options.StreamingAssets,
+                        ["declaredChunks"] = blockInfo.Chunks.Count,
+                        ["declaredFiles"] = blockInfo.GroupFileInfoNum,
+                        ["expected"] = "at least one .pck logical file",
+                        ["actual"] = 0,
+                        ["diagnostic"] = "audio block metadata contains no .pck logical files",
                     });
                     failures++;
                     continue;
@@ -178,7 +215,7 @@ namespace AnimeStudio.CLI
                 ["schemaVersion"] = "akpk-structure-audit-v1",
                 ["streamingAssets"] = options.StreamingAssets,
                 ["fallbackAssets"] = options.FallbackAssets,
-                ["excludedBlocks"] = new[] { "AudioEnglish", "AudioJapanese", "AudioKorean" },
+                ["conditionalExclusions"] = "any audio block is ignored only when every declared chunk is absent from both roots",
                 ["blocks"] = options.BlockTypes.Select(x => x.GetName()).ToArray(),
                 ["rows"] = rows,
                 ["summary"] = new Dictionary<string, object?>
@@ -187,6 +224,7 @@ namespace AnimeStudio.CLI
                     ["verified"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "verified")),
                     ["failures"] = failures,
                     ["missingBlocks"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "missing_block")),
+                    ["excluded"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "excluded_missing_audio")),
                 },
             };
             var outputParent = Path.GetDirectoryName(Path.GetFullPath(options.Output));
@@ -453,7 +491,12 @@ namespace AnimeStudio.CLI
                     case "-o":
                     case "--output": options.Output = Next(); break;
                     case "-b":
-                    case "--block": options.BlockTypes.Add(ParseAuditBlock(Next())); break;
+                    case "--block":
+                    {
+                        var block = ParseAuditBlock(Next());
+                        options.BlockTypes.Add(block);
+                        break;
+                    }
                     default: throw new ArgumentException($"unexpected argument: {token}");
                 }
             }
@@ -467,6 +510,9 @@ namespace AnimeStudio.CLI
                     EndfieldVfsBlockType.AuditAudio,
                     EndfieldVfsBlockType.HotfixAudio,
                     EndfieldVfsBlockType.AudioChinese,
+                    EndfieldVfsBlockType.AudioEnglish,
+                    EndfieldVfsBlockType.AudioJapanese,
+                    EndfieldVfsBlockType.AudioKorean,
                 });
             }
             return options;
@@ -479,8 +525,21 @@ namespace AnimeStudio.CLI
             "audit-audio" or "auditaudio" => EndfieldVfsBlockType.AuditAudio,
             "hotfix-audio" or "hotfixaudio" => EndfieldVfsBlockType.HotfixAudio,
             "audio-chinese" or "audiochinese" or "chinese" => EndfieldVfsBlockType.AudioChinese,
+            "audio-english" or "audioenglish" or "english" => EndfieldVfsBlockType.AudioEnglish,
+            "audio-japanese" or "audiojapanese" or "japanese" => EndfieldVfsBlockType.AudioJapanese,
+            "audio-korean" or "audiokorean" or "korean" => EndfieldVfsBlockType.AudioKorean,
             _ => throw new ArgumentException($"unsupported or excluded audio block: {value}"),
         };
+
+        private static bool IsAudioBlock(EndfieldVfsBlockType blockType) => blockType is
+            EndfieldVfsBlockType.InitialAudio or
+            EndfieldVfsBlockType.AuditAudio or
+            EndfieldVfsBlockType.Audio or
+            EndfieldVfsBlockType.HotfixAudio or
+            EndfieldVfsBlockType.AudioChinese or
+            EndfieldVfsBlockType.AudioEnglish or
+            EndfieldVfsBlockType.AudioJapanese or
+            EndfieldVfsBlockType.AudioKorean;
 
         private static JObject LoadAudioDialogLayer(EndfieldVfsLoader loader)
         {
@@ -520,16 +579,30 @@ namespace AnimeStudio.CLI
             throw new EndfieldVfsException("AudioDialog.bytes not found in Table block");
         }
 
-        private static List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> ExtractPckFiles(EndfieldVfsLoader loader, EndfieldVfsBlockType blockType)
+        private static bool IsChunkMissing(
+            EndfieldVfsLoader loader,
+            EndfieldVfsBlockType blockType,
+            EndfieldVfsChunkInfo chunk)
         {
-            var blockInfo = loader.LoadBlockInfo(blockType);
+            try
+            {
+                loader.ResolveChunkPath(blockType, chunk);
+                return false;
+            }
+            catch (EndfieldVfsChunkNotFoundException)
+            {
+                return true;
+            }
+        }
 
+        private static List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> ExtractPckFiles(EndfieldVfsBlockMainInfo blockInfo)
+        {
             var files = new List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)>();
             foreach (var chunk in blockInfo.Chunks)
             {
                 foreach (var file in chunk.Files)
                 {
-                    if (file.FileName.EndsWith(".pck", StringComparison.Ordinal))
+                    if (file.FileName.EndsWith(".pck", StringComparison.OrdinalIgnoreCase))
                     {
                         files.Add((chunk, file));
                     }
@@ -537,6 +610,11 @@ namespace AnimeStudio.CLI
             }
             return files;
         }
+
+        private static List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> ExtractPckFiles(
+            EndfieldVfsLoader loader,
+            EndfieldVfsBlockType blockType) =>
+            ExtractPckFiles(loader.LoadBlockInfo(blockType));
 
         private static void WriteAudioFile(byte[] wemData, string outputPath, AudioOutputFormat format, EndfieldVgmstreamConverter converter)
         {

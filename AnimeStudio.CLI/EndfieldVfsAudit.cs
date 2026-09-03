@@ -16,7 +16,17 @@ namespace AnimeStudio.CLI
     internal static class EndfieldVfsAudit
     {
         private const int MaxDiagnostics = 32;
-        private static readonly HashSet<byte> ExcludedVoiceTypes = new() { 102, 103, 104 };
+        private static readonly HashSet<byte> ConditionalMissingAudioTypes = new()
+        {
+            (byte)EndfieldVfsBlockType.InitialAudio,
+            (byte)EndfieldVfsBlockType.AuditAudio,
+            (byte)EndfieldVfsBlockType.Audio,
+            (byte)EndfieldVfsBlockType.HotfixAudio,
+            (byte)EndfieldVfsBlockType.AudioChinese,
+            (byte)EndfieldVfsBlockType.AudioEnglish,
+            (byte)EndfieldVfsBlockType.AudioJapanese,
+            (byte)EndfieldVfsBlockType.AudioKorean,
+        };
 
         public static void Run(string[] args)
         {
@@ -152,7 +162,10 @@ namespace AnimeStudio.CLI
                     ["schemaVersion"] = 1,
                     ["primaryAssets"] = NormalizePath(options.PrimaryAssets),
                     ["fallbackAssets"] = string.IsNullOrEmpty(options.FallbackAssets) ? JValue.CreateNull() : NormalizePath(options.FallbackAssets),
-                    ["excludedVoiceTypes"] = new JArray("AudioEnglish", "AudioJapanese", "AudioKorean"),
+                    ["conditionalExcludedTypes"] = new JObject
+                    {
+                        ["audio"] = "any audio block is excluded only when every declared chunk is absent from both primary and fallback roots",
+                    },
                     ["inputSetSha256"] = inputSetSha256,
                     ["sourceFingerprints"] = new JArray(sourceFingerprints),
                     ["buildFingerprints"] = buildFingerprints,
@@ -286,15 +299,21 @@ namespace AnimeStudio.CLI
                 .SelectMany(chunk => chunk.Files)
                 .ToDictionary(file => NormalizeVirtualPath(file.FileName), file => file, StringComparer.OrdinalIgnoreCase)
                 ?? new Dictionary<string, EndfieldVfsFileInfo>(StringComparer.OrdinalIgnoreCase);
-            var excluded = rawType.HasValue && ExcludedVoiceTypes.Contains(rawType.Value)
-                || string.Equals(blockName, "AudioEnglish", StringComparison.Ordinal)
-                || string.Equals(blockName, "AudioJapanese", StringComparison.Ordinal)
-                || string.Equals(blockName, "AudioKorean", StringComparison.Ordinal);
+            var conditionalMissingAudio = rawType.HasValue
+                && ConditionalMissingAudioTypes.Contains(rawType.Value)
+                && info != null
+                && info.Chunks.Count > 0
+                && info.Chunks.All(chunk => IsChunkMissing(loader, entry, chunk));
+            var excluded = conditionalMissingAudio;
+            var excludedVoice = rawType is (byte)EndfieldVfsBlockType.AudioEnglish
+                or (byte)EndfieldVfsBlockType.AudioJapanese
+                or (byte)EndfieldVfsBlockType.AudioKorean;
+            var excludedStatus = excludedVoice ? "excluded_missing_voice" : "excluded_missing_audio";
             var metadata = new JObject
             {
                 ["recordType"] = "block",
                 ["inputSetSha256"] = result.InputSetSha256,
-                ["status"] = excluded ? "excluded_voice" : StateName(entry.State),
+                ["status"] = excluded ? excludedStatus : StateName(entry.State),
                 ["boundaryStatus"] = excluded ? "excluded" : "not_verified",
                 ["overlayState"] = StateName(entry.State),
                 ["blockName"] = blockName,
@@ -348,7 +367,7 @@ namespace AnimeStudio.CLI
                     result.MissingBlockCount++;
                     Fail(result, Diagnostic("excluded_missing_metadata", blockName, null, null,
                         entry.HashDirectory, "parseable metadata", null,
-                        "excluded voice block metadata is absent or invalid"));
+                        "excluded block metadata is absent or invalid"));
                     return;
                 }
                 if (entry.State == EndfieldVfsCatalogState.Conflicting
@@ -356,14 +375,15 @@ namespace AnimeStudio.CLI
                 {
                     Fail(result, Diagnostic("overlay_conflict", blockName, null, null,
                         entry.HashDirectory, "non-conflicting overlay", StateName(entry.State),
-                        "excluded voice metadata has an unresolved overlay conflict"));
+                        "excluded block metadata has an unresolved overlay conflict"));
                 }
                 if (info != null)
                 {
                     foreach (var chunk in info.Chunks)
                     {
                         result.ChunkCount++;
-                        AuditExcludedChunk(loader, entry, info, chunk, blockName, result, logicalIds, fallbackFiles);
+                        AuditExcludedChunk(loader, entry, info, chunk, blockName, result, logicalIds,
+                            fallbackFiles, excludedStatus);
                     }
                 }
                 return;
@@ -692,7 +712,8 @@ namespace AnimeStudio.CLI
             string blockName,
             AuditResult result,
             HashSet<string> logicalIds,
-            IReadOnlyDictionary<string, EndfieldVfsFileInfo> fallbackFiles)
+            IReadOnlyDictionary<string, EndfieldVfsFileInfo> fallbackFiles,
+            string excludedStatus)
         {
             string chunkPath = null;
             long actualLength = 0;
@@ -707,24 +728,25 @@ namespace AnimeStudio.CLI
                     || actualLength != chunk.Length)
                 {
                     code = "excluded_boundary_mismatch";
-                    message = "excluded voice chunk path identity or physical length does not match metadata";
+                    message = "excluded chunk path identity or physical length does not match metadata";
                     Fail(result, Diagnostic(code, blockName, null, chunk.FileName,
                         ChunkSource(loader, chunkPath), chunk.Length, actualLength, message,
                         chunkPath: chunkPath));
                 }
                 else
                 {
-                    code = "excluded_voice";
-                    message = "English/Japanese/Korean voice payload is explicitly excluded by scope";
+                    code = "excluded_state_changed";
+                    message = "audio chunk appeared after the missing-chunk exclusion decision; rerun the audit";
+                    Fail(result, Diagnostic(code, blockName, null, chunk.FileName,
+                        ChunkSource(loader, chunkPath), "missing from both roots", NormalizePath(chunkPath),
+                        message, chunkPath: chunkPath));
                 }
             }
             catch (EndfieldVfsChunkNotFoundException)
             {
-                code = "excluded_missing_chunk";
-                message = "excluded voice chunk is absent from both primary and fallback roots";
+                code = excludedStatus;
+                message = "audio chunk is absent from both primary and fallback roots and is conditionally ignored";
                 result.MissingChunkCount++;
-                Fail(result, Diagnostic(code, blockName, null, chunk.FileName, "missing_both",
-                    chunk.Length, 0, message));
             }
             EmitChunkRecord(loader, entry, info, chunk, chunkPath, null, actualLength, result,
                 false, "excluded", code, message);
@@ -733,7 +755,7 @@ namespace AnimeStudio.CLI
                 var duplicate = !logicalIds.Add($"{info.BlockTypeValue}:{NormalizeVirtualPath(file.FileName)}");
                 result.FileCount++;
                 result.ExcludedFileCount++;
-                if (code == "excluded_missing_chunk") result.MissingFileCount++;
+                if (code is "excluded_missing_voice" or "excluded_missing_audio") result.MissingFileCount++;
                 if (duplicate)
                 {
                     Fail(result, Diagnostic("duplicate_logical_path", blockName, file.FileName,
@@ -746,7 +768,7 @@ namespace AnimeStudio.CLI
                 {
                     ["recordType"] = "file",
                     ["inputSetSha256"] = result.InputSetSha256,
-                    ["status"] = "excluded_voice",
+                    ["status"] = excludedStatus,
                     ["boundaryStatus"] = duplicate ? "duplicate_logical_path" : code,
                     ["overlayState"] = fileOverlayState,
                     ["chunkOverlayState"] = ChunkOverlayState(loader, entry, chunk),
@@ -1070,6 +1092,22 @@ namespace AnimeStudio.CLI
             return Convert.ToHexString(sha256.ComputeHash(input));
         }
 
+        private static bool IsChunkMissing(
+            EndfieldVfsLoader loader,
+            EndfieldVfsCatalogEntry entry,
+            EndfieldVfsChunkInfo chunk)
+        {
+            try
+            {
+                loader.ResolveChunkPath(entry, chunk);
+                return false;
+            }
+            catch (EndfieldVfsChunkNotFoundException)
+            {
+                return true;
+            }
+        }
+
         private static string ChunkSource(EndfieldVfsLoader loader, string path)
         {
             if (path == null) return "missing";
@@ -1324,7 +1362,7 @@ namespace AnimeStudio.CLI
             builder.AppendLine($"- Unavailable: {result.UnavailableFileCount:N0}");
             builder.AppendLine($"- Excluded: {result.ExcludedFileCount:N0}");
             builder.AppendLine($"- Failed: {result.FailedFileCount:N0}");
-            builder.AppendLine($"- Excluded EN/JP/KR voice blocks: {result.ExcludedBlockCount}");
+            builder.AppendLine($"- Conditionally excluded missing audio blocks: {result.ExcludedBlockCount}");
             builder.AppendLine($"- Failures: {result.FailureCount}");
             builder.AppendLine($"- All available files boundary verified: {(result.AvailableFileCount == result.BoundaryVerifiedCount ? "yes" : "no")}");
             builder.AppendLine($"- Full audit passed: {(result.FailureCount == 0 ? "yes" : "no")}");

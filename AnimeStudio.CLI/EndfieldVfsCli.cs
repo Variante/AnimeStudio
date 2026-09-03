@@ -295,7 +295,10 @@ namespace AnimeStudio.CLI
                     var rawId = info.BlockTypeValue;
                     presentRawIds.Add(rawId);
                     if (!IsSelectedRawBlock(options, rawId)) continue;
-                    var excluded = options.ExcludeDeferredVoice && IsDeferredVoice(rawId);
+                    var excludedMissingAudio = IsAudioBlock(rawId)
+                        && info.Chunks.Count > 0
+                        && info.Chunks.All(chunk => IsChunkMissing(loader, entry, chunk));
+                    var excluded = excludedMissingAudio;
                     if (excluded) sourceExcludedBlocks++;
                     var metadataVerified = entry.State != EndfieldVfsCatalogState.Conflicting
                         && entry.State != EndfieldVfsCatalogState.ShadowedEmpty;
@@ -310,7 +313,7 @@ namespace AnimeStudio.CLI
                             {
                                 inputs.Add(CreateProfileInput(
                                     loader, entry, chunk, file, metadataVerified, "excluded",
-                                    "deferred English/Japanese/Korean voice block excluded by default"));
+                                    "audio block conditionally ignored because every declared chunk is absent from primary and fallback roots"));
                             }
                             continue;
                         }
@@ -344,11 +347,6 @@ namespace AnimeStudio.CLI
                 foreach (var knownId in selectedKnownIds)
                 {
                     if (presentRawIds.Contains(knownId)) continue;
-                    if (options.ExcludeDeferredVoice && IsDeferredVoice(knownId))
-                    {
-                        sourceExcludedBlocks++;
-                        continue;
-                    }
                     sourceUnavailableBlocks++;
                 }
 
@@ -849,6 +847,52 @@ namespace AnimeStudio.CLI
 
         private static bool IsDeferredVoice(byte rawId) => rawId is 102 or 103 or 104;
 
+        private static bool IsAudioBlock(byte rawId) => rawId is
+            (byte)EndfieldVfsBlockType.InitialAudio or
+            (byte)EndfieldVfsBlockType.AuditAudio or
+            (byte)EndfieldVfsBlockType.Audio or
+            (byte)EndfieldVfsBlockType.HotfixAudio or
+            (byte)EndfieldVfsBlockType.AudioChinese or
+            (byte)EndfieldVfsBlockType.AudioEnglish or
+            (byte)EndfieldVfsBlockType.AudioJapanese or
+            (byte)EndfieldVfsBlockType.AudioKorean;
+
+        private static bool IsChunkMissing(
+            EndfieldVfsLoader loader,
+            EndfieldVfsCatalogEntry entry,
+            EndfieldVfsChunkInfo chunk)
+        {
+            try
+            {
+                loader.ResolveChunkPath(entry, chunk);
+                return false;
+            }
+            catch (EndfieldVfsChunkNotFoundException)
+            {
+                return true;
+            }
+        }
+
+        private static bool ShouldExcludeMissingAuditAudio(
+            VfsOptions options,
+            EndfieldVfsLoader loader,
+            EndfieldVfsBlockType blockType,
+            EndfieldVfsBlockMainInfo blockInfo) =>
+            IsAudioBlock((byte)blockType)
+            && blockInfo.Chunks.Count > 0
+            && blockInfo.Chunks.All(chunk =>
+            {
+                try
+                {
+                    loader.ResolveChunkPath(blockType, chunk);
+                    return false;
+                }
+                catch (EndfieldVfsChunkNotFoundException)
+                {
+                    return true;
+                }
+            });
+
         private static IEnumerable<VfsBlockSelection> LoadSelectedBlocks(
             EndfieldVfsLoader loader,
             VfsOptions options,
@@ -880,6 +924,12 @@ namespace AnimeStudio.CLI
         {
             foreach (var block in LoadSelectedBlocks(loader, options, missingBlock: missingBlock))
             {
+                if (ShouldExcludeMissingAuditAudio(options, loader, block.BlockType, block.Info))
+                {
+                    Console.Error.WriteLine(
+                        $"Conditionally ignored {block.BlockType.GetName()} because every declared chunk is absent from primary and fallback roots");
+                    continue;
+                }
                 foreach (var chunk in block.Info.Chunks)
                 {
                     foreach (var file in SelectedFiles(options, chunk))
@@ -906,6 +956,13 @@ namespace AnimeStudio.CLI
                 .Select(chunk => new VfsChunkSelection(chunk, SelectedFiles(options, chunk).ToList()))
                 .ToList();
             var totalFiles = selectedChunks.Sum(chunk => chunk.Files.Count);
+
+            if (ShouldExcludeMissingAuditAudio(options, loader, blockType, blockInfo))
+            {
+                Console.WriteLine(
+                    $"  Conditionally ignored {totalFiles} {blockType.GetName()} files because every declared chunk is absent from primary and fallback roots");
+                return;
+            }
 
             foreach (var selectedChunk in selectedChunks)
             {
@@ -1063,6 +1120,8 @@ namespace AnimeStudio.CLI
                 var blockFileCount = 0;
                 var blockByteCount = 0L;
                 var blockMissingChunks = 0;
+                var excludeMissingAuditAudio = ShouldExcludeMissingAuditAudio(
+                    options, loader, blockType, blockInfo);
 
                 foreach (var chunk in blockInfo.Chunks)
                 {
@@ -1088,7 +1147,9 @@ namespace AnimeStudio.CLI
                     }
 
                     var selectedFiles = SelectedFiles(options, chunk).ToList();
-                    if (!chunkExists && selectedFiles.Count > 0 && ShouldFailOnFileErrors(options, blockType))
+                    if (!chunkExists && selectedFiles.Count > 0
+                        && !excludeMissingAuditAudio
+                        && ShouldFailOnFileErrors(options, blockType))
                     {
                         integrityErrorCount++;
                         if (integrityDiagnostics.Count < MaxFailureDiagnostics)
@@ -1288,11 +1349,7 @@ namespace AnimeStudio.CLI
             }
         }
 
-        private static bool ShouldFailOnFileErrors(VfsOptions options, EndfieldVfsBlockType blockType) =>
-            !(options.UseAllBlockTypes && blockType is
-                EndfieldVfsBlockType.AudioEnglish or
-                EndfieldVfsBlockType.AudioJapanese or
-                EndfieldVfsBlockType.AudioKorean);
+        private static bool ShouldFailOnFileErrors(VfsOptions options, EndfieldVfsBlockType blockType) => true;
 
         private static void ThrowFileErrors(string operation, int errorCount, List<string> diagnostics)
         {
@@ -1413,6 +1470,8 @@ namespace AnimeStudio.CLI
                 var blockInfo = block.Info;
                 var blockName = blockType.GetName();
                 var blockDirName = loader.BlockDirectoryName(blockType);
+                var excludeMissingAuditAudio = ShouldExcludeMissingAuditAudio(
+                    options, loader, blockType, blockInfo);
                 totalBlocks++;
 
                 WriteJsonLine(writer, new JObject
@@ -1456,7 +1515,9 @@ namespace AnimeStudio.CLI
                     }
 
                     var selectedFiles = SelectedFiles(options, chunk).ToList();
-                    if (!chunkExists && selectedFiles.Count > 0 && ShouldFailOnFileErrors(options, blockType))
+                    if (!chunkExists && selectedFiles.Count > 0
+                        && !excludeMissingAuditAudio
+                        && ShouldFailOnFileErrors(options, blockType))
                     {
                         integrityErrorCount++;
                         if (integrityDiagnostics.Count < MaxFailureDiagnostics)
@@ -1890,7 +1951,8 @@ namespace AnimeStudio.CLI
                         $"Usage: {executable} audio-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
                         "",
                         "Certify AKPK/Wwise outer package, sector, bank, and media-table framing.",
-                        "English, Japanese, and Korean voice blocks are excluded.",
+                        "All language audio is parsed normally whenever physical chunks exist.",
+                        "A block is conditionally ignored only when every declared chunk is absent from both roots.",
                         "",
                         "Options:",
                         "  -s, --streaming-assets <PRIMARY_ASSETS>",
@@ -1898,7 +1960,9 @@ namespace AnimeStudio.CLI
                         "  -o, --output <OUTPUT>",
                         "          [default: ./akpk_audit.json]",
                         "  -b, --block <BLOCK>",
-                        "          Repeatable: audio, initial-audio, audit-audio, hotfix-audio, audio-chinese",
+                        "          Repeatable: audio, initial-audio, audit-audio, hotfix-audio, audio-chinese,",
+                        "          audio-english, audio-japanese, audio-korean",
+                        "          Any selected audio block is conditionally ignored only when all declared chunks are missing.",
                         "      --hirc-only",
                         "          Skip media magic verification and emit numeric BNK/HIRC framing census",
                         "  -h, --help",
@@ -1909,7 +1973,8 @@ namespace AnimeStudio.CLI
                         $"Usage: {executable} vfs-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
                         "",
                         "Certify every physical VFS catalog file and logical file boundary without writing payloads.",
-                        "English, Japanese, and Korean voice blocks are explicitly excluded; AuditAudio is in scope.",
+                        "Audio blocks are parsed normally whenever physical chunks exist.",
+                        "An audio block is conditionally ignored only when every declared chunk is absent from both roots.",
                         "",
                         "Options:",
                         "  -s, --streaming-assets <PRIMARY_ASSETS>",
@@ -1932,7 +1997,8 @@ namespace AnimeStudio.CLI
                         $"Usage: {executable} vfs-profile [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
                         "",
                         "Stream bounded structural observations for every selected logical VFS file.",
-                        "English, Japanese, and Korean voice blocks are excluded by default and counted in the summary.",
+                        "Audio blocks are profiled normally whenever physical chunks exist.",
+                        "An audio block is conditionally ignored only when every declared chunk is absent from both roots.",
                         "The summary is moved last as the successful publication marker.",
                         "",
                         "Options:",
@@ -1952,7 +2018,7 @@ namespace AnimeStudio.CLI
                         "      --bounded-bytes <N>",
                         "          Prefix/suffix bound (1..4096). [default: 64]",
                         "      --include-deferred-voice",
-                        "          Include English, Japanese, and Korean voice blocks (normally excluded).",
+                        "          Accepted for compatibility; present voice blocks are always included.",
                         "  -h, --help",
                         "          Print help");
                     break;
