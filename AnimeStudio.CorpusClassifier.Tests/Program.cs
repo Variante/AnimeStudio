@@ -134,10 +134,10 @@ static class Program
             var summaryText = File.ReadAllText(summary);
             Equal(true, summaryText.Contains("\"complete\": false", StringComparison.Ordinal),
                 "failed profile summary is explicitly incomplete");
-            Equal(true, summaryText.Contains("\"unavailableBlockCount\": 23", StringComparison.Ordinal),
+            Equal(true, summaryText.Contains("\"unavailableBlockCount\": 26", StringComparison.Ordinal),
                 "failed profile reports missing selected blocks");
-            Equal(true, summaryText.Contains("\"excludedBlockCount\": 3", StringComparison.Ordinal),
-                "failed profile reports deferred voice blocks separately");
+            Equal(true, summaryText.Contains("\"excludedBlockCount\": 0", StringComparison.Ordinal),
+                "missing metadata is not reclassified as conditionally absent audio chunks");
         }
         finally
         {
