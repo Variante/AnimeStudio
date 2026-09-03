@@ -27,6 +27,34 @@ namespace AnimeStudio
             return (int)value;
         }
 
+        private static string BoundedExceptionMessage(Exception exception)
+        {
+            const int maxLength = 256;
+            var message = exception.Message.Replace('\r', ' ').Replace('\n', ' ');
+            return message.Length <= maxLength ? message : message[..maxLength] + "...";
+        }
+
+        private static void ReadExactly(FileReader reader, Span<byte> destination, string path, int blockIndex)
+        {
+            var totalRead = 0;
+            while (totalRead < destination.Length)
+            {
+                var read = reader.Read(destination[totalRead..]);
+                if (read <= 0)
+                {
+                    break;
+                }
+                totalRead += read;
+            }
+
+            if (totalRead != destination.Length)
+            {
+                throw new EndOfStreamException(
+                    $"VFS bundle '{path}' block {blockIndex} compressed payload truncated: " +
+                    $"expected={destination.Length}, actual={totalRead} bytes.");
+            }
+        }
+
         public VFSFile(FileReader reader, string path, GameType game)
         {
             Offset = reader.Position;
@@ -78,7 +106,7 @@ namespace AnimeStudio
 
             //
             using var blocksStream = CreateBlocksStream(path);
-            ReadBlocks(reader, blocksStream, game);
+            ReadBlocks(reader, blocksStream, game, path);
             ReadFiles(blocksStream, path);
         }
 
@@ -163,10 +191,11 @@ namespace AnimeStudio
             return new MemoryStream((int)size);
         }
 
-        private void ReadBlocks(FileReader reader, Stream blocksStream, GameType game)
+        private void ReadBlocks(FileReader reader, Stream blocksStream, GameType game, string path)
         {
-            foreach (var blockInfo in m_BlocksInfo)
+            for (var blockIndex = 0; blockIndex < m_BlocksInfo.Count; blockIndex++)
             {
+                var blockInfo = m_BlocksInfo[blockIndex];
                 var compressionType = (int)blockInfo.flags; // no mask
                 Logger.Verbose($"Block compression type {compressionType}");
 
@@ -187,26 +216,38 @@ namespace AnimeStudio
                         var compressedBytesSpan = compressedBytes.AsSpan(0, compressedSize);
                         var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, uncompressedSize);
 
+                        var numWrite = -1;
                         try
                         {
-                            reader.Read(compressedBytesSpan);
-
-                            VFSUtils.DecryptBlock(compressedBytesSpan, game);
-
-                            // LZ4Inv this time
-                            var numWrite = LZ4Inv.Instance.Decompress(compressedBytesSpan, uncompressedBytesSpan);
-                            if (numWrite != uncompressedSize)
+                            try
                             {
-                                Logger.Warning($"Lz4 decompression error, write {numWrite} bytes but expected {uncompressedSize} bytes");
+                                ReadExactly(reader, compressedBytesSpan, path, blockIndex);
+
+                                VFSUtils.DecryptBlock(compressedBytesSpan, game);
+
+                                // LZ4Inv this time. Do not publish the pooled span until
+                                // both decoding and the exact output-size gate pass.
+                                numWrite = LZ4Inv.Instance.Decompress(compressedBytesSpan, uncompressedBytesSpan);
+                                if (numWrite != uncompressedSize)
+                                {
+                                    throw new InvalidDataException(
+                                        $"Lz4 output length mismatch: expected={uncompressedSize}, actual={numWrite} bytes.");
+                                }
                             }
-                        }
-                        catch (Exception e)
-                        {
-                            Logger.Error($"Lz4 decompression error : {e.Message}");
+                            catch (Exception e)
+                            {
+                                var actual = numWrite >= 0 ? numWrite.ToString() : "unknown";
+                                throw new IOException(
+                                    $"VFS bundle '{path}' block {blockIndex} type-5 decode failed: " +
+                                    $"expected={uncompressedSize}, actual={actual} bytes; detail={BoundedExceptionMessage(e)}",
+                                    e);
+                            }
+
+                            // Publish only after a complete, exact decode.
+                            blocksStream.Write(uncompressedBytesSpan);
                         }
                         finally
                         {
-                            blocksStream.Write(uncompressedBytesSpan);
                             ArrayPool<byte>.Shared.Return(compressedBytes, true);
                             ArrayPool<byte>.Shared.Return(uncompressedBytes, true);
                         }

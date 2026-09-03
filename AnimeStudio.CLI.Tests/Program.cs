@@ -34,6 +34,7 @@ static class Program
         TestEndfieldVfsCatalogInvariants();
         TestEndfieldVfsMd5Verification();
         TestEndfieldVfsAuditSyntheticFixtures();
+        VFSFileType5Tests.Run();
         TestEndfieldCompressDataRecords();
         TestEndfieldCompressDataRejectsMalformedContainers();
         TestEndfieldCompressDataCliOutput();
