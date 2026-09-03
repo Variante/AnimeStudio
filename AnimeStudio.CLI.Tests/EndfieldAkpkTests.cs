@@ -7,15 +7,74 @@ internal static class EndfieldAkpkTests
     public static void Run()
     {
         TestBankPayloadIsDecryptedAndFramed();
+        TestHircObjectFramingAndUnknownTypeArePreserved();
+        TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
         TestTruncatedSectorFailsClosed();
     }
 
+    private static void TestHircObjectFramingAndUnknownTypeArePreserved()
+    {
+        var bank = BuildBnk(
+            (0xFE, 0x1001U, new byte[] { 1, 2, 3 }),
+            (0x01, 0x1002U, Array.Empty<byte>()));
+        var package = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x12345678, bank));
+        if (package.BnkStructures.Count != 1)
+        {
+            throw new InvalidOperationException("HIRC fixture did not produce one BNK structure");
+        }
+        var structure = package.BnkStructures[0];
+        if (structure.HircObjectCount != 2
+            || structure.HircObjectTypeCounts[0xFE] != 1
+            || structure.HircObjectTypeCounts[0x01] != 1
+            || structure.Sections.Count != 2)
+        {
+            throw new InvalidOperationException("HIRC fixture framing/type census mismatch");
+        }
+    }
+
+    private static void TestMalformedHircFailsClosed()
+    {
+        var truncatedBankHeader = BuildBnk((0xFE, 0x2000U, Array.Empty<byte>()));
+        BinaryPrimitives.WriteUInt32LittleEndian(truncatedBankHeader.AsSpan(4, 4), 3);
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x2000, truncatedBankHeader)),
+            "BKHD version field truncated");
+
+        var truncated = BuildBnk((0xFE, 0x2001U, new byte[] { 1 }));
+        // BKHD is 12 bytes; HIRC object size begins at byte 25.
+        BinaryPrimitives.WriteUInt32LittleEndian(truncated.AsSpan(25, 4), 99);
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x2000, truncated)),
+            "HIRC object range out of HIRC");
+
+        var trailing = BuildBnk((0xFE, 0x2002U, new byte[] { 1 }));
+        BinaryPrimitives.WriteUInt32LittleEndian(trailing.AsSpan(16, 4),
+            BinaryPrimitives.ReadUInt32LittleEndian(trailing.AsSpan(16, 4)) + 1);
+        Array.Resize(ref trailing, trailing.Length + 1);
+        trailing[^1] = 0x7F;
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x2000, trailing)),
+            "HIRC cursor mismatch");
+
+        var impossibleCount = BuildBnk((0xFE, 0x2003U, Array.Empty<byte>()));
+        // BKHD is 12 bytes; HIRC body and its count begin at byte 20.
+        BinaryPrimitives.WriteUInt32LittleEndian(impossibleCount.AsSpan(20, 4), uint.MaxValue);
+        AssertThrows(
+            () => EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x2000, impossibleCount)),
+            "HIRC object count exceeds HIRC");
+    }
+
     private static void TestBankPayloadIsDecryptedAndFramed()
     {
         const uint bankId = 0x12345678;
-        var plainBank = new byte[] { (byte)'B', (byte)'K', (byte)'H', (byte)'D', 0, 0, 0, 0 };
+        var plainBank = new byte[]
+        {
+            (byte)'B', (byte)'K', (byte)'H', (byte)'D',
+            4, 0, 0, 0,
+            150, 0, 0, 0,
+        };
         var encryptedBank = (byte[])plainBank.Clone();
         EndfieldAudioCrypto.DecryptVfs(encryptedBank, 0, encryptedBank.Length, bankId, 0);
         var package = EndfieldAkpkPackage.Parse(BuildPackage(
@@ -92,6 +151,41 @@ internal static class EndfieldAkpkTests
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(externalStart, 4), 0);
         payload.CopyTo(data, payloadOffset);
         return data;
+    }
+
+    private static byte[] BuildBnk(params (byte Type, uint Id, byte[] Body)[] objects)
+    {
+        using var hircStream = new MemoryStream();
+        using (var hircWriter = new BinaryWriter(hircStream, Encoding.UTF8, true))
+        {
+            hircWriter.Write((uint)objects.Length);
+            foreach (var item in objects)
+            {
+                hircWriter.Write(item.Type);
+                hircWriter.Write(checked((uint)(4 + item.Body.Length)));
+                hircWriter.Write(item.Id);
+                hircWriter.Write(item.Body);
+            }
+        }
+
+        using var bankStream = new MemoryStream();
+        using (var writer = new BinaryWriter(bankStream, Encoding.UTF8, true))
+        {
+            writer.Write(Encoding.ASCII.GetBytes("BKHD"));
+            writer.Write(4U);
+            writer.Write(150U);
+            writer.Write(Encoding.ASCII.GetBytes("HIRC"));
+            writer.Write(checked((uint)hircStream.Length));
+            writer.Write(hircStream.ToArray());
+        }
+        return bankStream.ToArray();
+    }
+
+    private static byte[] BuildEncryptedBankPackage(uint bankId, byte[] bank)
+    {
+        var encrypted = (byte[])bank.Clone();
+        EndfieldAudioCrypto.DecryptVfs(encrypted, 0, encrypted.Length, bankId, 0);
+        return BuildPackage(bankId, encrypted, bank: true, sound: false);
     }
 
     private static void WriteEntry(byte[] data, int offset, uint id, int size, int payloadOffset)

@@ -1899,6 +1899,8 @@ namespace AnimeStudio.CLI
                         "          [default: ./akpk_audit.json]",
                         "  -b, --block <BLOCK>",
                         "          Repeatable: audio, initial-audio, audit-audio, hotfix-audio, audio-chinese",
+                        "      --hirc-only",
+                        "          Skip media magic verification and emit numeric BNK/HIRC framing census",
                         "  -h, --help",
                         "          Print help");
                     break;

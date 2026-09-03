@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -26,6 +27,7 @@ namespace AnimeStudio.Endfield
         public int BankCount { get; private set; }
         public int SoundCount { get; private set; }
         public int ExternalCount { get; private set; }
+        public List<EndfieldBnkStructure> BnkStructures { get; } = new();
 
         public static EndfieldAkpkPackage Parse(byte[] input)
         {
@@ -365,6 +367,11 @@ namespace AnimeStudio.Endfield
             var dataBodyOffset = -1;
             var dataBodySize = 0U;
             var first = true;
+            var structure = new EndfieldBnkStructure
+            {
+                BankId = bankId,
+                ByteLength = checked((int)size),
+            };
             while (pos < payload.Length)
             {
                 if (payload.Length - pos < 8)
@@ -384,6 +391,21 @@ namespace AnimeStudio.Endfield
                     throw new InvalidDataException($"AKPK BNK must start with BKHD: id={bankId}");
                 }
                 first = false;
+                structure.Sections.Add(new EndfieldBnkSection
+                {
+                    Tag = tag,
+                    Offset = pos,
+                    DeclaredSize = sectionSize,
+                });
+                if (tag == "BKHD")
+                {
+                    if (sectionSize < 4)
+                    {
+                        throw new InvalidDataException(
+                            $"AKPK BKHD version field truncated: id={bankId}, offset={bodyStart}, expected=4, actual={sectionSize}");
+                    }
+                    structure.Version = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(bodyStart, 4));
+                }
                 if (tag == "DIDX")
                 {
                     if (sectionSize % 12 != 0)
@@ -400,8 +422,14 @@ namespace AnimeStudio.Endfield
                     dataBodyOffset = bodyStart;
                     dataBodySize = sectionSize;
                 }
+                else if (tag == "HIRC")
+                {
+                    ParseHirc(payload, bodyStart, checked((int)sectionSize), bankId, structure);
+                }
                 pos = bodyEnd;
             }
+
+            BnkStructures.Add(structure);
 
             if (didx.Count > 0 && dataBodyOffset < 0)
             {
@@ -414,6 +442,75 @@ namespace AnimeStudio.Endfield
                     throw new InvalidDataException($"AKPK DIDX media range out of DATA: bank={bankId}, media={id}, offset={wemOffset}, size={wemSize}, data={dataBodySize}");
                 }
                 yield return (id, checked((ulong)dataBodyOffset + wemOffset), wemSize);
+            }
+        }
+
+        private static void ParseHirc(
+            byte[] payload,
+            int bodyStart,
+            int bodyLength,
+            ulong bankId,
+            EndfieldBnkStructure structure)
+        {
+            if (bodyLength < 4)
+            {
+                throw new InvalidDataException($"AKPK HIRC object-count field truncated: id={bankId}, offset={bodyStart}");
+            }
+
+            var bodyEnd = checked(bodyStart + bodyLength);
+            var objectCount = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(bodyStart, 4));
+            var maximumObjectCount = checked((bodyLength - 4) / 9);
+            if (objectCount > maximumObjectCount)
+            {
+                throw new InvalidDataException(
+                    $"AKPK HIRC object count exceeds HIRC: id={bankId}, count={objectCount}, maximum={maximumObjectCount}, size={bodyLength}");
+            }
+            var cursor = checked(bodyStart + 4);
+            structure.HircObjectCount = checked(structure.HircObjectCount + objectCount);
+            for (var ordinal = 0U; ordinal < objectCount; ordinal++)
+            {
+                if (bodyEnd - cursor < 9)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object header truncated: id={bankId}, ordinal={ordinal}, offset={cursor}, expected=9, actual={bodyEnd - cursor}");
+                }
+
+                var objectType = payload[cursor];
+                var objectSize = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(checked(cursor + 1), 4));
+                var objectId = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(checked(cursor + 5), 4));
+                if (objectSize < 4)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object size too small: id={bankId}, ordinal={ordinal}, object={objectId}, type={objectType}, size={objectSize}, expectedMin=4");
+                }
+                var objectEnd = checked((long)cursor + 5L + objectSize);
+                if (objectEnd > bodyEnd)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object range out of HIRC: id={bankId}, ordinal={ordinal}, object={objectId}, type={objectType}, offset={cursor}, size={objectSize}, hircEnd={bodyEnd}");
+                }
+                structure.HircObjectTypeCounts.TryGetValue(objectType, out var typeCount);
+                structure.HircObjectTypeCounts[objectType] = checked(typeCount + 1);
+                if (!structure.HircObjectTypeStats.TryGetValue(objectType, out var stats))
+                {
+                    stats = new EndfieldBnkObjectTypeStats
+                    {
+                        MinDeclaredLength = objectSize,
+                        MaxDeclaredLength = objectSize,
+                    };
+                    structure.HircObjectTypeStats[objectType] = stats;
+                }
+                stats.DeclaredLengthBytes = checked(stats.DeclaredLengthBytes + objectSize);
+                stats.MinDeclaredLength = Math.Min(stats.MinDeclaredLength, objectSize);
+                stats.MaxDeclaredLength = Math.Max(stats.MaxDeclaredLength, objectSize);
+                stats.Count = checked(stats.Count + 1);
+                cursor = checked((int)objectEnd);
+            }
+
+            if (cursor != bodyEnd)
+            {
+                throw new InvalidDataException(
+                    $"AKPK HIRC cursor mismatch: id={bankId}, cursor={cursor}, end={bodyEnd}, trailing={bodyEnd - cursor}");
             }
         }
 
@@ -483,5 +580,31 @@ namespace AnimeStudio.Endfield
         public string Language { get; set; }
         public uint? ContainerSeed { get; set; }
         public ulong ContainerDataOffset { get; set; }
+    }
+
+    public sealed class EndfieldBnkStructure
+    {
+        public ulong BankId { get; set; }
+        public int ByteLength { get; set; }
+        public uint? Version { get; set; }
+        public List<EndfieldBnkSection> Sections { get; } = new();
+        public uint HircObjectCount { get; set; }
+        public Dictionary<byte, uint> HircObjectTypeCounts { get; } = new();
+        public Dictionary<byte, EndfieldBnkObjectTypeStats> HircObjectTypeStats { get; } = new();
+    }
+
+    public sealed class EndfieldBnkObjectTypeStats
+    {
+        public uint Count { get; set; }
+        public ulong DeclaredLengthBytes { get; set; }
+        public uint MinDeclaredLength { get; set; }
+        public uint MaxDeclaredLength { get; set; }
+    }
+
+    public sealed class EndfieldBnkSection
+    {
+        public string Tag { get; set; }
+        public int Offset { get; set; }
+        public uint DeclaredSize { get; set; }
     }
 }

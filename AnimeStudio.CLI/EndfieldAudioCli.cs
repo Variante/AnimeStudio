@@ -57,29 +57,32 @@ namespace AnimeStudio.CLI
                         var mediaPlugin = 0;
                         var mediaInvalid = 0;
                         var invalidExamples = new List<Dictionary<string, object?>>();
-                        foreach (var entry in package.Entries)
+                        if (!options.HircOnly)
                         {
-                            var media = package.GetWemData(entry);
-                            if (HasMagic(media, "PLUG"))
+                            foreach (var entry in package.Entries)
                             {
-                                mediaPlugin++;
-                            }
-                            else if (HasMagic(media, "RIFF") || HasMagic(media, "RIFX"))
-                            {
-                                mediaRiff++;
-                            }
-                            else
-                            {
-                                mediaInvalid++;
-                                if (invalidExamples.Count < 8)
+                                var media = package.GetWemData(entry);
+                                if (HasMagic(media, "PLUG"))
                                 {
-                                    invalidExamples.Add(new Dictionary<string, object?>
+                                    mediaPlugin++;
+                                }
+                                else if (HasMagic(media, "RIFF") || HasMagic(media, "RIFX"))
+                                {
+                                    mediaRiff++;
+                                }
+                                else
+                                {
+                                    mediaInvalid++;
+                                    if (invalidExamples.Count < 8)
                                     {
-                                        ["id"] = entry.Id.ToString("x"),
-                                        ["offset"] = entry.Offset,
-                                        ["declaredBytes"] = entry.Size,
-                                        ["magic"] = MagicPreview(media),
-                                    });
+                                        invalidExamples.Add(new Dictionary<string, object?>
+                                        {
+                                            ["id"] = entry.Id.ToString("x"),
+                                            ["offset"] = entry.Offset,
+                                            ["declaredBytes"] = entry.Size,
+                                            ["magic"] = MagicPreview(media),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -100,8 +103,59 @@ namespace AnimeStudio.CLI
                             ["mediaRiff"] = mediaRiff,
                             ["mediaPlugin"] = mediaPlugin,
                             ["mediaInvalid"] = mediaInvalid,
+                            ["mediaVerification"] = options.HircOnly ? "skipped" : "verified",
                             ["invalidExamples"] = invalidExamples,
                             ["languageNames"] = package.Languages.Values.Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray(),
+                            ["bnkPayloads"] = package.BnkStructures.Count,
+                            ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
+                            ["hircObjects"] = package.BnkStructures.Sum(x => checked((long)x.HircObjectCount)),
+                            ["hircObjectTypeCounts"] = package.BnkStructures
+                                .SelectMany(x => x.HircObjectTypeCounts)
+                                .GroupBy(x => x.Key)
+                                .OrderBy(x => x.Key)
+                                .ToDictionary(x => $"0x{x.Key:X2}", x => x.Sum(y => (long)y.Value)),
+                            ["hircObjectTypeStats"] = package.BnkStructures
+                                .SelectMany(x => x.HircObjectTypeStats)
+                                .GroupBy(x => x.Key)
+                                .OrderBy(x => x.Key)
+                                .ToDictionary(
+                                    x => $"0x{x.Key:X2}",
+                                    x => new Dictionary<string, object?>
+                                    {
+                                        ["count"] = x.Sum(y => (long)y.Value.Count),
+                                        ["declaredLengthBytes"] = x.Sum(y => (long)y.Value.DeclaredLengthBytes),
+                                        ["minDeclaredLength"] = x.Min(y => y.Value.MinDeclaredLength),
+                                        ["maxDeclaredLength"] = x.Max(y => y.Value.MaxDeclaredLength),
+                                    }),
+                            ["bnkSectionTagCounts"] = package.BnkStructures
+                                .SelectMany(x => x.Sections)
+                                .GroupBy(x => x.Tag, StringComparer.Ordinal)
+                                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                                .ToDictionary(x => x.Key, x => x.LongCount(), StringComparer.Ordinal),
+                            ["bnkStructures"] = package.BnkStructures.Select(x => new Dictionary<string, object?>
+                            {
+                                ["bankId"] = x.BankId,
+                                ["byteLength"] = x.ByteLength,
+                                ["version"] = x.Version,
+                                ["sections"] = x.Sections.Select(section => new Dictionary<string, object?>
+                                {
+                                    ["tag"] = section.Tag,
+                                    ["offset"] = section.Offset,
+                                    ["declaredSize"] = section.DeclaredSize,
+                                }).ToArray(),
+                                ["hircObjectCount"] = x.HircObjectCount,
+                                ["hircObjectTypeStats"] = x.HircObjectTypeStats
+                                    .OrderBy(pair => pair.Key)
+                                    .ToDictionary(
+                                        pair => $"0x{pair.Key:X2}",
+                                        pair => new Dictionary<string, object?>
+                                        {
+                                            ["count"] = pair.Value.Count,
+                                            ["declaredLengthBytes"] = pair.Value.DeclaredLengthBytes,
+                                            ["minDeclaredLength"] = pair.Value.MinDeclaredLength,
+                                            ["maxDeclaredLength"] = pair.Value.MaxDeclaredLength,
+                                        }),
+                            }).ToArray(),
                         };
                         if (mediaInvalid != 0)
                         {
@@ -370,6 +424,7 @@ namespace AnimeStudio.CLI
             public string FallbackAssets { get; set; }
             public string Output { get; set; } = "./akpk_audit.json";
             public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
+            public bool HircOnly { get; set; }
         }
 
         private static AudioAuditOptions ParseAuditOptions(string[] args)
@@ -394,6 +449,7 @@ namespace AnimeStudio.CLI
                     case "-s":
                     case "--streaming-assets": options.StreamingAssets = Next(); break;
                     case "--fallback-assets": options.FallbackAssets = Next(); break;
+                    case "--hirc-only": options.HircOnly = true; break;
                     case "-o":
                     case "--output": options.Output = Next(); break;
                     case "-b":
