@@ -21,6 +21,11 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<InternalsVisibleTo Include="AnimeStudio.CLI.Tests" />
+		<InternalsVisibleTo Include="AnimeStudio.CLI" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<Content Include="CNKeys.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>

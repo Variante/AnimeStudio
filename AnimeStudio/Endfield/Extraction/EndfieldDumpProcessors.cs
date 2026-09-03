@@ -10,7 +10,7 @@ namespace AnimeStudio.Endfield
         public static string ProcessTableFile(byte[] data, string output)
         {
             var parseResult = EndfieldSparkBuffer.ParseBytes(data);
-            var outputPath = Path.Combine(output, "Table", $"{parseResult.Name}.json");
+            var outputPath = ResolveContainedPath(output, Path.Combine("Table", $"{parseResult.Name}.json"));
             CreateParentDirectory(outputPath);
 
             var json = NormalizeJsonNumberExponents(parseResult.Data.ToString(Formatting.Indented))
@@ -24,7 +24,7 @@ namespace AnimeStudio.Endfield
             var outputName = fileName.EndsWith(".usm", StringComparison.Ordinal)
                 ? $"{fileName[..^".usm".Length]}.mp4"
                 : fileName;
-            var outputPath = Path.Combine(output, outputName);
+            var outputPath = ResolveContainedPath(output, outputName);
             CreateParentDirectory(outputPath);
 
             if (fileName.EndsWith(".usm", StringComparison.Ordinal))
@@ -53,7 +53,7 @@ namespace AnimeStudio.Endfield
 
             var decrypted = EndfieldXxtea.Decrypt(encryptedData, EndfieldVfsKeys.XxteaKey);
             var normalized = NormalizeLuaNewlines(decrypted);
-            var outputPath = Path.Combine(output, "Lua", LuaOutputName(fileName));
+            var outputPath = ResolveContainedPath(output, Path.Combine("Lua", LuaOutputName(fileName)));
             CreateParentDirectory(outputPath);
 
             File.WriteAllBytes(outputPath, normalized);
@@ -219,6 +219,31 @@ namespace AnimeStudio.Endfield
         }
 
         private static bool IsDigit(char value) => value is >= '0' and <= '9';
+
+        public static string ResolveContainedPath(string output, string relativePath)
+        {
+            if (string.IsNullOrEmpty(output))
+            {
+                throw new ArgumentException("output root is required", nameof(output));
+            }
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                throw new ArgumentException("relative output path is required", nameof(relativePath));
+            }
+
+            var root = Path.GetFullPath(output);
+            var candidate = Path.GetFullPath(Path.Combine(root, relativePath));
+            var rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                || root.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? root
+                : root + Path.DirectorySeparatorChar;
+            if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new EndfieldVfsException($"output path escapes root: {relativePath}");
+            }
+            return candidate;
+        }
+
         private static void CreateParentDirectory(string outputPath)
         {
             var parent = Path.GetDirectoryName(outputPath);

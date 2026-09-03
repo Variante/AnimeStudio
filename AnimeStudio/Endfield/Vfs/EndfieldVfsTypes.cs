@@ -29,6 +29,7 @@ namespace AnimeStudio.Endfield
         JsonData = 19,
         ExtendData = 20,
         HotfixAudio = 21,
+        Terrain = 22,
         AudioChinese = 101,
         AudioEnglish = 102,
         AudioJapanese = 103,
@@ -67,6 +68,7 @@ namespace AnimeStudio.Endfield
             EndfieldVfsBlockType.JsonData,
             EndfieldVfsBlockType.ExtendData,
             EndfieldVfsBlockType.HotfixAudio,
+            EndfieldVfsBlockType.Terrain,
             EndfieldVfsBlockType.AudioChinese,
             EndfieldVfsBlockType.AudioEnglish,
             EndfieldVfsBlockType.AudioJapanese,
@@ -99,12 +101,25 @@ namespace AnimeStudio.Endfield
             19 => EndfieldVfsBlockType.JsonData,
             20 => EndfieldVfsBlockType.ExtendData,
             21 => EndfieldVfsBlockType.HotfixAudio,
+            22 => EndfieldVfsBlockType.Terrain,
             101 => EndfieldVfsBlockType.AudioChinese,
             102 => EndfieldVfsBlockType.AudioEnglish,
             103 => EndfieldVfsBlockType.AudioJapanese,
             104 => EndfieldVfsBlockType.AudioKorean,
             _ => EndfieldVfsBlockType.Raw,
         };
+
+        public static bool IsKnown(byte value) => value switch
+        {
+            0 or 1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or
+            11 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or
+            21 or 22 or 101 or 102 or 103 or 104 => true,
+            _ => false,
+        };
+
+        public static string GetName(byte value) => IsKnown(value)
+            ? ((EndfieldVfsBlockType)value).GetName()
+            : $"Unknown({value})";
 
         public static EndfieldVfsFileTag FileTagFromByte(byte value) => value switch
         {
@@ -136,6 +151,7 @@ namespace AnimeStudio.Endfield
             EndfieldVfsBlockType.JsonData => "JsonData",
             EndfieldVfsBlockType.ExtendData => "ExtendData",
             EndfieldVfsBlockType.HotfixAudio => "HotfixAudio",
+            EndfieldVfsBlockType.Terrain => "Terrain",
             EndfieldVfsBlockType.AudioChinese => "AudioChinese",
             EndfieldVfsBlockType.AudioEnglish => "AudioEnglish",
             EndfieldVfsBlockType.AudioJapanese => "AudioJapanese",
@@ -175,6 +191,8 @@ namespace AnimeStudio.Endfield
         public long Offset { get; set; }
         public long Length { get; set; }
         public EndfieldVfsBlockType BlockType { get; set; }
+        /// <summary>The metadata byte before unknown IDs are mapped to Raw.</summary>
+        public byte BlockTypeValue { get; set; }
         public bool UseEncrypt { get; set; }
         public long IvSeed { get; set; }
         public EndfieldVfsFileTag FileTag { get; set; }
@@ -186,6 +204,8 @@ namespace AnimeStudio.Endfield
         public UInt128 ContentMd5 { get; set; }
         public long Length { get; set; }
         public EndfieldVfsBlockType BlockType { get; set; }
+        /// <summary>The metadata byte before unknown IDs are mapped to Raw.</summary>
+        public byte BlockTypeValue { get; set; }
         public EndfieldVfsFileTag MainTag { get; set; }
         public List<EndfieldVfsFileInfo> Files { get; } = new();
 
@@ -200,8 +220,44 @@ namespace AnimeStudio.Endfield
         public int GroupFileInfoNum { get; set; }
         public long GroupChunksLength { get; set; }
         public EndfieldVfsBlockType BlockType { get; set; }
+        /// <summary>The metadata byte before unknown IDs are mapped to Raw.</summary>
+        public byte BlockTypeValue { get; set; }
         public List<EndfieldVfsChunkInfo> Chunks { get; } = new();
         public int CodeVersion { get; set; }
+        /// <summary>Observed current-build footer bytes whose semantic fields are not yet assigned.</summary>
+        public byte[] MetadataTrailer { get; internal set; } = Array.Empty<byte>();
+        /// <summary>CRC32 stored in the final four decrypted metadata bytes.</summary>
+        public uint MetadataCrc32Declared { get; internal set; }
+        /// <summary>CRC32 recomputed over all decrypted metadata bytes before the stored CRC.</summary>
+        public uint MetadataCrc32Recomputed { get; internal set; }
+    }
+
+    public enum EndfieldVfsCatalogState
+    {
+        PrimaryOnly,
+        FallbackOnly,
+        Identical,
+        Replaced,
+        ShadowedEmpty,
+        Conflicting,
+        MissingMetadata,
+    }
+
+    /// <summary>One physical hash directory in the primary/fallback VFS union.</summary>
+    public sealed class EndfieldVfsCatalogEntry
+    {
+        public string HashDirectory { get; internal set; } = string.Empty;
+        public string PrimaryMetadataPath { get; internal set; }
+        public string FallbackMetadataPath { get; internal set; }
+        public EndfieldVfsBlockMainInfo PrimaryInfo { get; internal set; }
+        public EndfieldVfsBlockMainInfo FallbackInfo { get; internal set; }
+        public EndfieldVfsBlockMainInfo CanonicalInfo { get; internal set; }
+        public bool CanonicalIsPrimary { get; internal set; }
+        public EndfieldVfsCatalogState State { get; internal set; }
+        public string PrimaryError { get; internal set; }
+        public string FallbackError { get; internal set; }
+        public bool PrimaryDirectoryPresent { get; internal set; }
+        public bool FallbackDirectoryPresent { get; internal set; }
     }
 
     public class EndfieldVfsException : Exception

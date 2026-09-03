@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimeStudio.Endfield;
@@ -14,6 +15,7 @@ namespace AnimeStudio.CLI
 {
     public static class EndfieldVfsCli
     {
+        private const int MaxFailureDiagnostics = 8;
         private static readonly HashSet<string> Commands = new(StringComparer.OrdinalIgnoreCase)
         {
             "dump",
@@ -21,7 +23,10 @@ namespace AnimeStudio.CLI
             "stream",
             "vfs-index",
             "vfsindex",
+            "vfs-audit",
             "list",
+            "extend-data",
+            "extenddata",
         };
 
         public static bool TryRun(string[] args, out int exitCode)
@@ -52,11 +57,18 @@ namespace AnimeStudio.CLI
                     case "vfsindex":
                         RunVfsIndex(ParseVfsOptions(args, "./vfs_index.json"));
                         return true;
+                    case "vfs-audit":
+                        EndfieldVfsAudit.Run(args);
+                        return true;
                     case "audio":
                         EndfieldAudioCli.Run(args);
                         return true;
                     case "stream":
                         RunStream(ParseVfsOptions(args, ""));
+                        return true;
+                    case "extend-data":
+                    case "extenddata":
+                        RunExtendData(ParseExtendDataOptions(args));
                         return true;
                 }
             }
@@ -84,6 +96,23 @@ namespace AnimeStudio.CLI
             if (string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase) || args.Length == 1)
             {
                 return true;
+            }
+
+            if (string.Equals(args[0], "extend-data", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(args[0], "extenddata", StringComparison.OrdinalIgnoreCase))
+            {
+                return args.Skip(1).Any(arg =>
+                    IsHelp(arg) ||
+                    arg == "-i" ||
+                    arg == "--input" ||
+                    arg.StartsWith("--input=", StringComparison.Ordinal));
+            }
+
+            if (string.Equals(args[0], "vfs-audit", StringComparison.OrdinalIgnoreCase))
+            {
+                return args.Skip(1).Any(arg =>
+                    IsHelp(arg) || arg == "-s" || arg == "--streaming-assets"
+                    || arg.StartsWith("--streaming-assets=", StringComparison.Ordinal));
             }
 
             return args.Skip(1).Any(arg =>
@@ -120,6 +149,10 @@ namespace AnimeStudio.CLI
         {
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
             var emittedCount = 0;
+            var errorCount = 0;
+            var enforceErrors = false;
+            var diagnostics = new List<string>();
+            var diagnosticsLock = new object();
             foreach (var selectedFile in EnumerateSelectedFiles(
                 loader,
                 options,
@@ -127,10 +160,15 @@ namespace AnimeStudio.CLI
             {
                 try
                 {
-                    var data = loader.ExtractFileToBytes(selectedFile.BlockType, selectedFile.Chunk, selectedFile.File);
+                    var data = loader.ExtractFileToBytes(
+                        selectedFile.BlockType,
+                        selectedFile.Chunk,
+                        selectedFile.File,
+                        options.VerifyMd5 && ShouldFailOnFileErrors(options, selectedFile.BlockType));
                     var payload = new JObject
                     {
-                        ["blockType"] = selectedFile.BlockType.GetName(),
+                        ["blockType"] = EndfieldVfsBlockTypes.GetName(selectedFile.File.BlockTypeValue),
+                        ["blockTypeValue"] = selectedFile.File.BlockTypeValue,
                         ["fileName"] = selectedFile.File.FileName,
                         ["length"] = data.Length,
                         ["dataBase64"] = Convert.ToBase64String(data),
@@ -140,10 +178,71 @@ namespace AnimeStudio.CLI
                 }
                 catch (Exception e)
                 {
-                    Console.Error.WriteLine($"Error: Failed to stream {selectedFile.File.FileName}: {e.Message}");
+                    Interlocked.Increment(ref errorCount);
+                    if (ShouldFailOnFileErrors(options, selectedFile.BlockType))
+                    {
+                        enforceErrors = true;
+                    }
+                    lock (diagnosticsLock)
+                    {
+                        if (diagnostics.Count < MaxFailureDiagnostics)
+                        {
+                            diagnostics.Add($"{selectedFile.File.FileName}: {e.Message}");
+                        }
+                    }
                 }
             }
             Console.Error.WriteLine($"Streamed {emittedCount} files");
+            if (errorCount > 0 && enforceErrors)
+            {
+                ThrowFileErrors("stream", errorCount, diagnostics);
+            }
+        }
+
+        private static void RunExtendData(ExtendDataOptions options)
+        {
+            if (Directory.Exists(options.Output)
+                && Directory.EnumerateFileSystemEntries(options.Output).Any())
+            {
+                throw new ArgumentException($"output directory must be absent or empty: {options.Output}");
+            }
+
+            var sourceBytes = File.ReadAllBytes(options.Input);
+            var document = EndfieldCompressData.Decode(sourceBytes);
+            Directory.CreateDirectory(options.Output);
+            var records = new JArray();
+            foreach (var record in document.Records)
+            {
+                var outputName = $"{record.Index:D6}.json";
+                var outputPath = Path.Combine(options.Output, outputName);
+                var jsonText = record.Json.ToString(Formatting.Indented).Replace("\r\n", "\n", StringComparison.Ordinal);
+                File.WriteAllText(outputPath, jsonText + "\n", new UTF8Encoding(false));
+                records.Add(new JObject
+                {
+                    ["compressedLength"] = record.CompressedLength,
+                    ["index"] = record.Index,
+                    ["output"] = outputName,
+                    ["rootType"] = record.RootType == null ? JValue.CreateNull() : record.RootType,
+                    ["sourceOffset"] = record.SourceOffset,
+                    ["uncompressedLength"] = record.UncompressedLength,
+                });
+            }
+
+            var manifest = new JObject
+            {
+                ["format"] = "animestudio-extend-data-compress",
+                ["recordCount"] = document.Records.Count,
+                ["records"] = records,
+                ["schemaVersion"] = 1,
+                ["sourceFileName"] = Path.GetFileName(options.Input),
+                ["sourceLength"] = document.SourceLength,
+                ["sourceSha256"] = Convert.ToHexString(SHA256.HashData(sourceBytes)),
+            };
+            File.WriteAllText(
+                Path.Combine(options.Output, "manifest.json"),
+                manifest.ToString(Formatting.Indented).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+                new UTF8Encoding(false));
+            Console.WriteLine($"  Done: decoded {document.Records.Count} records -> {options.Output}");
         }
 
         private static IEnumerable<VfsBlockSelection> LoadSelectedBlocks(
@@ -197,6 +296,8 @@ namespace AnimeStudio.CLI
 
             var successCount = 0;
             var errorCount = 0;
+            var diagnostics = new List<string>();
+            var diagnosticsLock = new object();
             var selectedChunks = blockInfo.Chunks
                 .Select(chunk => new VfsChunkSelection(chunk, SelectedFiles(options, chunk).ToList()))
                 .ToList();
@@ -208,13 +309,25 @@ namespace AnimeStudio.CLI
                 {
                     try
                     {
-                        ProcessDumpFile(loader, blockType, selectedChunk.Chunk, file, output);
+                        ProcessDumpFile(
+                            loader,
+                            blockType,
+                            selectedChunk.Chunk,
+                            file,
+                            output,
+                            options.VerifyMd5 && ShouldFailOnFileErrors(options, blockType));
                         Interlocked.Increment(ref successCount);
                     }
                     catch (Exception e)
                     {
-                        Console.Error.WriteLine($"  Error: Failed to extract {file.FileName}: {e.Message}");
                         Interlocked.Increment(ref errorCount);
+                        lock (diagnosticsLock)
+                        {
+                            if (diagnostics.Count < MaxFailureDiagnostics)
+                            {
+                                diagnostics.Add($"{file.FileName}: {e.Message}");
+                            }
+                        }
                     }
                 });
             }
@@ -223,6 +336,10 @@ namespace AnimeStudio.CLI
             if (errorCount > 0)
             {
                 Console.WriteLine($"  Warning: {errorCount} files failed");
+                if (ShouldFailOnFileErrors(options, blockType))
+                {
+                    ThrowFileErrors("dump", errorCount, diagnostics);
+                }
             }
         }
 
@@ -239,27 +356,28 @@ namespace AnimeStudio.CLI
             EndfieldVfsBlockType blockType,
             EndfieldVfsChunkInfo chunk,
             EndfieldVfsFileInfo file,
-            string output)
+            string output,
+            bool verifyMd5)
         {
             string outputPath;
             if (blockType == EndfieldVfsBlockType.Table)
             {
-                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                var data = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5);
                 outputPath = EndfieldDumpProcessors.ProcessTableFile(data, output);
             }
             else if (blockType == EndfieldVfsBlockType.Lua)
             {
-                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                var data = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5);
                 outputPath = EndfieldDumpProcessors.ProcessLuaFile(data, file.FileName, output);
             }
             else if (blockType == EndfieldVfsBlockType.Video || blockType == EndfieldVfsBlockType.AuditVideo)
             {
-                var data = loader.ExtractFileToBytes(blockType, chunk, file);
+                var data = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5);
                 outputPath = EndfieldDumpProcessors.ProcessVideoFile(data, file.FileName, output);
             }
             else
             {
-                outputPath = Path.Combine(output, file.FileName);
+                outputPath = EndfieldDumpProcessors.ResolveContainedPath(output, file.FileName);
                 var parent = Path.GetDirectoryName(outputPath);
                 if (!string.IsNullOrEmpty(parent))
                 {
@@ -267,7 +385,7 @@ namespace AnimeStudio.CLI
                 }
 
                 using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024);
-                loader.ExtractFile(blockType, chunk, file, stream);
+                loader.ExtractFile(blockType, chunk, file, stream, verifyMd5);
             }
             if (!File.Exists(outputPath))
             {
@@ -277,11 +395,37 @@ namespace AnimeStudio.CLI
 
         private static void RunVfsIndex(VfsOptions options)
         {
-            if (options.UseJsonLines)
+            var finalOutput = options.Output;
+            var temporaryOutput = CreateSiblingTemporaryPath(finalOutput);
+            options.Output = temporaryOutput;
+            options.OutputDisplay = finalOutput;
+            try
             {
-                RunVfsIndexJsonLines(options);
-                return;
+                if (options.UseJsonLines)
+                {
+                    RunVfsIndexJsonLines(options);
+                }
+                else
+                {
+                    RunVfsIndexJson(options);
+                }
+
+                File.Move(temporaryOutput, finalOutput, overwrite: true);
             }
+            catch
+            {
+                TryDeleteTemporaryFile(temporaryOutput);
+                throw;
+            }
+            finally
+            {
+                options.Output = finalOutput;
+                options.OutputDisplay = null;
+            }
+        }
+
+        private static void RunVfsIndexJson(VfsOptions options)
+        {
 
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
             var blocks = new JArray();
@@ -291,6 +435,8 @@ namespace AnimeStudio.CLI
             var totalFiles = 0;
             var totalBytes = 0L;
             var missingChunks = 0;
+            var integrityErrorCount = 0;
+            var integrityDiagnostics = new List<string>();
 
             foreach (var block in LoadSelectedBlocks(
                 loader,
@@ -337,14 +483,38 @@ namespace AnimeStudio.CLI
                         missingChunks++;
                     }
 
+                    var selectedFiles = SelectedFiles(options, chunk).ToList();
+                    if (!chunkExists && selectedFiles.Count > 0 && ShouldFailOnFileErrors(options, blockType))
+                    {
+                        integrityErrorCount++;
+                        if (integrityDiagnostics.Count < MaxFailureDiagnostics)
+                        {
+                            integrityDiagnostics.Add($"{blockType.GetName()}/{chunkFileName}: chunk is missing");
+                        }
+                    }
+                    if (options.VerifyMd5
+                        && chunkExists
+                        && selectedFiles.Count > 0
+                        && ShouldFailOnFileErrors(options, blockType))
+                    {
+                        VerifySelectedFiles(
+                            loader,
+                            blockType,
+                            chunk,
+                            selectedFiles,
+                            integrityDiagnostics,
+                            ref integrityErrorCount);
+                    }
+
                     var files = new JArray();
                     var chunkFileCount = 0;
                     var chunkByteCount = 0L;
-                    foreach (var file in SelectedFiles(options, chunk))
+                    foreach (var file in selectedFiles)
                     {
                         files.Add(new JObject
                         {
-                            ["blockType"] = file.BlockType.GetName(),
+                            ["blockType"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                            ["blockTypeValue"] = file.BlockTypeValue,
                             ["chunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
                             ["dataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
                             ["encrypted"] = file.UseEncrypt,
@@ -367,7 +537,8 @@ namespace AnimeStudio.CLI
                             ["chunkRelativePath"] = chunkRelativePath,
                             ["chunkSource"] = chunkSource,
                             ["encrypted"] = file.UseEncrypt,
-                            ["fileBlockType"] = file.BlockType.GetName(),
+                            ["fileBlockType"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                            ["fileBlockTypeValue"] = file.BlockTypeValue,
                             ["fileChunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
                             ["fileDataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
                             ["fileName"] = file.FileName,
@@ -388,7 +559,8 @@ namespace AnimeStudio.CLI
                     chunkValues.Add(new JObject
                     {
                         ["absolutePath"] = chunkAbsolutePath == null ? JValue.CreateNull() : chunkAbsolutePath,
-                        ["blockType"] = chunk.BlockType.GetName(),
+                        ["blockType"] = EndfieldVfsBlockTypes.GetName(chunk.BlockTypeValue),
+                        ["blockTypeValue"] = chunk.BlockTypeValue,
                         ["byteCount"] = chunkByteCount,
                         ["contentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
                         ["exists"] = chunkExists,
@@ -409,7 +581,8 @@ namespace AnimeStudio.CLI
 
                 blocks.Add(new JObject
                 {
-                    ["blockType"] = blockInfo.BlockType.GetName(),
+                    ["blockType"] = EndfieldVfsBlockTypes.GetName(blockInfo.BlockTypeValue),
+                    ["blockTypeValue"] = blockInfo.BlockTypeValue,
                     ["byteCount"] = blockByteCount,
                     ["chunkCount"] = blockInfo.Chunks.Count,
                     ["chunks"] = chunkValues,
@@ -455,7 +628,116 @@ namespace AnimeStudio.CLI
             var indexJson = JsonConvert.SerializeObject(outputPayload, Formatting.Indented)
                 .Replace("\r\n", "\n", StringComparison.Ordinal);
             File.WriteAllText(options.Output, indexJson, new UTF8Encoding(false));
-            Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.Output}");
+            Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.OutputDisplay ?? options.Output}");
+            if (integrityErrorCount > 0)
+            {
+                ThrowFileErrors("index", integrityErrorCount, integrityDiagnostics);
+            }
+        }
+
+        private static string CreateSiblingTemporaryPath(string output)
+        {
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                throw new ArgumentException("index output path is required", nameof(output));
+            }
+
+            var fullOutput = Path.GetFullPath(output);
+            var parent = Path.GetDirectoryName(fullOutput);
+            if (string.IsNullOrEmpty(parent))
+            {
+                throw new ArgumentException($"index output has no parent directory: {output}", nameof(output));
+            }
+            Directory.CreateDirectory(parent);
+            return Path.Combine(
+                parent,
+                $".{Path.GetFileName(fullOutput)}.{Guid.NewGuid():N}.tmp");
+        }
+
+        private static void TryDeleteTemporaryFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception cleanupException)
+            {
+                Console.Error.WriteLine($"Warning: failed to clean temporary VFS index {path}: {cleanupException.Message}");
+            }
+        }
+
+        private static bool ShouldFailOnFileErrors(VfsOptions options, EndfieldVfsBlockType blockType) =>
+            !(options.UseAllBlockTypes && blockType is
+                EndfieldVfsBlockType.AudioEnglish or
+                EndfieldVfsBlockType.AudioJapanese or
+                EndfieldVfsBlockType.AudioKorean);
+
+        private static void ThrowFileErrors(string operation, int errorCount, List<string> diagnostics)
+        {
+            foreach (var diagnostic in diagnostics)
+            {
+                Console.Error.WriteLine($"Error: {operation} failed: {diagnostic}");
+            }
+            var suffix = errorCount > diagnostics.Count
+                ? $"; {errorCount - diagnostics.Count} additional failures omitted"
+                : string.Empty;
+            throw new EndfieldVfsException(
+                $"{operation} failed for {errorCount} selected files{suffix}");
+        }
+
+        private static void VerifySelectedFiles(
+            EndfieldVfsLoader loader,
+            EndfieldVfsBlockType blockType,
+            EndfieldVfsChunkInfo chunk,
+            List<EndfieldVfsFileInfo> files,
+            List<string> diagnostics,
+            ref int errorCount)
+        {
+            try
+            {
+                loader.VerifyChunkContentMd5(blockType, chunk);
+            }
+            catch (Exception exception)
+            {
+                RecordIntegrityFailure(
+                    $"{blockType.GetName()}/{chunk.FileName}",
+                    exception,
+                    diagnostics,
+                    ref errorCount);
+                return;
+            }
+
+            foreach (var file in files)
+            {
+                try
+                {
+                    loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5: true);
+                }
+                catch (Exception exception)
+                {
+                    RecordIntegrityFailure(
+                        $"{blockType.GetName()}/{chunk.FileName}/{file.FileName}",
+                        exception,
+                        diagnostics,
+                        ref errorCount);
+                }
+            }
+        }
+
+        private static void RecordIntegrityFailure(
+            string item,
+            Exception exception,
+            List<string> diagnostics,
+            ref int errorCount)
+        {
+            errorCount++;
+            if (diagnostics.Count < MaxFailureDiagnostics)
+            {
+                diagnostics.Add($"{item}: {exception.Message}");
+            }
         }
 
         private static void RunVfsIndexJsonLines(VfsOptions options)
@@ -473,6 +755,8 @@ namespace AnimeStudio.CLI
             var totalBytes = 0L;
             var missingBlocks = 0;
             var missingChunks = 0;
+            var integrityErrorCount = 0;
+            var integrityDiagnostics = new List<string>();
 
             using var writer = new StreamWriter(options.Output, false, new UTF8Encoding(false), 64 * 1024)
             {
@@ -515,7 +799,8 @@ namespace AnimeStudio.CLI
                 WriteJsonLine(writer, new JObject
                 {
                     ["recordType"] = "block",
-                    ["blockType"] = blockInfo.BlockType.GetName(),
+                    ["blockType"] = EndfieldVfsBlockTypes.GetName(blockInfo.BlockTypeValue),
+                    ["blockTypeValue"] = blockInfo.BlockTypeValue,
                     ["chunkCount"] = blockInfo.Chunks.Count,
                     ["codeVersion"] = blockInfo.CodeVersion,
                     ["declaredChunkBytes"] = blockInfo.GroupChunksLength,
@@ -552,13 +837,35 @@ namespace AnimeStudio.CLI
                     }
 
                     var selectedFiles = SelectedFiles(options, chunk).ToList();
+                    if (!chunkExists && selectedFiles.Count > 0 && ShouldFailOnFileErrors(options, blockType))
+                    {
+                        integrityErrorCount++;
+                        if (integrityDiagnostics.Count < MaxFailureDiagnostics)
+                        {
+                            integrityDiagnostics.Add($"{blockType.GetName()}/{chunkFileName}: chunk is missing");
+                        }
+                    }
+                    if (options.VerifyMd5
+                        && chunkExists
+                        && selectedFiles.Count > 0
+                        && ShouldFailOnFileErrors(options, blockType))
+                    {
+                        VerifySelectedFiles(
+                            loader,
+                            blockType,
+                            chunk,
+                            selectedFiles,
+                            integrityDiagnostics,
+                            ref integrityErrorCount);
+                    }
                     var chunkByteCount = selectedFiles.Sum(file => (long)file.Length);
                     WriteJsonLine(writer, new JObject
                     {
                         ["recordType"] = "chunk",
                         ["absolutePath"] = chunkAbsolutePath == null ? JValue.CreateNull() : chunkAbsolutePath,
                         ["blockName"] = blockName,
-                        ["blockType"] = chunk.BlockType.GetName(),
+                        ["blockType"] = EndfieldVfsBlockTypes.GetName(chunk.BlockTypeValue),
+                        ["blockTypeValue"] = chunk.BlockTypeValue,
                         ["byteCount"] = chunkByteCount,
                         ["chunkId"] = chunkId,
                         ["contentMd5"] = EndfieldVfsFormatting.UInt128Hex(chunk.ContentMd5),
@@ -582,7 +889,8 @@ namespace AnimeStudio.CLI
                             ["blockName"] = blockName,
                             ["chunkId"] = chunkId,
                             ["encrypted"] = file.UseEncrypt,
-                            ["fileBlockType"] = file.BlockType.GetName(),
+                            ["fileBlockType"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                            ["fileBlockTypeValue"] = file.BlockTypeValue,
                             ["fileChunkMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileChunkMd5),
                             ["fileDataMd5"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
                             ["fileName"] = fileName,
@@ -611,7 +919,11 @@ namespace AnimeStudio.CLI
                 ["missingBlockCount"] = missingBlocks,
                 ["missingChunkCount"] = missingChunks,
             });
-            Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.Output}");
+            Console.WriteLine($"  Done: indexed {totalFiles} files across {totalChunks} chunks -> {options.OutputDisplay ?? options.Output}");
+            if (integrityErrorCount > 0)
+            {
+                ThrowFileErrors("index", integrityErrorCount, integrityDiagnostics);
+            }
         }
 
         private static void WriteJsonLine(TextWriter writer, JObject payload)
@@ -654,6 +966,57 @@ namespace AnimeStudio.CLI
         }
 
         private static string NormalizePath(string path) => path.Replace('\\', '/');
+
+        private static ExtendDataOptions ParseExtendDataOptions(string[] args)
+        {
+            if (args.Length > 1 && IsHelp(args[1]))
+            {
+                PrintCommandHelp(args[0]);
+                throw new HelpRequestedException();
+            }
+
+            var options = new ExtendDataOptions
+            {
+                Output = "./extend_data",
+            };
+            for (var i = 1; i < args.Length; i++)
+            {
+                var token = args[i];
+                if (IsHelp(token))
+                {
+                    PrintCommandHelp(args[0]);
+                    throw new HelpRequestedException();
+                }
+
+                string value = null;
+                var equalsIndex = token.IndexOf('=');
+                if (equalsIndex > 0)
+                {
+                    value = token[(equalsIndex + 1)..];
+                    token = token[..equalsIndex];
+                }
+
+                switch (token)
+                {
+                    case "-i":
+                    case "--input":
+                        options.Input = value ?? NextValue(args, ref i, token);
+                        break;
+                    case "-o":
+                    case "--output":
+                        options.Output = value ?? NextValue(args, ref i, token);
+                        break;
+                    default:
+                        throw new ArgumentException($"unexpected argument: {token}");
+                }
+            }
+
+            if (string.IsNullOrEmpty(options.Input))
+            {
+                throw new ArgumentException("--input is required");
+            }
+            return options;
+        }
 
         private static VfsOptions ParseVfsOptions(string[] args, string defaultOutput)
         {
@@ -717,6 +1080,13 @@ namespace AnimeStudio.CLI
                     case "--file-regex":
                         options.AddFileRegex(value ?? NextValue(args, ref i, token));
                         break;
+                    case "--verify-md5":
+                        if (value != null)
+                        {
+                            throw new ArgumentException("--verify-md5 does not take a value");
+                        }
+                        options.VerifyMd5 = true;
+                        break;
                     case "--jsonl":
                         if (!string.Equals(args[0], "vfs-index", StringComparison.OrdinalIgnoreCase)
                             && !string.Equals(args[0], "vfsindex", StringComparison.OrdinalIgnoreCase))
@@ -757,7 +1127,7 @@ namespace AnimeStudio.CLI
         private static void PrintCommandHelp(string command)
         {
             const string executable = "AnimeStudio.CLI.exe";
-            const string blockTypeValues = "[default: all] [possible values: all, initial-audio, initial-bundle, initial-extend-data, bundle-manifest, i-fix-patch, audit-streaming, audit-dynamic-streaming, audit-iv, audit-audio, audit-video, bundle, audio, video, iv, streaming, dynamic-streaming, lua, table, json-data, extend-data, hotfix-audio, audio-chinese, audio-english, audio-japanese, audio-korean]";
+            const string blockTypeValues = "[default: all] [possible values: all, initial-audio, initial-bundle, initial-extend-data, bundle-manifest, i-fix-patch, audit-streaming, audit-dynamic-streaming, audit-iv, audit-audio, audit-video, bundle, audio, video, iv, streaming, dynamic-streaming, lua, table, json-data, extend-data, hotfix-audio, terrain, audio-chinese, audio-english, audio-japanese, audio-korean]";
 
             switch (command.ToLowerInvariant())
             {
@@ -777,6 +1147,8 @@ namespace AnimeStudio.CLI
                         "          May be repeated to dump multiple block types.",
                         "      --file-regex <REGEX>",
                         "          Only dump files whose VFS filename matches the regex. May be repeated.",
+                        "      --verify-md5",
+                        "          Verify raw chunk ContentMd5 and decrypted file DataMd5 values.",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -794,6 +1166,8 @@ namespace AnimeStudio.CLI
                         "          May be repeated to stream multiple block types.",
                         "      --file-regex <REGEX>",
                         "          Only stream files whose VFS filename matches the regex. May be repeated.",
+                        "      --verify-md5",
+                        "          Verify raw chunk ContentMd5 and decrypted file DataMd5 values.",
                         "  -h, --help",
                         "          Print help");
                     break;
@@ -814,6 +1188,8 @@ namespace AnimeStudio.CLI
                         "          May be repeated to index multiple block types.",
                         "      --file-regex <REGEX>",
                         "          Only index files whose VFS filename matches the regex. May be repeated.",
+                        "      --verify-md5",
+                        "          Verify raw chunk ContentMd5 and decrypted file DataMd5 values.",
                         "      --jsonl",
                         "          Write compact newline-delimited records for streaming consumers.",
                         "  -h, --help",
@@ -850,6 +1226,45 @@ namespace AnimeStudio.CLI
                         "Options:",
                         "  -h, --help  Print help");
                     break;
+                case "extend-data":
+                case "extenddata":
+                    PrintHelpLines(
+                        $"Usage: {executable} extend-data --input <COMPRESS_DATA_BIN> [OPTIONS]",
+                        "",
+                        "Decode ExtendData/Main/CompressData.bin into numbered JSON records.",
+                        "The operation is opt-in and does not affect normal VFS dumps.",
+                        "",
+                        "Options:",
+                        "  -i, --input <COMPRESS_DATA_BIN>",
+                        "          Required path to the compressed ExtendData file.",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./extend_data]",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
+                case "vfs-audit":
+                    PrintHelpLines(
+                        $"Usage: {executable} vfs-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
+                        "",
+                        "Certify every physical VFS catalog file and logical file boundary without writing payloads.",
+                        "English, Japanese, and Korean voice blocks are explicitly excluded; AuditAudio is in scope.",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <PRIMARY_ASSETS>",
+                        "          Primary VFS root (Persistent may be supplied here).",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          Optional fallback VFS root (StreamingAssets may be supplied here).",
+                        "      --summary-json <OUTPUT>",
+                        "          [default: ./vfs_audit_summary.json]",
+                        "      --ledger-jsonl-gz <OUTPUT>",
+                        "          [default: ./vfs_audit_ledger.jsonl.gz]",
+                        "      --report-md <OUTPUT>",
+                        "          [default: ./vfs_audit_report.md]",
+                        "      --block-hash <8-HEX-DIRECTORY>",
+                        "          Repeatable focused-validation filter; omit for the required full catalog audit.",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
             }
         }
 
@@ -866,6 +1281,8 @@ namespace AnimeStudio.CLI
             public string StreamingAssets { get; set; }
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
+            public string OutputDisplay { get; set; }
+            public bool VerifyMd5 { get; set; }
             public bool UseJsonLines { get; set; }
             public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
             public List<Regex> FileRegexes { get; } = new();
@@ -911,6 +1328,12 @@ namespace AnimeStudio.CLI
                 }
                 BlockFilterName = string.Join(", ", BlockTypes.Select(item => item.GetName()));
             }
+        }
+
+        private sealed class ExtendDataOptions
+        {
+            public string Input { get; set; }
+            public string Output { get; set; }
         }
 
         private sealed class VfsChunkSelection

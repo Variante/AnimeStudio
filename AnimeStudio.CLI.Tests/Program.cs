@@ -1,6 +1,9 @@
 using System.Collections.Specialized;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using AnimeStudio;
 using AnimeStudio.CLI;
+using AnimeStudio.Endfield;
 
 static class Program
 {
@@ -25,8 +28,1252 @@ static class Program
         TestAbilitySystemModeWeaponVisibilityProfile();
         TestAbilitySystemSkillDataBundleExactSerializedLayout();
         TestLineFollowerSerializedTypeTreeLayout();
-        Console.WriteLine("Managed-reference recovery tests passed.");
+        TestEndfieldVfsTerrainTypeRegistry();
+        TestEndfieldVfsUnknownTypePreservation();
+        TestEndfieldVfsIntegrityGuards();
+        TestEndfieldVfsCatalogInvariants();
+        TestEndfieldVfsMd5Verification();
+        TestEndfieldVfsAuditSyntheticFixtures();
+        TestEndfieldCompressDataRecords();
+        TestEndfieldCompressDataRejectsMalformedContainers();
+        TestEndfieldCompressDataCliOutput();
+        Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
+    }
+
+    private static void TestEndfieldVfsTerrainTypeRegistry()
+    {
+        AssertEqual((byte)22, (byte)EndfieldVfsBlockType.Terrain, "Terrain VFS type ID");
+        AssertEqual("Terrain", EndfieldVfsBlockType.Terrain.GetName(), "Terrain VFS type name");
+        AssertEqual(
+            "F84BF5E6",
+            EndfieldVfsHash.VfsBlockHash("Terrain", EndfieldVfsKeys.UnityHashSecret),
+            "Terrain VFS block hash");
+        if (!EndfieldVfsBlockTypes.TryParseCliValue("terrain", out var parsed)
+            || parsed != EndfieldVfsBlockType.Terrain)
+        {
+            throw new InvalidOperationException("Terrain must be selectable by the VFS CLI parser");
+        }
+        if (!EndfieldVfsBlockTypes.AllDumpable.Contains(EndfieldVfsBlockType.Terrain))
+        {
+            throw new InvalidOperationException("Terrain must be listed among dumpable VFS types");
+        }
+    }
+
+    private static void TestEndfieldVfsUnknownTypePreservation()
+    {
+        const byte blockTypeValue = 222;
+        const byte chunkTypeValue = blockTypeValue;
+        const byte fileTypeValue = blockTypeValue;
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+        {
+            writer.Write(4); // current installed metadata code version
+            writer.Write(24764758); // current populated-block metadata version
+            writer.Write((ushort)0);
+            writer.Write(0L);
+            writer.Write(1);
+            writer.Write(4L);
+            writer.Write(blockTypeValue);
+            writer.Write(1); // chunk count
+            writer.Write(new byte[16]);
+            writer.Write(new byte[16]);
+            writer.Write(4L);
+            writer.Write(chunkTypeValue);
+            writer.Write(0); // MainTag for code version 4
+            writer.Write(1); // file count
+            writer.Write((ushort)1);
+            writer.Write((byte)'x');
+            writer.Write(0L);
+            writer.Write(new byte[16]);
+            writer.Write(new byte[16]);
+            writer.Write(0L);
+            writer.Write(4L);
+            writer.Write(fileTypeValue);
+            writer.Write((byte)0); // not encrypted
+            writer.Write(0); // FileTag for code version 4
+        }
+
+        var parsed = EndfieldVfsLoader.ParseBlockInfo(stream.ToArray(), verifyCrc: false);
+        AssertEqual(EndfieldVfsBlockType.Raw, parsed.BlockType, "unknown block enum compatibility");
+        AssertEqual(blockTypeValue, parsed.BlockTypeValue, "unknown block ID preservation");
+        AssertEqual($"Unknown({blockTypeValue})", EndfieldVfsBlockTypes.GetName(parsed.BlockTypeValue), "unknown block display name");
+        AssertEqual(chunkTypeValue, parsed.Chunks[0].BlockTypeValue, "unknown chunk ID preservation");
+        AssertEqual(fileTypeValue, parsed.Chunks[0].Files[0].BlockTypeValue, "unknown file ID preservation");
+        AssertEqual($"Unknown({fileTypeValue})", EndfieldVfsBlockTypes.GetName(parsed.Chunks[0].Files[0].BlockTypeValue), "unknown file display name");
+    }
+
+    private static void TestEndfieldVfsIntegrityGuards()
+    {
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(new byte[] { 11, 0 }, verifyCrc: false),
+            "VFS rejects truncated metadata");
+        var truncatedMetadata = BuildVfsMetadata(writer =>
+        {
+            writer.Write(1); // chunk count
+            WriteVfsChunk(writer, 1, ("truncated", 0, 1));
+        });
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(truncatedMetadata[..^1], verifyCrc: false),
+            "VFS rejects truncation inside a file record");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(BuildVfsMetadata(writer => writer.Write(1)), verifyCrc: false),
+            "VFS rejects a chunk count larger than remaining metadata");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(BuildVfsMetadata(writer => writer.Write(int.MaxValue)), verifyCrc: false),
+            "VFS rejects a chunk count overflow");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(writer =>
+                {
+                    writer.Write(1); // chunk count
+                    WriteVfsChunk(writer, -1);
+                }),
+                verifyCrc: false),
+            "VFS rejects a negative chunk length");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(writer =>
+                {
+                    writer.Write(1); // chunk count
+                    WriteVfsChunk(writer, 4, ("out-of-range", 3, 2));
+                }),
+                verifyCrc: false),
+            "VFS rejects a file range beyond its chunk");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(writer =>
+                {
+                    writer.Write(1); // chunk count
+                    WriteVfsChunk(writer, 8, ("first", 0, 5), ("overlap", 4, 2));
+                }),
+                verifyCrc: false),
+            "VFS rejects overlapping file ranges");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(writer =>
+                {
+                    writer.Write(1); // chunk count
+                    WriteVfsChunk(writer, 4, ("negative", 0, -1));
+                }),
+                verifyCrc: false),
+            "VFS rejects a negative file length");
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(writer =>
+                {
+                    writer.Write(1); // chunk count
+                    WriteVfsChunkHeader(writer, 0, fileCount: int.MaxValue);
+                }),
+                verifyCrc: false),
+            "VFS rejects a file count overflow");
+
+        AssertThrows<EndfieldVfsException>(
+            () => EndfieldVfsLoader.CopyRange(
+                new MemoryStream(new byte[] { 1, 2, 3 }),
+                new MemoryStream(),
+                4,
+                cipher: null),
+            "VFS rejects a short chunk range read");
+
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-integrity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var loader = new EndfieldVfsLoader(root);
+            var missingChunk = new EndfieldVfsChunkInfo
+            {
+                BlockType = EndfieldVfsBlockType.Terrain,
+                BlockTypeValue = (byte)EndfieldVfsBlockType.Terrain,
+                Length = 1,
+            };
+            AssertThrows<EndfieldVfsChunkNotFoundException>(
+                () => loader.ResolveChunkPath(EndfieldVfsBlockType.Terrain, missingChunk),
+                "VFS reports a missing chunk");
+
+            var contained = EndfieldDumpProcessors.ResolveContainedPath(root, "Table/ok.json");
+            if (!contained.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("VFS output containment accepted an unexpected path");
+            }
+            AssertThrows<EndfieldVfsException>(
+                () => EndfieldDumpProcessors.ResolveContainedPath(root, "../escape.json"),
+                "VFS rejects output path traversal");
+
+            WriteEncryptedVfsBlockWithMissingChunk(root);
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "dump", "--streaming-assets", root, "--block-type", "Terrain", "--output", Path.Combine(root, "dump") },
+                "VFS dump fails when a selected chunk is missing");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "stream", "--streaming-assets", root, "--block-type", "Terrain" },
+                "VFS stream fails when a selected chunk is missing");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "vfs-index", "--streaming-assets", root, "--block-type", "Terrain", "--output", Path.Combine(root, "index.json") },
+                "VFS index fails when a selected chunk is missing");
+            var failedIndexPath = Path.Combine(root, "index.json");
+            if (File.Exists(failedIndexPath)
+                || Directory.GetFiles(root, ".index.json.*.tmp", SearchOption.TopDirectoryOnly).Length != 0)
+            {
+                throw new InvalidOperationException("failed VFS index must not publish or retain a temporary output");
+            }
+
+            var failedJsonlPath = Path.Combine(root, "index.jsonl");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "vfs-index", "--jsonl", "--streaming-assets", root, "--block-type", "Terrain", "--output", failedJsonlPath },
+                "VFS JSONL index fails when a selected chunk is missing");
+            if (File.Exists(failedJsonlPath)
+                || Directory.GetFiles(root, ".index.jsonl.*.tmp", SearchOption.TopDirectoryOnly).Length != 0)
+            {
+                throw new InvalidOperationException("failed JSONL VFS index must not publish or retain a temporary output");
+            }
+
+            var blockName = EndfieldVfsHash.VfsBlockHash("Terrain", EndfieldVfsKeys.UnityHashSecret);
+            var chunkPath = Path.Combine(
+                root,
+                "VFS",
+                blockName,
+                "00000000000000000000000000000000.chk");
+            File.WriteAllBytes(chunkPath, new byte[] { 0x42 });
+            var jsonlPath = Path.Combine(root, "index.jsonl");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "dump", "--verify-md5", "--streaming-assets", root, "--block-type", "Terrain", "--output", Path.Combine(root, "verify-dump") },
+                "VFS dump verifies selected chunk and file MD5 values");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "stream", "--verify-md5", "--streaming-assets", root, "--block-type", "Terrain" },
+                "VFS stream verifies selected chunk and file MD5 values");
+            AssertCliFailsForSelectedVfsFile(
+                new[] { "vfs-index", "--verify-md5", "--streaming-assets", root, "--block-type", "Terrain", "--output", Path.Combine(root, "verify-index.json") },
+                "VFS index verifies selected chunk and file MD5 values");
+            if (!EndfieldVfsCli.TryRun(
+                    new[] { "vfs-index", "--streaming-assets", root, "--block-type", "Terrain", "--output", failedIndexPath },
+                    out var successfulIndexExit)
+                || successfulIndexExit != 0
+                || !File.Exists(failedIndexPath)
+                || Directory.GetFiles(root, ".index.json.*.tmp", SearchOption.TopDirectoryOnly).Length != 0)
+            {
+                throw new InvalidOperationException("successful VFS index must atomically publish its final output");
+            }
+
+            if (!EndfieldVfsCli.TryRun(
+                    new[] { "vfs-index", "--jsonl", "--streaming-assets", root, "--block-type", "Terrain", "--output", jsonlPath },
+                    out var successfulJsonlExit)
+                || successfulJsonlExit != 0
+                || !File.Exists(jsonlPath)
+                || Directory.GetFiles(root, ".index.jsonl.*.tmp", SearchOption.TopDirectoryOnly).Length != 0)
+            {
+                throw new InvalidOperationException("successful JSONL VFS index must atomically publish its final output");
+            }
+
+            var voiceRoot = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-voice-{Guid.NewGuid():N}");
+            var auditAudioRoot = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-audio-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(voiceRoot);
+            Directory.CreateDirectory(auditAudioRoot);
+            try
+            {
+                WriteEncryptedVfsBlockWithMissingChunk(voiceRoot, EndfieldVfsBlockType.AudioEnglish);
+                if (!EndfieldVfsCli.TryRun(
+                        new[] { "stream", "--verify-md5", "--streaming-assets", voiceRoot },
+                        out var voiceExit)
+                    || voiceExit != 0)
+                {
+                    throw new InvalidOperationException("default-all verification must exclude English voice failures");
+                }
+
+                WriteEncryptedVfsBlockWithMissingChunk(auditAudioRoot, EndfieldVfsBlockType.AuditAudio);
+                AssertCliFailsForSelectedVfsFile(
+                    new[] { "stream", "--verify-md5", "--streaming-assets", auditAudioRoot },
+                    "default-all verification must fail for unavailable AuditAudio");
+            }
+            finally
+            {
+                if (Directory.Exists(voiceRoot))
+                {
+                    Directory.Delete(voiceRoot, recursive: true);
+                }
+                if (Directory.Exists(auditAudioRoot))
+                {
+                    Directory.Delete(auditAudioRoot, recursive: true);
+                }
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static void TestEndfieldVfsCatalogInvariants()
+    {
+        var valid = BuildVfsMetadata(2, 8, writer =>
+        {
+            writer.Write(1); // chunk count
+            WriteVfsChunk(writer, 8, ("first", 0, 5), ("second", 5, 3));
+        });
+        var parsed = EndfieldVfsLoader.ParseBlockInfo(valid, verifyCrc: false);
+        AssertEqual(2, parsed.GroupFileInfoNum, "VFS group file count invariant");
+        AssertEqual(8L, parsed.GroupChunksLength, "VFS group chunk length invariant");
+
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(1, 8, writer =>
+                {
+                    writer.Write(1);
+                    WriteVfsChunk(writer, 8, ("first", 0, 5), ("second", 5, 3));
+                }),
+                verifyCrc: false),
+            "group_file_info_num",
+            "VFS rejects a group file count mismatch");
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(2, 7, writer =>
+                {
+                    writer.Write(1);
+                    WriteVfsChunk(writer, 8, ("first", 0, 5), ("second", 5, 3));
+                }),
+                verifyCrc: false),
+            "group_chunks_length",
+            "VFS rejects a group chunk length mismatch");
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(2, 2, writer =>
+                {
+                    writer.Write(1);
+                    WriteVfsChunkWithTypes(writer, 2, (byte)EndfieldVfsBlockType.Terrain, 21, ("first", 0, 1), ("second", 1, 1));
+                }),
+                verifyCrc: false),
+            "does not match block type",
+            "VFS rejects a file type inconsistent with its block");
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(1, 1, writer =>
+                {
+                    writer.Write(1);
+                    WriteVfsChunkWithTypes(writer, 1, 21, 21, ("first", 0, 1));
+                }),
+                verifyCrc: false),
+            "chunk 0 type",
+            "VFS rejects a chunk type inconsistent with its block");
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(
+                BuildVfsMetadata(2, 2, writer =>
+                {
+                    writer.Write(1);
+                    WriteVfsChunk(writer, 2, ("duplicate", 0, 1), ("duplicate", 1, 1));
+                }),
+                verifyCrc: false),
+            "duplicate virtual filename",
+            "VFS rejects duplicate virtual filenames");
+
+        using var invalidUtf8 = new MemoryStream();
+        using (var writer = new BinaryWriter(invalidUtf8, System.Text.Encoding.UTF8, true))
+        {
+            writer.Write(11);
+            writer.Write((ushort)1);
+            writer.Write((byte)0xff);
+            writer.Write(0L);
+            writer.Write(0);
+            writer.Write(0L);
+            writer.Write((byte)EndfieldVfsBlockType.Terrain);
+            writer.Write(0); // chunk count
+        }
+        AssertThrowsWithMessage<EndfieldVfsException>(
+            () => EndfieldVfsLoader.ParseBlockInfo(invalidUtf8.ToArray(), verifyCrc: false),
+            "invalid UTF-8",
+            "VFS rejects invalid UTF-8 metadata strings");
+    }
+
+    private static void TestEndfieldVfsMd5Verification()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-md5-{Guid.NewGuid():N}");
+        var blockName = EndfieldVfsHash.VfsBlockHash("Terrain", EndfieldVfsKeys.UnityHashSecret);
+        var blockDirectory = Path.Combine(root, "VFS", blockName);
+        var chunkName = "00000000000000000000000000000000.chk";
+        var chunkPath = Path.Combine(blockDirectory, chunkName);
+        Directory.CreateDirectory(blockDirectory);
+        try
+        {
+            var payload = new byte[] { 0x42 };
+            File.WriteAllBytes(chunkPath, payload);
+            var digest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(payload));
+            var chunk = new EndfieldVfsChunkInfo
+            {
+                Md5Name = 0,
+                ContentMd5 = digest,
+                Length = payload.Length,
+                BlockType = EndfieldVfsBlockType.Terrain,
+                BlockTypeValue = (byte)EndfieldVfsBlockType.Terrain,
+            };
+            var file = new EndfieldVfsFileInfo
+            {
+                FileName = "payload.bin",
+                Offset = 0,
+                Length = payload.Length,
+                FileDataMd5 = digest,
+                BlockType = EndfieldVfsBlockType.Terrain,
+                BlockTypeValue = (byte)EndfieldVfsBlockType.Terrain,
+            };
+            var loader = new EndfieldVfsLoader(root);
+
+            loader.VerifyChunkContentMd5(EndfieldVfsBlockType.Terrain, chunk);
+            var verifiedPayload = loader.ExtractFileToBytes(EndfieldVfsBlockType.Terrain, chunk, file, verifyMd5: true);
+            if (!payload.SequenceEqual(verifiedPayload))
+            {
+                throw new InvalidOperationException("VFS verified payload differed from the source bytes");
+            }
+
+            // The second check uses the cached physical digest, even after the source changes.
+            File.WriteAllBytes(chunkPath, new byte[] { 0x43 });
+            loader.VerifyChunkContentMd5(EndfieldVfsBlockType.Terrain, chunk);
+            AssertThrowsWithMessage<EndfieldVfsException>(
+                () => loader.ExtractFileToBytes(EndfieldVfsBlockType.Terrain, chunk, file, verifyMd5: true),
+                "DataMd5 for",
+                "VFS rejects a mismatched decrypted file digest");
+
+            var badChunk = new EndfieldVfsChunkInfo
+            {
+                Md5Name = chunk.Md5Name,
+                ContentMd5 = 0,
+                Length = chunk.Length,
+                BlockType = chunk.BlockType,
+                BlockTypeValue = chunk.BlockTypeValue,
+            };
+            AssertThrowsWithMessage<EndfieldVfsException>(
+                () => loader.VerifyChunkContentMd5(EndfieldVfsBlockType.Terrain, badChunk),
+                "ContentMd5 for",
+                "VFS rejects a mismatched raw chunk digest");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static void TestEndfieldVfsAuditSyntheticFixtures()
+    {
+        TestEndfieldVfsAuditCurrentMetadataAndDeterminism();
+
+        var cases = new (string Name, Action<string> Setup, string Expected)[]
+        {
+            ("crc", root =>
+            {
+                PrepareAuditCatalog(root);
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain,
+                    BuildAuditMetadata(EndfieldVfsBlockType.Terrain, writer => writer.Write(0)), corruptCrc: true);
+            }, "CRC mismatch"),
+            ("unsupported-version", root =>
+            {
+                PrepareAuditCatalog(root);
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain,
+                    BuildUnsupportedAuditMetadata());
+            }, "unsupported code version"),
+            ("count-overflow", root =>
+            {
+                PrepareAuditCatalog(root);
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain,
+                    BuildAuditMetadata(EndfieldVfsBlockType.Terrain, writer => writer.Write(int.MaxValue)));
+            }, "chunk_count count"),
+            ("bounds", root =>
+            {
+                PrepareAuditCatalog(root);
+                var metadata = BuildAuditMetadata(EndfieldVfsBlockType.Terrain, writer =>
+                {
+                    writer.Write(1);
+                    WriteAuditChunkHeader(writer, 4, 1);
+                    WriteAuditFile(writer, "out-of-range", 3, 2, 0, 0, EndfieldVfsBlockType.Terrain);
+                });
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain, metadata);
+            }, "invalid file range"),
+            ("overlap", root =>
+            {
+                PrepareAuditCatalog(root);
+                var metadata = BuildAuditMetadata(EndfieldVfsBlockType.Terrain, writer =>
+                {
+                    writer.Write(1);
+                    WriteAuditChunkHeader(writer, 8, 2);
+                    WriteAuditFile(writer, "first", 0, 5, 0, 0, EndfieldVfsBlockType.Terrain);
+                    WriteAuditFile(writer, "overlap", 4, 2, 0, 0, EndfieldVfsBlockType.Terrain);
+                });
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain, metadata);
+            }, "overlapping file ranges"),
+            ("duplicate-path", root =>
+            {
+                PrepareAuditCatalog(root);
+                var metadata = BuildAuditMetadata(EndfieldVfsBlockType.Terrain, writer =>
+                {
+                    writer.Write(1);
+                    WriteAuditChunkHeader(writer, 2, 2);
+                    WriteAuditFile(writer, "duplicate", 0, 1, 0, 0, EndfieldVfsBlockType.Terrain);
+                    WriteAuditFile(writer, "duplicate", 1, 1, 0, 0, EndfieldVfsBlockType.Terrain);
+                });
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain, metadata);
+            }, "duplicate virtual filename"),
+            ("normalized-duplicate-path", root =>
+            {
+                PrepareAuditCatalog(root);
+                var physical = new byte[2];
+                var chunkDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(physical));
+                var fileDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(new byte[1]));
+                var metadata = BuildAuditMetadata(EndfieldVfsBlockType.Terrain, 2, 2, writer =>
+                {
+                    writer.Write(1);
+                    WriteAuditChunkHeader(writer, 2, 2, chunkDigest);
+                    WriteAuditFile(writer, "same/path.bin", 0, 1, 0, fileDigest, EndfieldVfsBlockType.Terrain);
+                    WriteAuditFile(writer, "same\\path.bin", 1, 1, 0, fileDigest, EndfieldVfsBlockType.Terrain);
+                });
+                WriteAuditMetadata(root, EndfieldVfsBlockType.Terrain, metadata);
+                var blockDirectory = Path.Combine(root, "VFS",
+                    EndfieldVfsHash.VfsBlockHash(EndfieldVfsBlockType.Terrain.GetName(), EndfieldVfsKeys.UnityHashSecret));
+                File.WriteAllBytes(Path.Combine(blockDirectory, "00000000000000000000000000000000.chk"), physical);
+            }, "duplicate_logical_path"),
+            ("short-read", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "short.bin", payload,
+                    declaredChunkLength: 2);
+            }, "chunk length mismatch"),
+            ("chunk-hash-mismatch", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41, 0x42 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "hash.bin", payload,
+                    chunkContentMd5: 0);
+            }, "chunk ContentMd5 mismatch"),
+            ("file-hash-mismatch", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41, 0x42 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "hash.bin", payload,
+                    fileDataMd5: 0);
+            }, "file_data_md5_mismatch"),
+            ("file-chunk-identity-mismatch", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41, 0x42 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "identity.bin", payload,
+                    fileChunkMd5: 1);
+            }, "file_chunk_identity_mismatch"),
+            ("missing-chunk", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41, 0x42 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "missing.bin", payload,
+                    writeChunk: false);
+            }, "missing_both"),
+            ("path-traversal", root =>
+            {
+                PrepareAuditCatalog(root);
+                var payload = new byte[] { 0x41, 0x42 };
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "../escape.bin", payload);
+            }, "unsafe_logical_path"),
+            ("overlay-conflict", root =>
+            {
+                var fallback = Path.Combine(root, "fallback");
+                PrepareAuditCatalog(root);
+                PrepareAuditCatalog(fallback);
+                WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "primary.bin", new byte[] { 0x41 });
+                WriteAuditBlock(fallback, EndfieldVfsBlockType.Terrain, "fallback.bin", new byte[] { 0x42 });
+            }, "overlay_conflict"),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-{testCase.Name}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+                testCase.Setup(root);
+                var fallback = testCase.Name == "overlay-conflict"
+                    ? Path.Combine(root, "fallback")
+                    : null;
+                var artifacts = RunAudit(root, testCase.Name, fallback, expectSuccess: false);
+                var ledger = ReadGzipText(artifacts.Ledger);
+                var summary = File.ReadAllText(artifacts.Summary);
+                if (!ledger.Contains(testCase.Expected, StringComparison.Ordinal)
+                    && !summary.Contains(testCase.Expected, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"vfs-audit {testCase.Name}: expected ledger diagnostic {testCase.Expected}");
+                }
+                AssertAuditPublished(artifacts, testCase.Name);
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        }
+
+        TestEndfieldVfsAuditUnknownIdAndExcludedVoice();
+    }
+
+    private static void TestEndfieldVfsAuditCurrentMetadataAndDeterminism()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-positive-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            PrepareAuditCatalog(root);
+            WriteAuditBlock(root, EndfieldVfsBlockType.Terrain, "terrain.bin", new byte[] { 0x10, 0x20 });
+            WriteEncryptedAuditBlock(root, EndfieldVfsBlockType.JsonData, "encrypted.bin",
+                new byte[] { 0x31, 0x32, 0x33 }, 0x1020304050607080L);
+            var first = RunAudit(root, "first", fallback: null, expectSuccess: true);
+            var second = RunAudit(root, "second", fallback: null, expectSuccess: true);
+
+            AssertBytesEqual(File.ReadAllBytes(first.Summary), File.ReadAllBytes(second.Summary),
+                "vfs-audit summary is deterministic");
+            AssertBytesEqual(File.ReadAllBytes(first.Ledger), File.ReadAllBytes(second.Ledger),
+                "vfs-audit ledger is deterministic");
+            AssertBytesEqual(File.ReadAllBytes(first.Report), File.ReadAllBytes(second.Report),
+                "vfs-audit report is deterministic");
+            AssertAuditPublished(first, "current metadata format");
+            var summary = File.ReadAllText(first.Summary);
+            if (!summary.Contains("\"failureCount\": 0", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("valid current-format vfs-audit fixture unexpectedly failed");
+            }
+            var ledger = ReadGzipText(first.Ledger);
+            if (!ledger.Contains("\"status\":\"verified\"", StringComparison.Ordinal)
+                || !ledger.Contains("\"blockName\":\"Terrain\"", StringComparison.Ordinal)
+                || !ledger.Contains("\"encrypted\":true", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("valid current-format vfs-audit row was not verified");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static void TestEndfieldVfsAuditUnknownIdAndExcludedVoice()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-special-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            PrepareAuditCatalog(root);
+            const byte unknownType = 222;
+            const string unknownName = "SyntheticUnknown";
+            var unknownHash = EndfieldVfsHash.VfsBlockHash(unknownName, EndfieldVfsKeys.UnityHashSecret);
+            WriteAuditMetadata(root, unknownHash,
+                BuildAuditMetadata(unknownName, unknownType, writer => writer.Write(0)));
+            WriteAuditBlock(root, EndfieldVfsBlockType.AudioEnglish, "voice/excluded.ogg", new byte[] { 0x42 });
+
+            var artifacts = RunAudit(root, "special", fallback: null, expectSuccess: true);
+            var ledger = ReadGzipText(artifacts.Ledger);
+            if (!ledger.Contains("\"blockName\":\"Unknown(222)\"", StringComparison.Ordinal)
+                || !ledger.Contains("\"blockTypeValue\":222", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("unknown VFS block ID was not preserved by vfs-audit");
+            }
+            var excludedNeedle = "\"status\":\"excluded_voice\"";
+            if (!ledger.Contains(excludedNeedle, StringComparison.Ordinal)
+                || !ledger.Contains("voice/excluded.ogg", StringComparison.Ordinal)
+                || !ledger.Contains("\"code\":\"excluded_voice\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("excluded English voice file did not emit its exact excluded row");
+            }
+            AssertAuditPublished(artifacts, "unknown/excluded voice");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static (string Summary, string Ledger, string Report) RunAudit(
+        string root,
+        string suffix,
+        string? fallback,
+        bool expectSuccess)
+    {
+        var summary = Path.Combine(root, $"audit-{suffix}-summary.json");
+        var ledger = Path.Combine(root, $"audit-{suffix}-ledger.jsonl.gz");
+        var report = Path.Combine(root, $"audit-{suffix}-report.md");
+        var args = new List<string>
+        {
+            "vfs-audit",
+            "--streaming-assets", root,
+            "--summary-json", summary,
+            "--ledger-jsonl-gz", ledger,
+            "--report-md", report,
+        };
+        if (!string.IsNullOrEmpty(fallback))
+        {
+            args.Add("--fallback-assets");
+            args.Add(fallback);
+        }
+
+        if (!EndfieldVfsCli.TryRun(args.ToArray(), out var exitCode))
+        {
+            throw new InvalidOperationException($"vfs-audit {suffix} was not recognized by the CLI");
+        }
+        if ((exitCode == 0) != expectSuccess)
+        {
+            throw new InvalidOperationException(
+                $"vfs-audit {suffix}: expected success={expectSuccess}, got exit code {exitCode}");
+        }
+        return (summary, ledger, report);
+    }
+
+    private static void AssertAuditPublished((string Summary, string Ledger, string Report) artifacts, string label)
+    {
+        foreach (var path in new[] { artifacts.Summary, artifacts.Ledger, artifacts.Report })
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length == 0)
+            {
+                throw new InvalidOperationException($"{label}: vfs-audit did not publish {path}");
+            }
+        }
+        var parent = Path.GetDirectoryName(artifacts.Summary)
+            ?? throw new InvalidOperationException("vfs-audit output has no parent");
+        foreach (var output in new[] { artifacts.Summary, artifacts.Ledger, artifacts.Report })
+        {
+            var prefix = "." + Path.GetFileName(output) + ".";
+            if (Directory.GetFiles(parent, prefix + "*.tmp", SearchOption.TopDirectoryOnly).Length != 0)
+            {
+                throw new InvalidOperationException($"{label}: vfs-audit left a temporary file for {output}");
+            }
+        }
+    }
+
+    private static string ReadGzipText(string path)
+    {
+        using var input = File.OpenRead(path);
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        using var reader = new StreamReader(gzip, new System.Text.UTF8Encoding(false));
+        return reader.ReadToEnd();
+    }
+
+    private static void PrepareAuditCatalog(string root)
+    {
+        foreach (var blockType in EndfieldVfsBlockTypes.AllDumpable)
+        {
+            WriteAuditMetadata(root, blockType,
+                BuildAuditMetadata(blockType, writer => writer.Write(0)));
+        }
+    }
+
+    private static void WriteAuditBlock(
+        string root,
+        EndfieldVfsBlockType blockType,
+        string fileName,
+        byte[] payload,
+        long? declaredChunkLength = null,
+        UInt128? chunkContentMd5 = null,
+        UInt128? fileDataMd5 = null,
+        UInt128? fileChunkMd5 = null,
+        bool writeChunk = true)
+    {
+        var chunkName = "00000000000000000000000000000000.chk";
+        var dataMd5 = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(payload));
+        var chunkMd5 = chunkContentMd5 ?? dataMd5;
+        var metadata = BuildAuditMetadata(blockType, 1, declaredChunkLength ?? payload.Length, writer =>
+        {
+            writer.Write(1);
+            WriteAuditChunkHeader(writer, declaredChunkLength ?? payload.Length, 1, chunkMd5, blockType);
+            WriteAuditFile(writer, fileName, 0, payload.Length, fileChunkMd5 ?? 0, fileDataMd5 ?? dataMd5, blockType);
+        });
+        WriteAuditMetadata(root, blockType, metadata);
+        if (writeChunk)
+        {
+            var blockDirectory = Path.Combine(root, "VFS",
+                EndfieldVfsHash.VfsBlockHash(blockType.GetName(), EndfieldVfsKeys.UnityHashSecret));
+            Directory.CreateDirectory(blockDirectory);
+            File.WriteAllBytes(Path.Combine(blockDirectory, chunkName), payload);
+        }
+    }
+
+    private static void WriteEncryptedAuditBlock(
+        string root,
+        EndfieldVfsBlockType blockType,
+        string fileName,
+        byte[] decodedPayload,
+        long ivSeed)
+    {
+        var physicalPayload = (byte[])decodedPayload.Clone();
+        var nonce = new byte[12];
+        BinaryPrimitives.WriteInt32LittleEndian(nonce.AsSpan(0, 4), EndfieldVfsLoader.VfsProtoVersion);
+        BinaryPrimitives.WriteInt64LittleEndian(nonce.AsSpan(4, 8), ivSeed);
+        var cipher = new EndfieldChaCha20(EndfieldVfsKeys.ChaChaKey, nonce, 1);
+        cipher.ApplyKeystream(physicalPayload);
+        var dataMd5 = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(decodedPayload));
+        var contentMd5 = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(physicalPayload));
+        var metadata = BuildAuditMetadata(blockType, 1, physicalPayload.Length, writer =>
+        {
+            writer.Write(1);
+            WriteAuditChunkHeader(writer, physicalPayload.Length, 1, contentMd5, blockType);
+            WriteAuditFile(writer, fileName, 0, physicalPayload.Length, 0, dataMd5, blockType,
+                encrypted: true, ivSeed: ivSeed);
+        });
+        WriteAuditMetadata(root, blockType, metadata);
+        var blockDirectory = Path.Combine(root, "VFS",
+            EndfieldVfsHash.VfsBlockHash(blockType.GetName(), EndfieldVfsKeys.UnityHashSecret));
+        File.WriteAllBytes(Path.Combine(blockDirectory, "00000000000000000000000000000000.chk"), physicalPayload);
+    }
+
+    private static byte[] BuildAuditMetadata(EndfieldVfsBlockType blockType, Action<BinaryWriter> body) =>
+        BuildAuditMetadata(blockType, 0, 0, body);
+
+    private static byte[] BuildAuditMetadata(
+        EndfieldVfsBlockType blockType,
+        int groupFileCount,
+        long groupChunksLength,
+        Action<BinaryWriter> body) =>
+        BuildAuditMetadata(blockType.GetName(), (byte)blockType, groupFileCount, groupChunksLength, body);
+
+    private static byte[] BuildAuditMetadata(string groupConfigName, byte blockTypeValue, Action<BinaryWriter> body)
+        => BuildAuditMetadata(groupConfigName, blockTypeValue, 0, 0, body);
+
+    private static byte[] BuildUnsupportedAuditMetadata()
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true);
+        writer.Write(5);
+        writer.Write(24764758);
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildAuditMetadata(
+        string groupConfigName,
+        byte blockTypeValue,
+        int groupFileCount,
+        long groupChunksLength,
+        Action<BinaryWriter> body)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+        {
+            writer.Write(4); // current installed metadata code version
+            writer.Write(24764758); // current populated-block metadata version
+            var name = System.Text.Encoding.UTF8.GetBytes(groupConfigName);
+            writer.Write((ushort)name.Length);
+            writer.Write(name);
+            var directoryValue = uint.Parse(
+                EndfieldVfsHash.VfsBlockHash(groupConfigName, EndfieldVfsKeys.UnityHashSecret),
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture);
+            writer.Write((long)unchecked((int)BinaryPrimitives.ReverseEndianness(directoryValue)));
+            writer.Write(groupFileCount);
+            writer.Write(groupChunksLength);
+            writer.Write(blockTypeValue);
+            body(writer);
+            writer.Write(new byte[] { 0xE4, 0xC2, 0x96, 0x6A, 0, 0, 0, 0, 0, 0 });
+        }
+        return stream.ToArray();
+    }
+
+    private static void WriteAuditMetadata(
+        string root,
+        EndfieldVfsBlockType blockType,
+        byte[] metadata,
+        bool corruptCrc = false)
+    {
+        var hash = EndfieldVfsHash.VfsBlockHash(blockType.GetName(), EndfieldVfsKeys.UnityHashSecret);
+        WriteAuditMetadata(root, hash, metadata, corruptCrc);
+    }
+
+    private static void WriteAuditMetadata(
+        string root,
+        string hashDirectory,
+        byte[] metadata,
+        bool corruptCrc = false)
+    {
+        var blockDirectory = Path.Combine(root, "VFS", hashDirectory);
+        Directory.CreateDirectory(blockDirectory);
+        var withCrc = new byte[metadata.Length + 4];
+        Buffer.BlockCopy(metadata, 0, withCrc, 0, metadata.Length);
+        var crc = unchecked((int)EndfieldCrc32.Compute(metadata));
+        if (corruptCrc) crc ^= 1;
+        Buffer.BlockCopy(BitConverter.GetBytes(crc), 0, withCrc, metadata.Length, 4);
+        var nonce = new byte[12];
+        var encrypted = (byte[])withCrc.Clone();
+        var cipher = new EndfieldChaCha20(EndfieldVfsKeys.ChaChaKey, nonce, 1);
+        cipher.ApplyKeystream(encrypted);
+        var blockBytes = new byte[nonce.Length + encrypted.Length];
+        Buffer.BlockCopy(nonce, 0, blockBytes, 0, nonce.Length);
+        Buffer.BlockCopy(encrypted, 0, blockBytes, nonce.Length, encrypted.Length);
+        File.WriteAllBytes(Path.Combine(blockDirectory, $"{hashDirectory}.blc"), blockBytes);
+    }
+
+    private static void WriteAuditChunkHeader(
+        BinaryWriter writer,
+        long chunkLength,
+        int fileCount,
+        UInt128 chunkContentMd5 = default,
+        EndfieldVfsBlockType blockType = EndfieldVfsBlockType.Terrain)
+    {
+        WriteUInt128LittleEndian(writer, 0); // chunk MD5 name
+        WriteUInt128LittleEndian(writer, chunkContentMd5);
+        writer.Write(chunkLength);
+        writer.Write((byte)blockType);
+        writer.Write(0); // MainTag for code version 4
+        writer.Write(fileCount);
+    }
+
+    private static void WriteAuditFile(
+        BinaryWriter writer,
+        string fileName,
+        long offset,
+        long length,
+        UInt128 chunkMd5,
+        UInt128 dataMd5,
+        EndfieldVfsBlockType blockType,
+        bool encrypted = false,
+        long ivSeed = 0)
+    {
+        var name = System.Text.Encoding.UTF8.GetBytes(fileName);
+        writer.Write((ushort)name.Length);
+        writer.Write(name);
+        writer.Write(unchecked((long)EndfieldVfsHash.Hash64(
+            System.Text.Encoding.UTF8.GetBytes(fileName), EndfieldVfsKeys.UnityHashSecret, 0)));
+        WriteUInt128LittleEndian(writer, chunkMd5);
+        WriteUInt128LittleEndian(writer, dataMd5);
+        writer.Write(offset);
+        writer.Write(length);
+        writer.Write((byte)blockType);
+        writer.Write(encrypted ? (byte)1 : (byte)0);
+        if (encrypted) writer.Write(ivSeed);
+        writer.Write(0); // FileTag for code version 4
+    }
+
+    private static void WriteUInt128LittleEndian(BinaryWriter writer, UInt128 value)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[..8], (ulong)value);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], (ulong)(value >> 64));
+        writer.Write(bytes);
+    }
+
+    private static UInt128 UInt128FromLittleEndian(byte[] bytes)
+    {
+        var low = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(0, 8));
+        var high = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(8, 8));
+        return ((UInt128)high << 64) | low;
+    }
+
+    private static void WriteEncryptedVfsBlockWithMissingChunk(string root) =>
+        WriteEncryptedVfsBlockWithMissingChunk(root, EndfieldVfsBlockType.Terrain);
+
+    private static void WriteEncryptedVfsBlockWithMissingChunk(string root, EndfieldVfsBlockType blockType)
+    {
+        var blockName = EndfieldVfsHash.VfsBlockHash(blockType.GetName(), EndfieldVfsKeys.UnityHashSecret);
+        var blockDirectory = Path.Combine(root, "VFS", blockName);
+        Directory.CreateDirectory(blockDirectory);
+
+        var metadata = BuildVfsMetadata((byte)blockType, 1, 1, writer =>
+        {
+            writer.Write(1); // chunk count
+            WriteVfsChunkWithTypes(writer, 1, (byte)blockType, (byte)blockType, ("missing.bin", 0, 1));
+        });
+        var withCrc = new byte[metadata.Length + 4];
+        Buffer.BlockCopy(metadata, 0, withCrc, 0, metadata.Length);
+        Buffer.BlockCopy(BitConverter.GetBytes((int)EndfieldCrc32.Compute(metadata)), 0, withCrc, metadata.Length, 4);
+
+        var nonce = new byte[12];
+        var encrypted = (byte[])withCrc.Clone();
+        var cipher = new EndfieldChaCha20(EndfieldVfsKeys.ChaChaKey, nonce, 1);
+        cipher.ApplyKeystream(encrypted);
+        var blockBytes = new byte[nonce.Length + encrypted.Length];
+        Buffer.BlockCopy(nonce, 0, blockBytes, 0, nonce.Length);
+        Buffer.BlockCopy(encrypted, 0, blockBytes, nonce.Length, encrypted.Length);
+        File.WriteAllBytes(Path.Combine(blockDirectory, $"{blockName}.blc"), blockBytes);
+    }
+
+    private static void AssertCliFailsForSelectedVfsFile(string[] args, string label)
+    {
+        if (!EndfieldVfsCli.TryRun(args, out var exitCode) || exitCode == 0)
+        {
+            throw new InvalidOperationException($"{label}: expected a nonzero exit code, got {exitCode}");
+        }
+    }
+
+    private static byte[] BuildVfsMetadata(Action<BinaryWriter> body) =>
+        BuildVfsMetadata((byte)EndfieldVfsBlockType.Terrain, 0, 0, body);
+
+    private static byte[] BuildVfsMetadata(int groupFileCount, long groupChunksLength, Action<BinaryWriter> body)
+        => BuildVfsMetadata((byte)EndfieldVfsBlockType.Terrain, groupFileCount, groupChunksLength, body);
+
+    private static byte[] BuildVfsMetadata(
+        byte blockTypeValue,
+        int groupFileCount,
+        long groupChunksLength,
+        Action<BinaryWriter> body)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+        {
+            writer.Write(11); // current metadata format: code version is implicit
+            writer.Write((ushort)0);
+            writer.Write(0L);
+            writer.Write(groupFileCount);
+            writer.Write(groupChunksLength);
+            writer.Write(blockTypeValue);
+            body(writer);
+        }
+        return stream.ToArray();
+    }
+
+    private static void WriteVfsChunk(BinaryWriter writer, long chunkLength, params (string Name, long Offset, long Length)[] files)
+    {
+        WriteVfsChunkWithTypes(writer, chunkLength, (byte)EndfieldVfsBlockType.Terrain, (byte)EndfieldVfsBlockType.Terrain, files);
+    }
+
+    private static void WriteVfsChunkWithTypes(
+        BinaryWriter writer,
+        long chunkLength,
+        byte chunkTypeValue,
+        byte fileTypeValue,
+        params (string Name, long Offset, long Length)[] files)
+    {
+        WriteVfsChunkHeader(writer, chunkLength, files.Length, chunkTypeValue);
+        foreach (var file in files)
+        {
+            var name = System.Text.Encoding.UTF8.GetBytes(file.Name);
+            writer.Write((ushort)name.Length);
+            writer.Write(name);
+            writer.Write(0L); // file name hash
+            writer.Write(new byte[16]); // file chunk MD5
+            writer.Write(new byte[16]); // file data MD5
+            writer.Write(file.Offset);
+            writer.Write(file.Length);
+            writer.Write(fileTypeValue);
+            writer.Write((byte)0); // not encrypted
+        }
+    }
+
+    private static void WriteVfsChunkHeader(BinaryWriter writer, long chunkLength, int fileCount) =>
+        WriteVfsChunkHeader(writer, chunkLength, fileCount, (byte)EndfieldVfsBlockType.Terrain);
+
+    private static void WriteVfsChunkHeader(BinaryWriter writer, long chunkLength, int fileCount, byte chunkTypeValue)
+    {
+        writer.Write(new byte[16]); // chunk MD5 name
+        writer.Write(new byte[16]); // chunk content MD5
+        writer.Write(chunkLength);
+        writer.Write(chunkTypeValue);
+        writer.Write(fileCount);
+    }
+
+    private static void TestEndfieldCompressDataRecords()
+    {
+        var first = "{\"$type\":\"NodeCanvas.BehaviourTrees.BehaviourTree\",\"name\":\"first\"}";
+        var second = "{\"type\":\"NodeCanvas.BehaviourTrees.BehaviourTree\",\"name\":\"second\",\"nodes\":[]}";
+        var container = BuildCompressData(first, second);
+        var decoded = EndfieldCompressData.Decode(container);
+
+        AssertEqual(2, decoded.Records.Count, "CompressData record count");
+        AssertEqual(4 + 2 * 4, decoded.Records[0].SourceOffset, "CompressData first offset");
+        AssertEqual(first, decoded.Records[0].JsonText, "CompressData first text");
+        AssertEqual("NodeCanvas.BehaviourTrees.BehaviourTree", decoded.Records[0].RootType, "CompressData first root type");
+        AssertEqual("NodeCanvas.BehaviourTrees.BehaviourTree", decoded.Records[1].RootType, "CompressData type-field root type");
+        AssertEqual("second", decoded.Records[1].Json["name"]?.ToObject<string>(), "CompressData second JSON");
+        AssertEqual(decoded.Records[1].SourceOffset, decoded.Records[0].SourceOffset + 8 + decoded.Records[0].CompressedLength, "CompressData adjacent records");
+    }
+
+    private static void TestEndfieldCompressDataRejectsMalformedContainers()
+    {
+        var valid = BuildCompressData("{\"$type\":\"Tree\"}", "{\"$type\":\"Tree2\"}");
+
+        var firstOffsetInvalid = (byte[])valid.Clone();
+        WriteUInt32(firstOffsetInvalid, 4, 0);
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(firstOffsetInvalid),
+            "CompressData rejects offset-table gaps");
+
+        var offsetsNotIncreasing = (byte[])valid.Clone();
+        WriteUInt32(offsetsNotIncreasing, 8, ReadUInt32(offsetsNotIncreasing, 4));
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(offsetsNotIncreasing),
+            "CompressData rejects non-monotonic offsets");
+
+        var recordLengthMismatch = BuildCompressData("{\"$type\":\"Tree\"}");
+        var recordOffset = ReadUInt32(recordLengthMismatch, 4);
+        WriteUInt32(recordLengthMismatch, (int)recordOffset, ReadUInt32(recordLengthMismatch, (int)recordOffset) + 1);
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(recordLengthMismatch),
+            "CompressData rejects compressed-length gaps");
+
+        var decodedLengthMismatch = BuildCompressData("{\"$type\":\"Tree\"}");
+        recordOffset = ReadUInt32(decodedLengthMismatch, 4);
+        WriteUInt32(decodedLengthMismatch, (int)recordOffset + 4, ReadUInt32(decodedLengthMismatch, (int)recordOffset + 4) + 1);
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(decodedLengthMismatch),
+            "CompressData rejects decoded-length mismatch");
+
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildContainer((new byte[] { 0x00 }, 2u))),
+            "CompressData rejects malformed Brotli");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildContainer((CompressBrotli(new byte[] { 0x7b }), 1u))),
+            "CompressData rejects odd UTF-16LE");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildContainer((CompressBrotli(new byte[] { 0x00, 0xd8 }), 2u))),
+            "CompressData rejects invalid UTF-16LE");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildCompressData("not-json")),
+            "CompressData rejects invalid JSON");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildCompressData("{\"$type\":\"Tree\"}//comment")),
+            "CompressData rejects JSON comments");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildCompressData("{\"$type\":\"Tree\"}{\"extra\":true}")),
+            "CompressData rejects trailing JSON");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(BuildContainer((CompressBrotli(System.Text.Encoding.Unicode.GetBytes("{\"$type\":\"Tree\"}")).Concat(new byte[] { 0 }).ToArray(), 32u))),
+            "CompressData rejects trailing Brotli bytes");
+        AssertThrows<EndfieldCompressDataException>(
+            () => EndfieldCompressData.Decode(new byte[] { 0, 0, 0, 0, 1 }),
+            "CompressData rejects empty-container trailing bytes");
+    }
+
+    private static void TestEndfieldCompressDataCliOutput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-compress-data-test-{Guid.NewGuid():N}");
+        var output = Path.Combine(root, "decoded");
+        var input = Path.Combine(root, "CompressData.bin");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(output); // An existing empty directory is allowed.
+            File.WriteAllBytes(input, BuildCompressData("{\"$type\":\"Tree\",\"id\":1}"));
+            if (!EndfieldVfsCli.TryRun(
+                    new[] { "extend-data", "--input", input, "--output", output },
+                    out var exitCode)
+                || exitCode != 0)
+            {
+                throw new InvalidOperationException($"CompressData CLI failed with exit code {exitCode}");
+            }
+
+            AssertEqual(true, File.Exists(Path.Combine(output, "000000.json")), "CompressData CLI numbered output");
+            var manifest = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(Path.Combine(output, "manifest.json")));
+            AssertEqual(1, manifest["recordCount"]?.ToObject<int>(), "CompressData CLI manifest count");
+            AssertEqual("000000.json", manifest["records"]?[0]?["output"]?.ToObject<string>(), "CompressData CLI manifest output");
+            AssertEqual(
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(input))),
+                manifest["sourceSha256"]?.ToObject<string>(),
+                "CompressData CLI source hash");
+
+            if (!EndfieldVfsCli.TryRun(
+                    new[] { "extend-data", "--input", input, "--output", output },
+                    out var rerunExitCode)
+                || rerunExitCode == 0)
+            {
+                throw new InvalidOperationException("CompressData CLI must reject a non-empty output directory");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static byte[] BuildCompressData(params string[] jsonTexts) =>
+        BuildContainer(jsonTexts.Select(text =>
+            (CompressBrotli(System.Text.Encoding.Unicode.GetBytes(text)), (uint)System.Text.Encoding.Unicode.GetByteCount(text))).ToArray());
+
+    private static byte[] BuildContainer(params (byte[] compressed, uint uncompressedLength)[] records)
+    {
+        var firstOffset = 4 + records.Length * 4;
+        var offsets = new int[records.Length];
+        var nextOffset = firstOffset;
+        for (var i = 0; i < records.Length; i++)
+        {
+            offsets[i] = nextOffset;
+            nextOffset += 8 + records[i].compressed.Length;
+        }
+
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+        {
+            writer.Write(records.Length);
+            foreach (var offset in offsets)
+            {
+                writer.Write(offset);
+            }
+            foreach (var record in records)
+            {
+                writer.Write(record.compressed.Length);
+                writer.Write(record.uncompressedLength);
+                writer.Write(record.compressed);
+            }
+        }
+        return stream.ToArray();
+    }
+
+    private static byte[] CompressBrotli(byte[] data)
+    {
+        using var stream = new MemoryStream();
+        using (var brotli = new BrotliStream(stream, CompressionLevel.Optimal, true))
+        {
+            brotli.Write(data, 0, data.Length);
+        }
+        return stream.ToArray();
+    }
+
+    private static uint ReadUInt32(byte[] data, int offset) =>
+        BitConverter.ToUInt32(data, offset);
+
+    private static void WriteUInt32(byte[] data, int offset, uint value) =>
+        Buffer.BlockCopy(BitConverter.GetBytes(value), 0, data, offset, sizeof(uint));
+
+    private static void AssertThrows<T>(Action action, string label) where T : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (T)
+        {
+            return;
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException($"{label}: expected {typeof(T).Name}, got {exception.GetType().Name}", exception);
+        }
+
+        throw new InvalidOperationException($"{label}: expected {typeof(T).Name}");
+    }
+
+    private static void AssertThrowsWithMessage<T>(Action action, string expectedFragment, string label)
+        where T : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (T exception)
+        {
+            if (exception.Message.IndexOf(expectedFragment, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                throw new InvalidOperationException(
+                    $"{label}: expected diagnostic containing '{expectedFragment}', got '{exception.Message}'");
+            }
+            return;
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException($"{label}: expected {typeof(T).Name}, got {exception.GetType().Name}", exception);
+        }
+
+        throw new InvalidOperationException($"{label}: expected {typeof(T).Name}");
     }
 
     private static void TestObservedEnemySettlementBattleGraphVariants()
@@ -1044,6 +2291,14 @@ static class Program
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
         {
             throw new InvalidOperationException($"{label}: expected {expected}, got {actual}");
+        }
+    }
+
+    private static void AssertBytesEqual(byte[] expected, byte[] actual, string label)
+    {
+        if (!expected.SequenceEqual(actual))
+        {
+            throw new InvalidOperationException($"{label}: byte sequences differ");
         }
     }
 }
