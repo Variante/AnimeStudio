@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimeStudio.Endfield;
@@ -11,6 +12,141 @@ namespace AnimeStudio.CLI
 {
     public static class EndfieldAudioCli
     {
+        public static int RunAudit(string[] args)
+        {
+            var options = ParseAuditOptions(args);
+            var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+            var rows = new List<Dictionary<string, object?>>();
+            var failures = 0;
+            foreach (var blockType in options.BlockTypes)
+            {
+                List<(EndfieldVfsChunkInfo chunk, EndfieldVfsFileInfo file)> pckFiles;
+                try
+                {
+                    pckFiles = ExtractPckFiles(loader, blockType);
+                }
+                catch (EndfieldVfsException e)
+                {
+                    rows.Add(new Dictionary<string, object?>
+                    {
+                        ["block"] = blockType.GetName(),
+                        ["status"] = "missing_block",
+                        ["diagnostic"] = BoundDiagnostic(e.Message),
+                    });
+                    failures++;
+                    continue;
+                }
+
+                foreach (var (chunk, file) in pckFiles)
+                {
+                    var row = new Dictionary<string, object?>
+                    {
+                        ["block"] = blockType.GetName(),
+                        ["path"] = file.FileName,
+                        ["chunk"] = chunk.FileName,
+                        ["source"] = "unresolved",
+                        ["declaredBytes"] = file.Length,
+                        ["status"] = "failed",
+                    };
+                    try
+                    {
+                        row["source"] = loader.ResolveChunkPath(blockType, chunk);
+                        var package = EndfieldAkpkPackage.Parse(
+                            loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5: true));
+                        var mediaRiff = 0;
+                        var mediaPlugin = 0;
+                        var mediaInvalid = 0;
+                        var invalidExamples = new List<Dictionary<string, object?>>();
+                        foreach (var entry in package.Entries)
+                        {
+                            var media = package.GetWemData(entry);
+                            if (HasMagic(media, "PLUG"))
+                            {
+                                mediaPlugin++;
+                            }
+                            else if (HasMagic(media, "RIFF") || HasMagic(media, "RIFX"))
+                            {
+                                mediaRiff++;
+                            }
+                            else
+                            {
+                                mediaInvalid++;
+                                if (invalidExamples.Count < 8)
+                                {
+                                    invalidExamples.Add(new Dictionary<string, object?>
+                                    {
+                                        ["id"] = entry.Id.ToString("x"),
+                                        ["offset"] = entry.Offset,
+                                        ["declaredBytes"] = entry.Size,
+                                        ["magic"] = MagicPreview(media),
+                                    });
+                                }
+                            }
+                        }
+                        row["package"] = new Dictionary<string, object?>
+                        {
+                            ["headerSize"] = package.HeaderSize,
+                            ["version"] = package.Version,
+                            ["encryptedHeader"] = package.EncryptedHeader,
+                            ["languageSectorBytes"] = package.LanguageSectorSize,
+                            ["banksSectorBytes"] = package.BanksSectorSize,
+                            ["soundsSectorBytes"] = package.SoundsSectorSize,
+                            ["externalsSectorBytes"] = package.ExternalsSectorSize,
+                            ["languages"] = package.Languages.Count,
+                            ["banks"] = package.BankCount,
+                            ["sounds"] = package.SoundCount,
+                            ["externals"] = package.ExternalCount,
+                            ["mediaEntries"] = package.Entries.Count,
+                            ["mediaRiff"] = mediaRiff,
+                            ["mediaPlugin"] = mediaPlugin,
+                            ["mediaInvalid"] = mediaInvalid,
+                            ["invalidExamples"] = invalidExamples,
+                            ["languageNames"] = package.Languages.Values.Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray(),
+                        };
+                        if (mediaInvalid != 0)
+                        {
+                            var firstInvalidId = invalidExamples.Count == 0 ? "unknown" : invalidExamples[0].GetValueOrDefault("id")?.ToString();
+                            throw new InvalidDataException($"AKPK media entries without RIFF/RIFX/PLUG: count={mediaInvalid}; first={firstInvalidId}");
+                        }
+                        row["status"] = "verified";
+                    }
+                    catch (Exception e)
+                    {
+                        row["diagnostic"] = BoundDiagnostic(e.Message);
+                        failures++;
+                    }
+                    rows.Add(row);
+                }
+            }
+
+            var report = new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = "akpk-structure-audit-v1",
+                ["streamingAssets"] = options.StreamingAssets,
+                ["fallbackAssets"] = options.FallbackAssets,
+                ["excludedBlocks"] = new[] { "AudioEnglish", "AudioJapanese", "AudioKorean" },
+                ["blocks"] = options.BlockTypes.Select(x => x.GetName()).ToArray(),
+                ["rows"] = rows,
+                ["summary"] = new Dictionary<string, object?>
+                {
+                    ["packages"] = rows.Count(x => x.TryGetValue("path", out _)),
+                    ["verified"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "verified")),
+                    ["failures"] = failures,
+                    ["missingBlocks"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "missing_block")),
+                },
+            };
+            var outputParent = Path.GetDirectoryName(Path.GetFullPath(options.Output));
+            if (!string.IsNullOrEmpty(outputParent))
+            {
+                Directory.CreateDirectory(outputParent);
+            }
+            File.WriteAllText(options.Output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+            var packageCount = rows.Count(x => x.TryGetValue("path", out _));
+            var verifiedCount = rows.Count(x => Equals(x.GetValueOrDefault("status"), "verified"));
+            Console.WriteLine($"AKPK audit: {packageCount} packages, {verifiedCount} verified, {failures} failures");
+            return failures == 0 ? 0 : 1;
+        }
+
         public static void Run(string[] args)
         {
             var options = ParseOptions(args);
@@ -224,6 +360,71 @@ namespace AnimeStudio.CLI
 
             throw new EndfieldVfsException("AudioDialog.bytes not found in Table block");
         }
+
+        private static string BoundDiagnostic(string message) =>
+            string.IsNullOrEmpty(message) ? "unknown AKPK failure" : message.Length <= 240 ? message : message[..240];
+
+        private sealed class AudioAuditOptions
+        {
+            public string StreamingAssets { get; set; }
+            public string FallbackAssets { get; set; }
+            public string Output { get; set; } = "./akpk_audit.json";
+            public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
+        }
+
+        private static AudioAuditOptions ParseAuditOptions(string[] args)
+        {
+            var options = new AudioAuditOptions();
+            for (var i = 1; i < args.Length; i++)
+            {
+                var token = args[i];
+                var value = token.Contains('=') ? token[(token.IndexOf('=') + 1)..] : null;
+                if (value is not null)
+                {
+                    token = token[..token.IndexOf('=')];
+                }
+                string Next()
+                {
+                    if (value is not null) return value;
+                    if (++i >= args.Length) throw new ArgumentException($"{token} requires a value");
+                    return args[i];
+                }
+                switch (token)
+                {
+                    case "-s":
+                    case "--streaming-assets": options.StreamingAssets = Next(); break;
+                    case "--fallback-assets": options.FallbackAssets = Next(); break;
+                    case "-o":
+                    case "--output": options.Output = Next(); break;
+                    case "-b":
+                    case "--block": options.BlockTypes.Add(ParseAuditBlock(Next())); break;
+                    default: throw new ArgumentException($"unexpected argument: {token}");
+                }
+            }
+            if (string.IsNullOrEmpty(options.StreamingAssets)) throw new ArgumentException("--streaming-assets is required");
+            if (options.BlockTypes.Count == 0)
+            {
+                options.BlockTypes.AddRange(new[]
+                {
+                    EndfieldVfsBlockType.Audio,
+                    EndfieldVfsBlockType.InitialAudio,
+                    EndfieldVfsBlockType.AuditAudio,
+                    EndfieldVfsBlockType.HotfixAudio,
+                    EndfieldVfsBlockType.AudioChinese,
+                });
+            }
+            return options;
+        }
+
+        private static EndfieldVfsBlockType ParseAuditBlock(string value) => value.ToLowerInvariant() switch
+        {
+            "audio" => EndfieldVfsBlockType.Audio,
+            "initial-audio" or "initialaudio" => EndfieldVfsBlockType.InitialAudio,
+            "audit-audio" or "auditaudio" => EndfieldVfsBlockType.AuditAudio,
+            "hotfix-audio" or "hotfixaudio" => EndfieldVfsBlockType.HotfixAudio,
+            "audio-chinese" or "audiochinese" or "chinese" => EndfieldVfsBlockType.AudioChinese,
+            _ => throw new ArgumentException($"unsupported or excluded audio block: {value}"),
+        };
 
         private static JObject LoadAudioDialogLayer(EndfieldVfsLoader loader)
         {

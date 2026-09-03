@@ -1,6 +1,7 @@
 using System.Reflection;
 using AnimeStudio;
 using AnimeStudio.CLI;
+using AnimeStudio.Endfield;
 
 /// <summary>Negative and exact-copy fixtures for Endfield's nested VFS containers.</summary>
 internal static class VFSInnerStructureTests

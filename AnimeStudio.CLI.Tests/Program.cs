@@ -51,6 +51,7 @@ static class Program
         TestEndfieldLuaDecoderRejectsMalformedFrames();
         TestEndfieldUsmInspectionAndFramingGuards();
         EndfieldSparkBufferTests.Run();
+        EndfieldAkpkTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
     }

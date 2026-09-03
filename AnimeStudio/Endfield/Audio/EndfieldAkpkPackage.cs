@@ -16,19 +16,35 @@ namespace AnimeStudio.Endfield
 
         public List<EndfieldWemEntry> Entries { get; } = new();
         public Dictionary<uint, string> Languages { get; } = new();
+        public uint HeaderSize { get; private set; }
+        public uint Version { get; private set; }
+        public uint LanguageSectorSize { get; private set; }
+        public uint BanksSectorSize { get; private set; }
+        public uint SoundsSectorSize { get; private set; }
+        public uint ExternalsSectorSize { get; private set; }
+        public bool EncryptedHeader { get; private set; }
+        public int BankCount { get; private set; }
+        public int SoundCount { get; private set; }
+        public int ExternalCount { get; private set; }
 
         public static EndfieldAkpkPackage Parse(byte[] input)
         {
+            if (input == null)
+            {
+                throw new ArgumentNullException(nameof(input));
+            }
             if (input.Length < 16)
             {
                 throw new InvalidDataException("invalid AKPK magic");
             }
 
             var data = (byte[])input.Clone();
+            var packageEncryptedHeader = false;
             if (HasMagic(data, ":)xD"))
             {
+                packageEncryptedHeader = true;
                 var headerSize = BitConverter.ToUInt32(data, 4);
-                if (headerSize < 4 || headerSize > data.Length)
+                if (headerSize < 16 || headerSize > data.Length)
                 {
                     throw new InvalidDataException("invalid AKPK header size");
                 }
@@ -47,26 +63,52 @@ namespace AnimeStudio.Endfield
             }
 
             var package = new EndfieldAkpkPackage(data);
+            package.EncryptedHeader = packageEncryptedHeader;
             using var stream = new MemoryStream(data, false);
             using var reader = new BinaryReader(stream, Encoding.UTF8, false);
 
             stream.Position = 4;
-            var headerSizeValue = reader.ReadUInt32();
-            _ = reader.ReadUInt32();
-            var languagesSectorSize = reader.ReadUInt32();
-            var banksSectorSize = reader.ReadUInt32();
-            var soundsSectorSize = reader.ReadUInt32();
-            var externalsSectorSize = 0U;
-            if (languagesSectorSize + banksSectorSize + soundsSectorSize + 0x10 < headerSizeValue)
+            var headerSizeValue = ReadUInt32(reader, "header size");
+            var version = ReadUInt32(reader, "version");
+            if (version != 1)
             {
-                externalsSectorSize = reader.ReadUInt32();
+                throw new InvalidDataException($"unsupported AKPK version: {version}");
+            }
+            var languagesSectorSize = ReadUInt32(reader, "languages sector size");
+            var banksSectorSize = ReadUInt32(reader, "banks sector size");
+            var soundsSectorSize = ReadUInt32(reader, "sounds sector size");
+            var externalsSectorSize = 0U;
+            var hasExternals = (ulong)languagesSectorSize + banksSectorSize + soundsSectorSize + 0x10UL < headerSizeValue;
+            if (hasExternals)
+            {
+                externalsSectorSize = ReadUInt32(reader, "externals sector size");
             }
 
-            package.ParseLanguages(reader, languagesSectorSize);
-            package.ParseSector(reader, banksSectorSize, isSounds: false, isExternals: false);
-            package.ParseSector(reader, soundsSectorSize, isSounds: true, isExternals: false);
-            package.ParseSector(reader, externalsSectorSize, isSounds: true, isExternals: true);
+            package.HeaderSize = headerSizeValue;
+            package.Version = version;
+            package.LanguageSectorSize = languagesSectorSize;
+            package.BanksSectorSize = banksSectorSize;
+            package.SoundsSectorSize = soundsSectorSize;
+            package.ExternalsSectorSize = externalsSectorSize;
+
+            var languageStart = checked((int)stream.Position);
+            package.ParseLanguages(reader, languageStart, languagesSectorSize);
+            var banksStart = checked(languageStart + checked((int)languagesSectorSize));
+            package.BankCount = package.ParseSector(reader, banksStart, banksSectorSize, isSounds: false, isExternals: false);
+            var soundsStart = checked(banksStart + checked((int)banksSectorSize));
+            package.SoundCount = package.ParseSector(reader, soundsStart, soundsSectorSize, isSounds: true, isExternals: false);
+            var externalsStart = checked(soundsStart + checked((int)soundsSectorSize));
+            package.ExternalCount = package.ParseSector(reader, externalsStart, externalsSectorSize, isSounds: true, isExternals: true);
             return package;
+        }
+
+        private static uint ReadUInt32(BinaryReader reader, string field)
+        {
+            if (reader.BaseStream.Length - reader.BaseStream.Position < 4)
+            {
+                throw new InvalidDataException($"truncated AKPK {field}");
+            }
+            return reader.ReadUInt32();
         }
 
         public byte[] GetWemData(EndfieldWemEntry entry)
@@ -78,7 +120,26 @@ namespace AnimeStudio.Endfield
 
             var result = new byte[entry.Size];
             Array.Copy(data, (long)entry.Offset, result, 0, (long)entry.Size);
-            if (result.Length >= 4 && !HasMagic(result, "RIFF") && !HasMagic(result, "RIFX"))
+            if (entry.ContainerSeed.HasValue)
+            {
+                if (entry.ContainerDataOffset > uint.MaxValue)
+                {
+                    throw new EndfieldVfsException($"invalid AKPK bank media offset: {entry.ContainerDataOffset}");
+                }
+                EndfieldAudioCrypto.DecryptVfs(
+                    result,
+                    0,
+                    result.Length,
+                    entry.ContainerSeed.Value,
+                    (uint)entry.ContainerDataOffset);
+            }
+            // Embedded Wwise plug-in media uses a PLUG envelope rather than a
+            // RIFF/RIFX WEM. It is already framed after bank-ID decryption;
+            // applying the media-ID stream cipher would corrupt the envelope.
+            if (result.Length >= 4
+                && !HasMagic(result, "RIFF")
+                && !HasMagic(result, "RIFX")
+                && !HasMagic(result, "PLUG"))
             {
                 EndfieldAudioCrypto.DecryptWem(result, (uint)entry.Id);
             }
@@ -102,100 +163,156 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
-        private void ParseLanguages(BinaryReader reader, uint sectorSize)
+        private void ParseLanguages(BinaryReader reader, int sectorStart, uint sectorSize)
         {
-            var stringOffset = (uint)reader.BaseStream.Position;
-            var langCount = reader.ReadUInt32();
+            var sectorEnd = checked((long)sectorStart + sectorSize);
+            if (sectorSize < 4 || sectorEnd > data.Length)
+            {
+                throw new InvalidDataException($"AKPK languages sector out of range: start={sectorStart}, size={sectorSize}, data={data.Length}");
+            }
+
+            reader.BaseStream.Position = sectorStart;
+            var langCount = ReadUInt32(reader, "language count");
+            if (langCount > (sectorSize - 4) / 8)
+            {
+                throw new InvalidDataException($"AKPK language count exceeds sector: count={langCount}, sector={sectorSize}");
+            }
+
+            var stringOffset = (uint)sectorStart;
             for (var i = 0; i < langCount; i++)
             {
-                var langOffset = reader.ReadUInt32();
-                var langId = reader.ReadUInt32();
+                var langOffset = ReadUInt32(reader, "language offset");
+                var langId = ReadUInt32(reader, "language id");
+                if (langOffset >= sectorSize)
+                {
+                    throw new InvalidDataException($"AKPK language offset out of range: offset={langOffset}, sector={sectorSize}");
+                }
                 var current = reader.BaseStream.Position;
-                reader.BaseStream.Position = stringOffset + langOffset;
+                reader.BaseStream.Position = checked(stringOffset + langOffset);
 
-                var testBytes = reader.ReadBytes(2);
-                reader.BaseStream.Position = stringOffset + langOffset;
+                var testBytes = ReadBytesWithin(reader, 2, sectorEnd, "language string probe");
+                reader.BaseStream.Position = checked(stringOffset + langOffset);
                 string langName;
                 if (testBytes.Length == 2 && (testBytes[0] == 0 || testBytes[1] == 0))
                 {
-                    var bytes = reader.ReadBytes(32);
+                    var available = checked((int)Math.Min(32, sectorEnd - reader.BaseStream.Position));
+                    var bytes = ReadBytesWithin(reader, available, sectorEnd, "UTF-16 language string");
                     var chars = new List<ushort>();
+                    var terminated = false;
                     for (var j = 0; j + 1 < bytes.Length; j += 2)
                     {
                         var value = BitConverter.ToUInt16(bytes, j);
                         if (value == 0)
                         {
+                            terminated = true;
                             break;
                         }
                         chars.Add(value);
+                    }
+                    if (!terminated)
+                    {
+                        throw new InvalidDataException($"unterminated UTF-16 AKPK language string at offset={langOffset}");
                     }
                     langName = Encoding.Unicode.GetString(ToBytes(chars));
                 }
                 else
                 {
-                    var bytes = reader.ReadBytes(16);
-                    langName = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+                    var available = checked((int)Math.Min(16, sectorEnd - reader.BaseStream.Position));
+                    var bytes = ReadBytesWithin(reader, available, sectorEnd, "UTF-8 language string");
+                    var terminator = Array.IndexOf(bytes, (byte)0);
+                    if (terminator < 0)
+                    {
+                        throw new InvalidDataException($"unterminated UTF-8 AKPK language string at offset={langOffset}");
+                    }
+                    langName = Encoding.UTF8.GetString(bytes, 0, terminator);
                 }
 
                 Languages[langId] = langName;
                 reader.BaseStream.Position = current;
             }
 
-            reader.BaseStream.Position = stringOffset + sectorSize;
+            reader.BaseStream.Position = sectorEnd;
         }
 
-        private void ParseSector(BinaryReader reader, uint sectorSize, bool isSounds, bool isExternals)
+        private int ParseSector(BinaryReader reader, int sectorStart, uint sectorSize, bool isSounds, bool isExternals)
         {
             if (sectorSize == 0)
             {
-                return;
+                return 0;
             }
 
-            var fileCount = reader.ReadUInt32();
+            var sectorEnd = checked((long)sectorStart + sectorSize);
+            if (sectorSize < 4 || sectorEnd > data.Length)
+            {
+                throw new InvalidDataException($"AKPK sector out of range: start={sectorStart}, size={sectorSize}, data={data.Length}");
+            }
+            reader.BaseStream.Position = sectorStart;
+            var fileCount = ReadUInt32(reader, "sector file count");
             if (fileCount == 0)
             {
-                return;
+                if (sectorSize != 4)
+                {
+                    throw new InvalidDataException($"AKPK empty sector has unexpected size: {sectorSize}");
+                }
+                return 0;
             }
 
+            if ((sectorSize - 4) % fileCount != 0)
+            {
+                throw new InvalidDataException($"AKPK sector size is not divisible by file count: size={sectorSize}, count={fileCount}");
+            }
             var entrySize = (sectorSize - 4) / fileCount;
             var altMode = entrySize == 0x18;
+            if (entrySize != 20 && entrySize != 24)
+            {
+                throw new InvalidDataException($"unsupported AKPK sector entry size: {entrySize}");
+            }
 
             for (var i = 0; i < fileCount; i++)
             {
-                var fileIdLow = (ulong)reader.ReadUInt32();
+                var fileIdLow = (ulong)ReadUInt32(reader, "file id");
                 ulong? fileIdHigh = null;
                 if (altMode && isExternals)
                 {
-                    fileIdHigh = reader.ReadUInt32();
+                    fileIdHigh = ReadUInt32(reader, "external file id high");
                 }
 
-                var blockSize = reader.ReadUInt32();
+                var blockSize = ReadUInt32(reader, "block size");
                 ulong size;
                 if (altMode && isExternals)
                 {
-                    size = reader.ReadUInt32();
+                    size = ReadUInt32(reader, "external size");
                 }
                 else if (altMode)
                 {
+                    if (reader.BaseStream.Length - reader.BaseStream.Position < 8)
+                    {
+                        throw new InvalidDataException("truncated AKPK 64-bit size");
+                    }
                     size = reader.ReadUInt64();
                 }
                 else
                 {
-                    size = reader.ReadUInt32();
+                    size = ReadUInt32(reader, "size");
                 }
 
-                var offset = (ulong)reader.ReadUInt32();
-                var langId = reader.ReadUInt32();
+                var offset = (ulong)ReadUInt32(reader, "offset");
+                var langId = ReadUInt32(reader, "language id");
                 if (blockSize != 0)
                 {
-                    offset *= blockSize;
+                    offset = checked(offset * blockSize);
+                }
+
+                if (size > (ulong)data.Length || offset > (ulong)data.Length - size)
+                {
+                    throw new InvalidDataException($"AKPK entry range out of bounds: offset={offset}, size={size}, data={data.Length}");
                 }
 
                 Languages.TryGetValue(langId, out var language);
                 var finalId = fileIdHigh.HasValue ? (fileIdHigh.Value << 32) | fileIdLow : fileIdLow;
                 if (!isSounds)
                 {
-                    foreach (var (wemId, wemOffset, wemSize) in ParseBnk(offset, size))
+                    foreach (var (wemId, wemOffset, wemSize) in ParseBnk(fileIdLow, offset, size))
                     {
                         Entries.Add(new EndfieldWemEntry
                         {
@@ -203,6 +320,8 @@ namespace AnimeStudio.Endfield
                             Offset = offset + wemOffset,
                             Size = wemSize,
                             Language = language,
+                            ContainerSeed = checked((uint)fileIdLow),
+                            ContainerDataOffset = wemOffset,
                         });
                     }
                 }
@@ -217,55 +336,115 @@ namespace AnimeStudio.Endfield
                     });
                 }
             }
+            if (reader.BaseStream.Position != sectorEnd)
+            {
+                throw new InvalidDataException($"AKPK sector cursor mismatch: cursor={reader.BaseStream.Position}, end={sectorEnd}");
+            }
+            return checked((int)fileCount);
         }
 
-        private IEnumerable<(ulong id, ulong offset, ulong size)> ParseBnk(ulong offset, ulong size)
+        private IEnumerable<(ulong id, ulong offset, ulong size)> ParseBnk(ulong bankId, ulong offset, ulong size)
         {
-            if (offset > int.MaxValue || size > int.MaxValue || offset + size > (ulong)data.Length || size < 8)
+            if (offset > int.MaxValue || size > int.MaxValue || size < 8)
             {
-                yield break;
+                throw new InvalidDataException($"invalid AKPK bank range: id={bankId}, offset={offset}, size={size}");
             }
 
             var start = (int)offset;
             var end = checked(start + (int)size);
-            if (!HasMagicAt(data, start, "BKHD"))
+            var payload = new byte[(int)size];
+            Array.Copy(data, start, payload, 0, payload.Length);
+            EndfieldAudioCrypto.DecryptVfs(payload, 0, payload.Length, checked((uint)bankId), 0);
+            if (!HasMagicAt(payload, 0, "BKHD"))
             {
-                yield break;
+                throw new InvalidDataException($"AKPK bank payload missing BKHD: id={bankId}, offset={offset}, size={size}");
             }
 
-            var bkhdSize = BitConverter.ToUInt32(data, start + 4);
-            var pos = start + 8 + checked((int)bkhdSize);
-            if (pos + 8 > end || !HasMagicAt(data, pos, "DIDX"))
+            var pos = 0;
+            var didx = new List<(uint id, uint offset, uint size)>();
+            var dataBodyOffset = -1;
+            var dataBodySize = 0U;
+            var first = true;
+            while (pos < payload.Length)
             {
-                yield break;
-            }
-
-            var didxSize = BitConverter.ToUInt32(data, pos + 4);
-            var nWems = didxSize / 12;
-            pos += 8;
-
-            var wems = new List<(uint id, uint offset, uint size)>((int)nWems);
-            for (var i = 0; i < nWems; i++)
-            {
-                if (pos + 12 > end)
+                if (payload.Length - pos < 8)
                 {
-                    yield break;
+                    throw new InvalidDataException($"truncated AKPK BNK section: id={bankId}, offset={pos}");
                 }
-
-                wems.Add((BitConverter.ToUInt32(data, pos), BitConverter.ToUInt32(data, pos + 4), BitConverter.ToUInt32(data, pos + 8)));
-                pos += 12;
+                var tag = Encoding.ASCII.GetString(payload, pos, 4);
+                var sectionSize = BitConverter.ToUInt32(payload, pos + 4);
+                var bodyStart = checked(pos + 8);
+                var bodyEnd = checked(bodyStart + checked((int)sectionSize));
+                if (bodyEnd > payload.Length || !IsAsciiSectionTag(tag))
+                {
+                    throw new InvalidDataException($"invalid AKPK BNK section: id={bankId}, tag={tag}, offset={pos}, size={sectionSize}");
+                }
+                if (first && tag != "BKHD")
+                {
+                    throw new InvalidDataException($"AKPK BNK must start with BKHD: id={bankId}");
+                }
+                first = false;
+                if (tag == "DIDX")
+                {
+                    if (sectionSize % 12 != 0)
+                    {
+                        throw new InvalidDataException($"AKPK DIDX size is not divisible by 12: id={bankId}, size={sectionSize}");
+                    }
+                    for (var p = bodyStart; p < bodyEnd; p += 12)
+                    {
+                        didx.Add((BitConverter.ToUInt32(payload, p), BitConverter.ToUInt32(payload, p + 4), BitConverter.ToUInt32(payload, p + 8)));
+                    }
+                }
+                else if (tag == "DATA")
+                {
+                    dataBodyOffset = bodyStart;
+                    dataBodySize = sectionSize;
+                }
+                pos = bodyEnd;
             }
 
-            if (pos + 8 > end || !HasMagicAt(data, pos, "DATA"))
+            if (didx.Count > 0 && dataBodyOffset < 0)
             {
-                yield break;
+                throw new InvalidDataException($"AKPK DIDX has no DATA section: id={bankId}");
             }
-
-            var dataOffset = (uint)(pos - start + 8);
-            foreach (var (id, wemOffset, wemSize) in wems)
+            foreach (var (id, wemOffset, wemSize) in didx)
             {
-                yield return (id, dataOffset + wemOffset, wemSize);
+                if (dataBodyOffset < 0 || wemOffset > dataBodySize || wemSize > dataBodySize - wemOffset)
+                {
+                    throw new InvalidDataException($"AKPK DIDX media range out of DATA: bank={bankId}, media={id}, offset={wemOffset}, size={wemSize}, data={dataBodySize}");
+                }
+                yield return (id, checked((ulong)dataBodyOffset + wemOffset), wemSize);
             }
+        }
+
+        private static byte[] ReadBytesWithin(BinaryReader reader, int count, long end, string field)
+        {
+            if (count < 0 || reader.BaseStream.Position > end || end - reader.BaseStream.Position < count)
+            {
+                throw new InvalidDataException($"truncated AKPK {field}");
+            }
+            var bytes = reader.ReadBytes(count);
+            if (bytes.Length != count)
+            {
+                throw new InvalidDataException($"short AKPK {field}: expected={count}, actual={bytes.Length}");
+            }
+            return bytes;
+        }
+
+        private static bool IsAsciiSectionTag(string tag)
+        {
+            if (tag.Length != 4)
+            {
+                return false;
+            }
+            for (var i = 0; i < tag.Length; i++)
+            {
+                if (tag[i] < 'A' || tag[i] > 'Z')
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static bool HasMagicAt(byte[] buffer, int offset, string magic)
@@ -302,5 +481,7 @@ namespace AnimeStudio.Endfield
         public ulong Offset { get; set; }
         public ulong Size { get; set; }
         public string Language { get; set; }
+        public uint? ContainerSeed { get; set; }
+        public ulong ContainerDataOffset { get; set; }
     }
 }

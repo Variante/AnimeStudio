@@ -20,6 +20,7 @@ namespace AnimeStudio.CLI
         {
             "dump",
             "audio",
+            "audio-audit",
             "stream",
             "vfs-index",
             "vfsindex",
@@ -70,6 +71,9 @@ namespace AnimeStudio.CLI
                         return true;
                     case "audio":
                         EndfieldAudioCli.Run(args);
+                        return true;
+                    case "audio-audit":
+                        exitCode = EndfieldAudioCli.RunAudit(args);
                         return true;
                     case "stream":
                         RunStream(ParseVfsOptions(args, ""));
@@ -1878,6 +1882,23 @@ namespace AnimeStudio.CLI
                         "          Required path to the compressed ExtendData file.",
                         "  -o, --output <OUTPUT>",
                         "          [default: ./extend_data]",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
+                case "audio-audit":
+                    PrintHelpLines(
+                        $"Usage: {executable} audio-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
+                        "",
+                        "Certify AKPK/Wwise outer package, sector, bank, and media-table framing.",
+                        "English, Japanese, and Korean voice blocks are excluded.",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <PRIMARY_ASSETS>",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./akpk_audit.json]",
+                        "  -b, --block <BLOCK>",
+                        "          Repeatable: audio, initial-audio, audit-audio, hotfix-audio, audio-chinese",
                         "  -h, --help",
                         "          Print help");
                     break;
