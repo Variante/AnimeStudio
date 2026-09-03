@@ -103,6 +103,8 @@ static class Program
             Equal(1, summary.ExcludedCount, "excluded row count");
             Equal(1, summary.UnavailableCount, "unavailable row count");
             Equal(false, summary.Complete, "unavailable rows block complete publication");
+            Equal("chunk missing", summary.FirstFailureDiagnostic,
+                "excluded rows do not masquerade as the first failure");
             Equal(true, summary.ClusterCountsReconciled, "cluster file reconciliation");
             Equal(true, summary.ClusterBytesReconciled, "cluster byte reconciliation");
         }

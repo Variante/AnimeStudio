@@ -340,7 +340,8 @@ namespace AnimeStudio.Endfield
                     }
                     cluster.FileCount++;
                     cluster.DeclaredBytes = checked(cluster.DeclaredBytes + Math.Max(0, row.DeclaredSize));
-                    if (summary.FirstFailureKey == null && row.Status != "profiled")
+                    if (summary.FirstFailureKey == null
+                        && row.Status != "profiled" && row.Status != "excluded")
                     {
                         summary.FirstFailureKey = key;
                         summary.FirstFailureDiagnostic = row.Diagnostic ?? row.Status;
