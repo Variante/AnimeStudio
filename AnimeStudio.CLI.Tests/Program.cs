@@ -1,14 +1,20 @@
 using System.Collections.Specialized;
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Text.Json;
+using System.Text;
 using AnimeStudio;
 using AnimeStudio.CLI;
 using AnimeStudio.Endfield;
 
 static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length >= 3 && string.Equals(args[0], "lua-sweep", StringComparison.OrdinalIgnoreCase))
+        {
+            return RunLuaSweep(args[1], args[2]);
+        }
         TestEnemySettlementBattleGraphPayload();
         TestObservedEnemySettlementBattleGraphVariants();
         TestEnemySettlementBattleGraphPayloadRejectsTrailingBytes();
@@ -38,8 +44,181 @@ static class Program
         TestEndfieldCompressDataRecords();
         TestEndfieldCompressDataRejectsMalformedContainers();
         TestEndfieldCompressDataCliOutput();
+        TestEndfieldLuaDecoderObservedWrappers();
+        TestEndfieldLuaDecoderRejectsMalformedFrames();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
+    }
+
+    private static int RunLuaSweep(string inputPath, string outputPath)
+    {
+        var raw = File.ReadAllBytes(inputPath);
+        var text = raw.Length >= 2 && raw[0] == 0xFF && raw[1] == 0xFE
+            ? System.Text.Encoding.Unicode.GetString(raw, 2, raw.Length - 2)
+            : System.Text.Encoding.UTF8.GetString(raw);
+        var rows = new List<Dictionary<string, object?>>();
+        var wrapperCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var statusCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var failureCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var totalSourceBytes = 0L;
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var jsonLine = line.TrimEnd('\r').TrimStart();
+            if (!jsonLine.StartsWith("{", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            using var document = JsonDocument.Parse(jsonLine);
+            var root = document.RootElement;
+            var fileName = root.GetProperty("fileName").GetString() ?? string.Empty;
+            var source = Convert.FromBase64String(root.GetProperty("dataBase64").GetString() ?? string.Empty);
+            totalSourceBytes += source.Length;
+            var row = new Dictionary<string, object?>
+            {
+                ["fileName"] = fileName,
+                ["sourceLength"] = source.Length,
+                ["declaredLength"] = root.TryGetProperty("length", out var declared) ? declared.GetInt64() : null,
+            };
+            try
+            {
+                var result = EndfieldLuaDecoder.Decode(source, fileName);
+                var variant = result.WrapperVariant == EndfieldLuaWrapperVariant.Base64Xxtea
+                    ? "base64_xxtea"
+                    : "plain_utf8";
+                Increment(wrapperCounts, variant);
+                Increment(statusCounts, result.TerminalStatus);
+                row["wrapperVariant"] = variant;
+                row["terminalStatus"] = result.TerminalStatus;
+                row["sourceSha256"] = result.SourceSha256;
+                row["decodedSha256"] = result.DecodedSha256;
+                row["decodedLength"] = result.DecodedBytes.Length;
+                row["cipherLength"] = result.CipherBytes.Length;
+                if (result.CipherBytes.Length != 0)
+                {
+                    row["cipherSha256"] = result.CipherSha256;
+                }
+                if (result.LexicalIndex is not null)
+                {
+                    row["lexical"] = new Dictionary<string, object?>
+                    {
+                        ["valid"] = result.LexicalIndex.IsValid,
+                        ["tokenCount"] = result.LexicalIndex.TokenCount,
+                        ["identifierCount"] = result.LexicalIndex.IdentifierCount,
+                        ["callCount"] = result.LexicalIndex.CallCount,
+                        ["stringCount"] = result.LexicalIndex.StringCount,
+                    };
+                }
+            }
+            catch (EndfieldLuaDecodeException e)
+            {
+                Increment(failureCounts, e.Code);
+                row["terminalStatus"] = "failed";
+                row["failure"] = new Dictionary<string, object?>
+                {
+                    ["code"] = e.Code,
+                    ["offset"] = e.Offset,
+                    ["message"] = e.Message,
+                };
+            }
+            rows.Add(row);
+        }
+
+        var report = new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = "lua-vfs-certification-v1",
+            ["source"] = new Dictionary<string, object?>
+            {
+                ["streamJsonl"] = inputPath,
+                ["sourceEncoding"] = raw.Length >= 2 && raw[0] == 0xFF && raw[1] == 0xFE ? "utf-16le" : "utf-8",
+            },
+            ["totals"] = new Dictionary<string, object?>
+            {
+                ["inputRows"] = rows.Count,
+                ["sourceBytes"] = totalSourceBytes,
+                ["decodedRows"] = rows.Count(row => row.ContainsKey("decodedSha256")),
+                ["failures"] = rows.Count(row => row.ContainsKey("failure")),
+            },
+            ["wrapperVariants"] = wrapperCounts,
+            ["terminalStatuses"] = statusCounts,
+            ["failuresByCode"] = failureCounts,
+            ["rows"] = rows,
+        };
+        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+        var parent = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+        File.WriteAllText(outputPath, json, new UTF8Encoding(false));
+        Console.WriteLine($"Lua certification: {rows.Count} rows, {wrapperCounts.GetValueOrDefault("base64_xxtea")} Base64+XXTEA, {wrapperCounts.GetValueOrDefault("plain_utf8")} plain UTF-8, {rows.Count(row => row.ContainsKey("failure"))} failures");
+        return rows.Any(row => row.ContainsKey("failure")) ? 1 : 0;
+    }
+
+    private static void Increment(Dictionary<string, int> counts, string key)
+    {
+        counts[key] = counts.GetValueOrDefault(key) + 1;
+    }
+
+    private static void TestEndfieldLuaDecoderObservedWrappers()
+    {
+        // Exact bytes from the installed VFS corpus. The outer payload is
+        // UTF-8 Base64; the 8-byte ciphertext decrypts to one LF byte plus
+        // the XXTEA logical-length word.
+        var observed = EndfieldLuaDecoder.Decode(
+            System.Text.Encoding.UTF8.GetBytes("opkmRFNE6wo="),
+            "Data/LuaScripts/Const/DialogConst.lua");
+        AssertEqual(EndfieldLuaWrapperVariant.Base64Xxtea, observed.WrapperVariant, "observed Lua wrapper");
+        AssertBytesEqual(new byte[] { 0x0A }, observed.DecodedBytes, "observed Lua plaintext");
+        AssertEqual("decoded_lua_lexical_index", observed.TerminalStatus, "observed Lua terminal status");
+        if (observed.LexicalIndex is null || !observed.LexicalIndex.IsValid)
+        {
+            throw new InvalidOperationException("observed Lua source must pass lexical validation");
+        }
+        AssertEqual(0, observed.LexicalIndex.TokenCount, "empty observed Lua token count");
+
+        var markdown = EndfieldLuaDecoder.Decode(
+            System.Text.Encoding.UTF8.GetBytes("# ChangePortableDeviceCtrl\r\n\r\n说明\n"),
+            "Data/LuaScripts/UI/Panels/ChangePortableDevice/ChangePortableDeviceCtrl.md");
+        AssertEqual(EndfieldLuaWrapperVariant.PlainUtf8, markdown.WrapperVariant, "observed plain wrapper");
+        AssertBytesEqual(
+            System.Text.Encoding.UTF8.GetBytes("# ChangePortableDeviceCtrl\r\n\r\n说明\n"),
+            markdown.DecodedBytes,
+            "plain wrapper preserves bytes");
+        AssertEqual("plain_utf8_non_lua", markdown.TerminalStatus, "plain wrapper terminal status");
+        if (markdown.CipherBytes.Length != 0 || markdown.LexicalIndex is not null)
+        {
+            throw new InvalidOperationException("plain wrapper must not claim XXTEA or Lua semantics");
+        }
+    }
+
+    private static void TestEndfieldLuaDecoderRejectsMalformedFrames()
+    {
+        AssertThrowsWithMessage<EndfieldLuaDecodeException>(
+            () => EndfieldLuaDecoder.Decode(
+                System.Text.Encoding.UTF8.GetBytes("not!"),
+                "Data/LuaScripts/Bad.lua"),
+            "lua.wrapper.base64.character",
+            "strict Lua wrapper rejects invalid Base64 characters");
+        AssertThrowsWithMessage<EndfieldLuaDecodeException>(
+            () => EndfieldLuaDecoder.Decode(
+                System.Text.Encoding.UTF8.GetBytes("AAAA"),
+                "Data/LuaScripts/Short.lua"),
+            "lua.wrapper.xxtea.frame",
+            "strict Lua wrapper rejects short XXTEA frames");
+
+        var corruptedCipher = Convert.FromBase64String("opkmRFNE6wo=");
+        corruptedCipher[0] ^= 0x80;
+        AssertThrowsWithMessage<EndfieldLuaDecodeException>(
+            () => EndfieldLuaDecoder.Decode(
+                System.Text.Encoding.UTF8.GetBytes(Convert.ToBase64String(corruptedCipher)),
+                "Data/LuaScripts/Corrupt.lua"),
+            "lua.xxtea.",
+            "strict Lua wrapper rejects wrong-key/corrupt output");
+
+        var lexical = EndfieldLuaLexicalScanner.Scan("return broken(");
+        AssertEqual(false, lexical.IsValid, "lexical negative fixture status");
+        AssertEqual("lua.lexical.unclosed_delimiter", lexical.DiagnosticCode, "lexical negative fixture diagnostic");
+        AssertEqual(13, lexical.DiagnosticOffset, "lexical negative fixture offset");
     }
 
     private static void TestEndfieldVfsTerrainTypeRegistry()

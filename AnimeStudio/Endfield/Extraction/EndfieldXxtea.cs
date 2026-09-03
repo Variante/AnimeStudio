@@ -70,6 +70,76 @@ namespace AnimeStudio.Endfield
             return result;
         }
 
+        public static byte[] DecryptStrict(byte[] data, byte[] key)
+        {
+            if (key.Length != 16)
+            {
+                throw new EndfieldLuaDecodeException("lua.xxtea.key", 0, $"key must be exactly 16 bytes, got {key.Length}");
+            }
+            if (data.Length < 8 || (data.Length & 3) != 0)
+            {
+                throw new EndfieldLuaDecodeException(
+                    "lua.xxtea.frame",
+                    data.Length,
+                    $"ciphertext length {data.Length} is not a complete XXTEA frame");
+            }
+
+            var v = BytesToUInt32LittleEndian(data);
+            var k = new[]
+            {
+                BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(0, 4)),
+                BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(4, 4)),
+                BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(8, 4)),
+                BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(12, 4)),
+            };
+            var n = v.Length;
+            var rounds = 6 + 52 / n;
+            var sum = unchecked((uint)rounds * Delta);
+            var y = v[0];
+            while (sum != 0)
+            {
+                var e = (sum >> 2) & 3;
+                for (var p = n - 1; p >= 1; p--)
+                {
+                    var z = v[p - 1];
+                    v[p] = unchecked(v[p] - Mx(sum, y, z, p, e, k));
+                    y = v[p];
+                }
+                var last = v[n - 1];
+                v[0] = unchecked(v[0] - Mx(sum, y, last, 0, e, k));
+                y = v[0];
+                sum = unchecked(sum - Delta);
+            }
+
+            var logicalLength = v[n - 1];
+            var frameLength = checked(v.Length * sizeof(uint));
+            var payloadCapacity = frameLength - sizeof(uint);
+            if (logicalLength > payloadCapacity)
+            {
+                throw new EndfieldLuaDecodeException(
+                    "lua.xxtea.length",
+                    frameLength - sizeof(uint),
+                    $"logical length {logicalLength} exceeds payload capacity {payloadCapacity}");
+            }
+
+            for (var i = (int)logicalLength; i < payloadCapacity; i++)
+            {
+                var word = i / sizeof(uint);
+                var shift = (i & 3) * 8;
+                if (((v[word] >> shift) & 0xFF) != 0)
+                {
+                    throw new EndfieldLuaDecodeException(
+                        "lua.xxtea.padding",
+                        i,
+                        "non-zero bytes follow the logical plaintext length");
+                }
+            }
+
+            var result = UInt32ToBytesLittleEndian(v);
+            Array.Resize(ref result, checked((int)logicalLength));
+            return result;
+        }
+
         private static uint Mx(uint sum, uint y, uint z, int p, uint e, IReadOnlyList<uint> k)
         {
             unchecked

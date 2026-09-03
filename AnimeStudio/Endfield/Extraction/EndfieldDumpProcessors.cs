@@ -40,19 +40,8 @@ namespace AnimeStudio.Endfield
         }
         public static string ProcessLuaFile(byte[] data, string fileName, string output)
         {
-            var content = Encoding.UTF8.GetString(data);
-            byte[] encryptedData;
-            try
-            {
-                encryptedData = Convert.FromBase64String(content.Trim());
-            }
-            catch (FormatException e)
-            {
-                throw new FormatException($"base64 decode error: {e.Message}", e);
-            }
-
-            var decrypted = EndfieldXxtea.Decrypt(encryptedData, EndfieldVfsKeys.XxteaKey);
-            var normalized = NormalizeLuaNewlines(decrypted);
+            var decoded = EndfieldLuaDecoder.Decode(data, fileName);
+            var normalized = NormalizeLuaNewlines(decoded.DecodedBytes);
             var outputPath = ResolveContainedPath(output, Path.Combine("Lua", LuaOutputName(fileName)));
             CreateParentDirectory(outputPath);
 
