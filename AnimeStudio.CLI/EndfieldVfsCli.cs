@@ -24,6 +24,7 @@ namespace AnimeStudio.CLI
             "vfs-index",
             "vfsindex",
             "vfs-audit",
+            "vfs-profile",
             "list",
             "extend-data",
             "extenddata",
@@ -59,6 +60,9 @@ namespace AnimeStudio.CLI
                         return true;
                     case "vfs-audit":
                         EndfieldVfsAudit.Run(args);
+                        return true;
+                    case "vfs-profile":
+                        RunVfsProfile(ParseVfsOptions(args, "./vfs_profile_ledger.jsonl.gz"));
                         return true;
                     case "audio":
                         EndfieldAudioCli.Run(args);
@@ -244,6 +248,173 @@ namespace AnimeStudio.CLI
                 new UTF8Encoding(false));
             Console.WriteLine($"  Done: decoded {document.Records.Count} records -> {options.Output}");
         }
+
+        private static void RunVfsProfile(VfsOptions options)
+        {
+            var finalLedger = options.Output;
+            var finalSummary = string.IsNullOrEmpty(options.SummaryOutput)
+                ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(finalLedger)) ?? ".", "vfs_profile_summary.json")
+                : options.SummaryOutput;
+            if (string.Equals(Path.GetFullPath(finalLedger), Path.GetFullPath(finalSummary), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("vfs-profile ledger and summary outputs must be distinct paths");
+            }
+            var temporaryLedger = CreateSiblingTemporaryPath(finalLedger);
+            var temporarySummary = CreateSiblingTemporaryPath(finalSummary);
+            try
+            {
+                var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+                var catalog = loader.DiscoverCatalog();
+                var inputs = new List<EndfieldVfsCorpusFile>();
+                var presentRawIds = new HashSet<byte>();
+                var selectedKnownIds = new HashSet<byte>(options.SelectedBlockTypes().Select(item => (byte)item));
+                var sourceUnavailableBlocks = 0;
+                var sourceExcludedBlocks = 0;
+                var sourceUnavailableChunks = 0;
+                var sourceExcludedChunks = 0;
+
+                foreach (var entry in catalog)
+                {
+                    var info = entry.CanonicalInfo;
+                    if (info == null)
+                    {
+                        // A directory with no parseable metadata is still visible in
+                        // summary accounting, but cannot yield logical file rows.
+                        if (entry.PrimaryMetadataPath != null || entry.FallbackMetadataPath != null)
+                            sourceUnavailableBlocks++;
+                        continue;
+                    }
+                    var rawId = info.BlockTypeValue;
+                    presentRawIds.Add(rawId);
+                    if (!IsSelectedRawBlock(options, rawId)) continue;
+                    var excluded = options.ExcludeDeferredVoice && IsDeferredVoice(rawId);
+                    if (excluded) sourceExcludedBlocks++;
+                    var metadataVerified = entry.State != EndfieldVfsCatalogState.Conflicting
+                        && entry.State != EndfieldVfsCatalogState.ShadowedEmpty;
+                    foreach (var chunk in info.Chunks)
+                    {
+                        var selectedFiles = chunk.Files.Where(file => options.ShouldIncludeFile(file.FileName)).ToList();
+                        if (selectedFiles.Count == 0) continue;
+                        if (excluded)
+                        {
+                            sourceExcludedChunks++;
+                            foreach (var file in selectedFiles)
+                            {
+                                inputs.Add(CreateProfileInput(
+                                    loader, entry, chunk, file, metadataVerified, "excluded",
+                                    "deferred English/Japanese/Korean voice block excluded by default"));
+                            }
+                            continue;
+                        }
+
+                        string chunkPath = null;
+                        try
+                        {
+                            chunkPath = loader.ResolveChunkPath(entry, chunk);
+                        }
+                        catch (EndfieldVfsChunkNotFoundException)
+                        {
+                            sourceUnavailableChunks++;
+                        }
+                        foreach (var file in selectedFiles)
+                        {
+                            if (chunkPath == null)
+                            {
+                                inputs.Add(CreateProfileInput(
+                                    loader, entry, chunk, file, metadataVerified, "unavailable",
+                                    "physical chunk is missing from primary and fallback roots"));
+                                continue;
+                            }
+                            var (chunkSource, _) = ClassifyChunkPath(
+                                chunkPath, options.StreamingAssets, options.FallbackAssets);
+                            inputs.Add(EndfieldVfsCorpusClassifier.FromLoader(
+                                loader, entry, chunk, file, metadataVerified, chunkSource));
+                        }
+                    }
+                }
+
+                foreach (var knownId in selectedKnownIds)
+                {
+                    if (presentRawIds.Contains(knownId)) continue;
+                    if (options.ExcludeDeferredVoice && IsDeferredVoice(knownId))
+                    {
+                        sourceExcludedBlocks++;
+                        continue;
+                    }
+                    sourceUnavailableBlocks++;
+                }
+
+                var summary = EndfieldVfsCorpusClassifier.WriteJsonlGzip(
+                    inputs, temporaryLedger, temporarySummary, options.BoundedByteLimit);
+                summary.PrimaryAssets = NormalizePath(Path.GetFullPath(options.StreamingAssets));
+                summary.FallbackAssets = string.IsNullOrEmpty(options.FallbackAssets)
+                    ? string.Empty
+                    : NormalizePath(Path.GetFullPath(options.FallbackAssets));
+                summary.UnavailableBlockCount = sourceUnavailableBlocks;
+                summary.UnavailableChunkCount = sourceUnavailableChunks;
+                summary.ExcludedBlockCount = sourceExcludedBlocks;
+                summary.ExcludedChunkCount = sourceExcludedChunks;
+                using (var ledgerInput = File.OpenRead(temporaryLedger))
+                {
+                    summary.LedgerSha256 = Convert.ToHexString(SHA256.HashData(ledgerInput));
+                }
+                summary.RecomputeCompleteness();
+                EndfieldVfsCorpusClassifier.WriteSummary(temporarySummary, summary);
+                Console.WriteLine(
+                    $"  Profiled {summary.FileCount} files; excluded={summary.ExcludedCount}, unavailable={summary.UnavailableCount} " +
+                    $"(blocks={summary.UnavailableBlockCount}, chunks={summary.UnavailableChunkCount})");
+                // Invalidate the old commit marker, then publish the ledger and
+                // terminal summary. Expected corpus failures remain inspectable;
+                // the command returns non-zero only after both outputs exist.
+                if (File.Exists(finalSummary)) File.Delete(finalSummary);
+                File.Move(temporaryLedger, finalLedger, overwrite: true);
+                File.Move(temporarySummary, finalSummary, overwrite: true);
+                Console.WriteLine($"  Done: VFS profile -> {finalLedger}; terminal summary -> {finalSummary}");
+                if (!summary.Complete)
+                {
+                    throw new EndfieldVfsException(
+                        $"vfs-profile failed integrity/reconciliation gates: failures={summary.FailureCount}, " +
+                        $"unavailableFiles={summary.UnavailableCount}, unavailableBlocks={summary.UnavailableBlockCount}, " +
+                        $"unavailableChunks={summary.UnavailableChunkCount}");
+                }
+            }
+            catch
+            {
+                TryDeleteTemporaryFile(temporaryLedger);
+                TryDeleteTemporaryFile(temporarySummary);
+                throw;
+            }
+        }
+
+        private static EndfieldVfsCorpusFile CreateProfileInput(
+            EndfieldVfsLoader loader,
+            EndfieldVfsCatalogEntry entry,
+            EndfieldVfsChunkInfo chunk,
+            EndfieldVfsFileInfo file,
+            bool metadataVerified,
+            string status,
+            string diagnostic) => new()
+            {
+                BlockTypeValue = file.BlockTypeValue,
+                BlockTypeName = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                VirtualPath = file.FileName,
+                ChunkFileName = chunk.FileName,
+                ChunkMd5 = EndfieldVfsFormatting.UInt128LittleEndianHex(chunk.Md5Name),
+                ChunkContentMd5 = EndfieldVfsFormatting.UInt128LittleEndianHex(chunk.ContentMd5),
+                ChunkSource = status == "excluded" ? "excluded" : "missing",
+                ChunkLength = chunk.Length,
+                Offset = file.Offset,
+                Length = file.Length,
+                UseEncrypt = file.UseEncrypt,
+                MetadataVerified = metadataVerified,
+                StatusOverride = status,
+                DiagnosticOverride = diagnostic,
+            };
+
+        private static bool IsSelectedRawBlock(VfsOptions options, byte rawId) =>
+            options.UseAllBlockTypes || options.BlockTypes.Any(item => (byte)item == rawId);
+
+        private static bool IsDeferredVoice(byte rawId) => rawId is 102 or 103 or 104;
 
         private static IEnumerable<VfsBlockSelection> LoadSelectedBlocks(
             EndfieldVfsLoader loader,
@@ -1085,7 +1256,30 @@ namespace AnimeStudio.CLI
                         {
                             throw new ArgumentException("--verify-md5 does not take a value");
                         }
+                        if (string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new ArgumentException("--verify-md5 is not supported by vfs-profile; use vfs-audit for MD5 certification");
+                        }
                         options.VerifyMd5 = true;
+                        break;
+                    case "--bounded-bytes":
+                        if (!string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("--bounded-bytes is only valid for vfs-profile");
+                        if (!int.TryParse(value ?? NextValue(args, ref i, token), out var boundedBytes)
+                            || boundedBytes < 1 || boundedBytes > 4096)
+                            throw new ArgumentException("--bounded-bytes must be an integer between 1 and 4096");
+                        options.BoundedByteLimit = boundedBytes;
+                        break;
+                    case "--summary-json":
+                        if (!string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("--summary-json is only valid for vfs-profile");
+                        options.SummaryOutput = value ?? NextValue(args, ref i, token);
+                        break;
+                    case "--include-deferred-voice":
+                        if (!string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("--include-deferred-voice is only valid for vfs-profile");
+                        if (value != null) throw new ArgumentException("--include-deferred-voice does not take a value");
+                        options.ExcludeDeferredVoice = false;
                         break;
                     case "--jsonl":
                         if (!string.Equals(args[0], "vfs-index", StringComparison.OrdinalIgnoreCase)
@@ -1265,6 +1459,35 @@ namespace AnimeStudio.CLI
                         "  -h, --help",
                         "          Print help");
                     break;
+                case "vfs-profile":
+                    PrintHelpLines(
+                        $"Usage: {executable} vfs-profile [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
+                        "",
+                        "Stream bounded structural observations for every selected logical VFS file.",
+                        "English, Japanese, and Korean voice blocks are excluded by default and counted in the summary.",
+                        "The summary is moved last as the successful publication marker.",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <PRIMARY_ASSETS>",
+                        "          Primary VFS root.",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          Optional fallback VFS root for missing metadata/chunks.",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./vfs_profile_ledger.jsonl.gz]",
+                        "      --summary-json <OUTPUT>",
+                        "          [default: alongside ledger as vfs_profile_summary.json]",
+                        "  -b, --block-type <BLOCK_TYPE>",
+                        $"          {blockTypeValues}",
+                        "          May be repeated to profile multiple block types.",
+                        "      --file-regex <REGEX>",
+                        "          Only profile files whose VFS filename matches the regex. May be repeated.",
+                        "      --bounded-bytes <N>",
+                        "          Prefix/suffix bound (1..4096). [default: 64]",
+                        "      --include-deferred-voice",
+                        "          Include English, Japanese, and Korean voice blocks (normally excluded).",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
             }
         }
 
@@ -1284,6 +1507,9 @@ namespace AnimeStudio.CLI
             public string OutputDisplay { get; set; }
             public bool VerifyMd5 { get; set; }
             public bool UseJsonLines { get; set; }
+            public int BoundedByteLimit { get; set; } = EndfieldVfsCorpusClassifier.DefaultBoundedByteLimit;
+            public string SummaryOutput { get; set; }
+            public bool ExcludeDeferredVoice { get; set; } = true;
             public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
             public List<Regex> FileRegexes { get; } = new();
             public bool UseAllBlockTypes { get; private set; } = true;
