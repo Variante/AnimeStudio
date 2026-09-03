@@ -13,6 +13,10 @@ internal static class VFSFileType5Tests
         "ReadBlocks",
         BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("VFSFile.ReadBlocks was not found");
+    private static readonly MethodInfo ValidateCompressedBlockConsumptionMethod = typeof(VFSFile).GetMethod(
+        "ValidateCompressedBlockConsumption",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("VFSFile.ValidateCompressedBlockConsumption was not found");
 
     public static void Run()
     {
@@ -20,6 +24,7 @@ internal static class VFSFileType5Tests
         TestType5DecoderExceptionIsTerminalAndDoesNotPublishPooledBytes();
         TestType5LengthMismatchIsTerminalAndDoesNotPublishPooledBytes();
         TestType5TruncatedInputIsTerminalAndDoesNotPublishPooledBytes();
+        TestStoredBlockConsumptionUsesStoredBytes();
     }
 
     private static void TestSuccessfulType5BlockPublishesExactlyDecodedBytes()
@@ -49,6 +54,41 @@ internal static class VFSFileType5Tests
         var exception = AssertReadBlocksFails(new byte[] { 0x03, (byte)'A', (byte)'B' }, 4, 3);
         AssertContains(exception.Message, "compressed payload truncated", "type-5 truncation status");
         AssertContains(exception.Message, "expected=4, actual=3", "type-5 truncation expected/actual input length");
+    }
+
+    private static void TestStoredBlockConsumptionUsesStoredBytes()
+    {
+        var vfs = (VFSFile)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(VFSFile));
+        var blocksField = typeof(VFSFile).GetField("m_BlocksInfo", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("VFSFile.m_BlocksInfo was not found");
+        blocksField.SetValue(vfs, new List<BundleFile.StorageBlock>
+        {
+            new()
+            {
+                flags = 0,
+                compressedSize = 0,
+                uncompressedSize = 3,
+            },
+        });
+        vfs.Offset = 0;
+        vfs.m_Header = new BundleFile.Header
+        {
+            encFlags = 0,
+            flags = 0,
+            compressedBlocksInfoSize = 0,
+        };
+        using var reader = new FileReader(
+            "vfs-stored-consumption-fixture", new MemoryStream(new byte[43]), leaveOpen: false);
+        reader.Position = 43;
+        try
+        {
+            ValidateCompressedBlockConsumptionMethod.Invoke(
+                vfs, new object[] { reader, "vfs-stored-consumption-fixture" });
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            throw exception.InnerException;
+        }
     }
 
     private static void InvokeReadBlocks(byte[] payload, int compressedSize, int uncompressedSize, MemoryStream output)

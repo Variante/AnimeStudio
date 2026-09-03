@@ -328,12 +328,31 @@ namespace AnimeStudio.Endfield
             Stream output,
             bool verifyMd5 = false)
         {
+            var chunkPath = ResolveChunkPath(blockType, chunk);
+            return ExtractFileFromPath(chunkPath, chunk, file, output, verifyMd5);
+        }
+
+        /// <summary>
+        /// Extract from the already resolved physical chunk.  Overlay-aware
+        /// audits use this overload so the path recorded in their ledger is
+        /// necessarily the path whose bytes were hashed and decoded.
+        /// </summary>
+        public long ExtractFileFromPath(
+            string chunkPath,
+            EndfieldVfsChunkInfo chunk,
+            EndfieldVfsFileInfo file,
+            Stream output,
+            bool verifyMd5 = false)
+        {
+            if (string.IsNullOrEmpty(chunkPath))
+            {
+                throw new ArgumentException("resolved chunk path is required", nameof(chunkPath));
+            }
             ValidateFileRange(chunk, file);
             if (verifyMd5)
             {
-                VerifyChunkContentMd5(blockType, chunk);
+                VerifyChunkContentMd5AtPath(chunkPath, chunk);
             }
-            var chunkPath = ResolveChunkPath(blockType, chunk);
             using var input = new FileStream(chunkPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
             if (input.Length != chunk.Length)
             {
@@ -371,6 +390,11 @@ namespace AnimeStudio.Endfield
             }
 
             var chunkPath = ResolveChunkPath(blockType, chunk);
+            VerifyChunkContentMd5AtPath(chunkPath, chunk);
+        }
+
+        private void VerifyChunkContentMd5AtPath(string chunkPath, EndfieldVfsChunkInfo chunk)
+        {
             var digest = chunkDigests.GetOrAdd(
                 chunkPath,
                 path => new Lazy<ChunkDigest>(

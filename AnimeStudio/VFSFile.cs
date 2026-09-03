@@ -162,7 +162,7 @@ namespace AnimeStudio
                     throw new IOException($"Lz4 decompression error {e.Message}");
                 } finally
                 {
-                    ArrayPool<byte>.Shared.Return(uncompressedBytes);
+                    ArrayPool<byte>.Shared.Return(uncompressedBytes, true);
                 }
             } else
             {
@@ -415,7 +415,10 @@ namespace AnimeStudio
             var expected = 0L;
             foreach (var block in m_BlocksInfo)
             {
-                expected = checked(expected + block.compressedSize);
+                var encodedSize = (int)block.flags == 0
+                    ? block.uncompressedSize
+                    : block.compressedSize;
+                expected = checked(expected + encodedSize);
             }
             var actual = reader.Position - (Offset + (m_Header.encFlags >= 7 ? 48 : 40));
             if ((m_Header.flags & ArchiveFlags.BlocksInfoAtTheEnd) == 0)

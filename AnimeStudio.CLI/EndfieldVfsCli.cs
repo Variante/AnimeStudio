@@ -392,6 +392,19 @@ namespace AnimeStudio.CLI
 
         private static void RunVfsInnerAudit(VfsOptions options)
         {
+            var unsupportedRequestedTypes = options.UseAllBlockTypes
+                ? new List<EndfieldVfsBlockType>()
+                : options.BlockTypes
+                    .Where(item => item is not EndfieldVfsBlockType.InitialBundle
+                        and not EndfieldVfsBlockType.Bundle)
+                    .Distinct()
+                    .ToList();
+            if (unsupportedRequestedTypes.Count != 0)
+            {
+                throw new ArgumentException(
+                    "vfs-inner-audit does not support requested block type(s): " +
+                    string.Join(", ", unsupportedRequestedTypes.Select(item => item.GetName())));
+            }
             var selectedRawIds = options.UseAllBlockTypes
                 ? new HashSet<byte>(new byte[] { (byte)EndfieldVfsBlockType.InitialBundle, (byte)EndfieldVfsBlockType.Bundle })
                 : new HashSet<byte>(options.BlockTypes
@@ -406,6 +419,12 @@ namespace AnimeStudio.CLI
             var finalSummary = string.IsNullOrEmpty(options.SummaryOutput)
                 ? finalLedger + ".summary.json"
                 : options.SummaryOutput;
+            if (string.Equals(
+                Path.GetFullPath(finalLedger), Path.GetFullPath(finalSummary),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("vfs-inner-audit ledger and summary outputs must be distinct paths");
+            }
             var temporaryLedger = CreateSiblingTemporaryPath(finalLedger);
             var temporarySummary = CreateSiblingTemporaryPath(finalSummary);
             var temporaryDirectory = Path.Combine(
@@ -428,6 +447,7 @@ namespace AnimeStudio.CLI
                 ["actualBytesRead"] = 0L,
                 ["innerNodeCount"] = 0L,
                 ["innerBlockCount"] = 0L,
+                ["blockFailureCount"] = 0,
             };
             var failureDiagnostics = new JArray();
             try
@@ -440,11 +460,44 @@ namespace AnimeStudio.CLI
                     compressedLedger, System.IO.Compression.CompressionLevel.Optimal))
                 using (var writer = new StreamWriter(gzip, new UTF8Encoding(false)))
                 {
-                    foreach (var entry in loader.DiscoverCatalog()
-                        .Where(item => item.CanonicalInfo != null
-                            && selectedRawIds.Contains(item.CanonicalInfo.BlockTypeValue))
-                        .OrderBy(item => item.HashDirectory, StringComparer.OrdinalIgnoreCase))
+                    var catalog = loader.DiscoverCatalog()
+                        .OrderBy(item => item.HashDirectory, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    summary["catalogEntryCount"] = catalog.Count;
+                    var selectedDirectories = selectedRawIds.ToDictionary(
+                        item => loader.BlockDirectoryName((EndfieldVfsBlockType)item),
+                        item => item,
+                        StringComparer.OrdinalIgnoreCase);
+                    var seenDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var entry in catalog.Where(item => selectedDirectories.ContainsKey(item.HashDirectory)))
                     {
+                        seenDirectories.Add(entry.HashDirectory);
+                        var expectedRawId = selectedDirectories[entry.HashDirectory];
+                        if (entry.CanonicalInfo == null)
+                        {
+                            WriteInnerAuditBlockFailure(
+                                writer, summary, failureDiagnostics, entry, expectedRawId,
+                                "unparseable_metadata", entry.PrimaryError ?? entry.FallbackError ?? "metadata is missing or unparsable");
+                            continue;
+                        }
+                        if (entry.CanonicalInfo.BlockTypeValue != expectedRawId)
+                        {
+                            WriteInnerAuditBlockFailure(
+                                writer, summary, failureDiagnostics, entry, expectedRawId,
+                                "block_identity_mismatch",
+                                $"directory {entry.HashDirectory} expected block type {expectedRawId}, " +
+                                $"metadata declared {entry.CanonicalInfo.BlockTypeValue}");
+                            continue;
+                        }
+                        if (entry.State is EndfieldVfsCatalogState.MissingMetadata or EndfieldVfsCatalogState.Conflicting)
+                        {
+                            WriteInnerAuditBlockFailure(
+                                writer, summary, failureDiagnostics, entry, expectedRawId,
+                                entry.State == EndfieldVfsCatalogState.Conflicting
+                                    ? "conflicting_metadata" : "unparseable_metadata",
+                                entry.PrimaryError ?? entry.FallbackError ?? $"catalog state is {entry.State}");
+                            continue;
+                        }
                         var info = entry.CanonicalInfo;
                         foreach (var chunk in info.Chunks.OrderBy(item => item.FileName, StringComparer.OrdinalIgnoreCase))
                         {
@@ -479,10 +532,20 @@ namespace AnimeStudio.CLI
                             }
                         }
                     }
+                    foreach (var missing in selectedDirectories
+                        .Where(item => !seenDirectories.Contains(item.Key))
+                        .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        WriteInnerAuditBlockFailure(
+                            writer, summary, failureDiagnostics, null, missing.Value,
+                            "missing_block_directory", $"selected block directory {missing.Key} is missing from both roots",
+                            missing.Key);
+                    }
                 }
 
                 summary["failureDiagnostics"] = failureDiagnostics;
-                summary["complete"] = (int)summary["failedCount"] == 0;
+                summary["complete"] = (int)summary["failedCount"] == 0
+                    && (int)summary["blockFailureCount"] == 0;
                 File.WriteAllText(
                     temporarySummary,
                     summary.ToString(Formatting.Indented).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
@@ -491,11 +554,13 @@ namespace AnimeStudio.CLI
                 File.Move(temporarySummary, finalSummary, overwrite: true);
                 Console.WriteLine(
                     $"  Inner-audited {summary["verifiedCount"]}/{summary["fileCount"]} logical files; " +
-                    $"failed={summary["failedCount"]}; ledger -> {finalLedger}; summary -> {finalSummary}");
-                if ((int)summary["failedCount"] != 0)
+                    $"failed={summary["failedCount"]}; blockFailures={summary["blockFailureCount"]}; " +
+                    $"ledger -> {finalLedger}; summary -> {finalSummary}");
+                if (!(bool)summary["complete"])
                 {
                     throw new EndfieldVfsException(
-                        $"vfs-inner-audit failed for {(int)summary["failedCount"]} logical files");
+                        $"vfs-inner-audit failed for {(int)summary["failedCount"]} logical files and " +
+                        $"{(int)summary["blockFailureCount"]} block-level checks");
                 }
             }
             catch
@@ -528,10 +593,12 @@ namespace AnimeStudio.CLI
             IncrementInnerAudit(summary, "declaredBytes", file.Length);
             var row = new JObject
             {
+                ["recordType"] = "file",
                 ["blockTypeValue"] = file.BlockTypeValue,
                 ["blockName"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
                 ["hashDirectory"] = entry.HashDirectory,
                 ["overlayState"] = FormatInnerAuditOverlayState(entry.State),
+                ["overlayStateScope"] = "block_metadata",
                 ["virtualPath"] = file.FileName,
                 ["chunk"] = chunk.FileName,
                 ["source"] = chunkSource,
@@ -551,8 +618,8 @@ namespace AnimeStudio.CLI
             try
             {
                 payload = CreateInnerAuditPayloadStream(file.Length, temporaryDirectory);
-                var actual = loader.ExtractFile(
-                    (EndfieldVfsBlockType)file.BlockTypeValue, chunk, file, payload, verifyMd5: true);
+                var actual = loader.ExtractFileFromPath(
+                    chunkPath, chunk, file, payload, verifyMd5: true);
                 row["actualBytesRead"] = actual;
                 row["fileDataMd5Verified"] = true;
                 IncrementInnerAudit(summary, "actualBytesRead", actual);
@@ -613,6 +680,46 @@ namespace AnimeStudio.CLI
             WriteJsonLine(writer, row);
         }
 
+        private static void WriteInnerAuditBlockFailure(
+            TextWriter writer,
+            JObject summary,
+            JArray failureDiagnostics,
+            EndfieldVfsCatalogEntry entry,
+            byte expectedRawId,
+            string status,
+            string diagnostic,
+            string hashDirectory = null)
+        {
+            summary["blockFailureCount"] = (int)summary["blockFailureCount"] + 1;
+            var bounded = BoundInnerAuditDiagnostic(diagnostic);
+            var directory = hashDirectory ?? entry?.HashDirectory ?? string.Empty;
+            var row = new JObject
+            {
+                ["recordType"] = "block_failure",
+                ["blockTypeValue"] = expectedRawId,
+                ["blockName"] = EndfieldVfsBlockTypes.GetName(expectedRawId),
+                ["hashDirectory"] = directory,
+                ["overlayState"] = entry == null
+                    ? "missing_both" : FormatInnerAuditOverlayState(entry.State),
+                ["overlayStateScope"] = "block_metadata",
+                ["status"] = status,
+                ["primaryMetadataPath"] = entry?.PrimaryMetadataPath == null
+                    ? JValue.CreateNull() : NormalizePath(entry.PrimaryMetadataPath),
+                ["fallbackMetadataPath"] = entry?.FallbackMetadataPath == null
+                    ? JValue.CreateNull() : NormalizePath(entry.FallbackMetadataPath),
+                ["primaryError"] = entry?.PrimaryError == null
+                    ? JValue.CreateNull() : BoundInnerAuditDiagnostic(entry.PrimaryError),
+                ["fallbackError"] = entry?.FallbackError == null
+                    ? JValue.CreateNull() : BoundInnerAuditDiagnostic(entry.FallbackError),
+                ["diagnostic"] = bounded,
+            };
+            WriteJsonLine(writer, row);
+            if (failureDiagnostics.Count < MaxFailureDiagnostics)
+            {
+                failureDiagnostics.Add(row.DeepClone());
+            }
+        }
+
         private static Stream CreateInnerAuditPayloadStream(long length, string temporaryDirectory)
         {
             const long maxMemoryPayload = 64L * 1024 * 1024;
@@ -649,10 +756,12 @@ namespace AnimeStudio.CLI
             var bounded = BoundInnerAuditDiagnostic(diagnostic);
             WriteJsonLine(writer, new JObject
             {
+                ["recordType"] = "file",
                 ["blockTypeValue"] = file.BlockTypeValue,
                 ["blockName"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
                 ["hashDirectory"] = entry.HashDirectory,
                 ["overlayState"] = FormatInnerAuditOverlayState(entry.State),
+                ["overlayStateScope"] = "block_metadata",
                 ["virtualPath"] = file.FileName,
                 ["chunk"] = chunk.FileName,
                 ["source"] = chunkSource,

@@ -1,5 +1,6 @@
 using System.Reflection;
 using AnimeStudio;
+using AnimeStudio.CLI;
 
 /// <summary>Negative and exact-copy fixtures for Endfield's nested VFS containers.</summary>
 internal static class VFSInnerStructureTests
@@ -15,6 +16,10 @@ internal static class VFSInnerStructureTests
         TestDuplicateNodePathsFailClosed();
         TestTraversalNodePathFailsClosed();
         TestShortNodeReadFailsClosed();
+        TestInnerAuditRejectsOutputCollision();
+        TestInnerAuditRejectsMixedUnsupportedBlockTypes();
+        TestExplicitChunkPathIsTheAuditedSource();
+        TestUnparseableSelectedMetadataIsTerminal();
     }
 
     private static void TestNodeCopiesExactlyDeclaredLength()
@@ -83,6 +88,89 @@ internal static class VFSInnerStructureTests
         AssertContains(exception.Message, "short read", "short read diagnostic");
         AssertContains(exception.Message, "expected=2", "short read expected length");
         AssertContains(exception.Message, "actual=1", "short read actual length");
+    }
+
+    private static void TestInnerAuditRejectsOutputCollision()
+    {
+        var output = Path.Combine(Path.GetTempPath(), "vfs-inner-audit-collision.json");
+        var handled = EndfieldVfsCli.TryRun(new[]
+        {
+            "vfs-inner-audit",
+            "--streaming-assets", ".",
+            "--block-type", "bundle",
+            "--output", output,
+            "--summary-json", output,
+        }, out var exitCode);
+        AssertEqual(true, handled, "output collision command handled");
+        AssertEqual(1, exitCode, "output collision exit code");
+    }
+
+    private static void TestInnerAuditRejectsMixedUnsupportedBlockTypes()
+    {
+        var handled = EndfieldVfsCli.TryRun(new[]
+        {
+            "vfs-inner-audit",
+            "--streaming-assets", ".",
+            "--block-type", "bundle",
+            "--block-type", "table",
+        }, out var exitCode);
+        AssertEqual(true, handled, "mixed block command handled");
+        AssertEqual(1, exitCode, "mixed block exit code");
+    }
+
+    private static void TestExplicitChunkPathIsTheAuditedSource()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vfs-explicit-source-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var selectedPath = Path.Combine(root, "selected.chk");
+            File.WriteAllBytes(selectedPath, new byte[] { 4, 5, 6 });
+            var loader = new EndfieldVfsLoader(root);
+            var chunk = new EndfieldVfsChunkInfo { Length = 3 };
+            var file = new EndfieldVfsFileInfo { Offset = 0, Length = 3 };
+            using var output = new MemoryStream();
+            var actual = loader.ExtractFileFromPath(selectedPath, chunk, file, output);
+            AssertEqual(3L, actual, "explicit source byte count");
+            AssertBytes(new byte[] { 4, 5, 6 }, output.ToArray(), "explicit source bytes");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void TestUnparseableSelectedMetadataIsTerminal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"vfs-inner-metadata-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var loader = new EndfieldVfsLoader(root);
+            var hashDirectory = loader.BlockDirectoryName(EndfieldVfsBlockType.Bundle);
+            var blockDirectory = Path.Combine(root, EndfieldVfsLoader.VfsDirectoryName, hashDirectory);
+            Directory.CreateDirectory(blockDirectory);
+            File.WriteAllBytes(Path.Combine(blockDirectory, hashDirectory + ".blc"), new byte[] { 0 });
+            var ledger = Path.Combine(root, "ledger.jsonl.gz");
+            var summary = Path.Combine(root, "summary.json");
+            var handled = EndfieldVfsCli.TryRun(new[]
+            {
+                "vfs-inner-audit",
+                "--streaming-assets", root,
+                "--block-type", "bundle",
+                "--output", ledger,
+                "--summary-json", summary,
+            }, out var exitCode);
+            AssertEqual(true, handled, "unparseable metadata command handled");
+            AssertEqual(1, exitCode, "unparseable metadata exit code");
+            var text = File.ReadAllText(summary);
+            AssertContains(text, "\"blockFailureCount\": 1", "unparseable metadata block failure count");
+            AssertContains(text, "unparseable_metadata", "unparseable metadata terminal status");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static VFSFile InvokeReadFiles(byte[] bytes, params BundleFile.Node[] nodes)
