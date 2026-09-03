@@ -16,6 +16,14 @@ namespace AnimeStudio
         public BundleFile.Header m_Header;
         public List<StreamFile> fileList;
         public long Offset;
+        /// <summary>
+        /// The decoded storage-block table.  A successful VFSFile construction
+        /// means this table and the directory have passed the structural gates;
+        /// consumers must not interpret the node payloads as Unity objects here.
+        /// </summary>
+        public IReadOnlyList<BundleFile.StorageBlock> BlocksInfo => m_BlocksInfo;
+        /// <summary>The decoded directory table for this logical VFS container.</summary>
+        public IReadOnlyList<BundleFile.Node> DirectoryInfo => m_DirectoryInfo;
         private const long MaxInMemoryBlockStreamSize = 64L * 1024 * 1024;
 
         private static int CheckedSize(uint value, string fieldName)
@@ -70,6 +78,17 @@ namespace AnimeStudio
             reader.ReadBytes(8);
             m_Header = VFSUtils.ReadHeader(reader, game);
             Logger.Verbose($"Header : {m_Header.ToString()}");
+            var availableContainerBytes = reader.Length - Offset;
+            if ((m_Header.flags & ArchiveFlags.BlocksInfoAtTheEnd) != 0
+                && (m_Header.size <= 0
+                    || m_Header.size > availableContainerBytes
+                    || m_Header.compressedBlocksInfoSize > m_Header.size))
+            {
+                throw new InvalidDataException(
+                    $"VFS end-positioned block-info range is invalid for '{path}': " +
+                    $"decodedSizeWord={m_Header.size}, infoBytes={m_Header.compressedBlocksInfoSize}, " +
+                    $"available={availableContainerBytes} bytes.");
+            }
 
             // go to blocks info
             uint blockInfosOffset;
@@ -108,6 +127,7 @@ namespace AnimeStudio
             using var blocksStream = CreateBlocksStream(path);
             ReadBlocks(reader, blocksStream, game, path);
             ValidateDecodedBlockLength(blocksStream, path);
+            ValidateCompressedBlockConsumption(reader, path);
             ReadFiles(blocksStream, path);
         }
 
@@ -155,6 +175,11 @@ namespace AnimeStudio
                 reader.Endian = EndianType.BigEndian;
                 m_BlocksInfo = VFSUtils.ReadBlocksInfos(blocksInfoReader, game);
                 m_DirectoryInfo = VFSUtils.ReadDirectoryInfos(blocksInfoReader, game);
+                if (blocksInfoReader.Remaining != 0)
+                {
+                    throw new InvalidDataException(
+                        $"VFS block-info trailing bytes: expected=0, actual={blocksInfoReader.Remaining}.");
+                }
             }
         }
 
@@ -264,24 +289,149 @@ namespace AnimeStudio
         {
             Logger.Verbose($"Writing files from blocks stream...");
 
-            fileList = new List<StreamFile>();
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            var ranges = new List<(long Offset, long End, string Path)>();
             for (int i = 0; i < m_DirectoryInfo.Count; i++)
             {
                 var node = m_DirectoryInfo[i];
-                var file = new StreamFile();
-                fileList.Add(file);
-                file.path = node.path;
-                file.fileName = Path.GetFileName(node.path);
+                ValidateNodePath(node.path, i, path);
+                if (!paths.Add(node.path))
+                {
+                    throw new InvalidDataException(
+                        $"VFS duplicate directory node path '{node.path}' at node {i}.");
+                }
                 if (node.offset < 0 || node.size < 0 || node.offset > blocksStream.Length || node.size > blocksStream.Length - node.offset)
                 {
                     throw new EndOfStreamException(
                         $"VFS node {node.path} range offset={node.offset}, size={node.size} exceeds block stream length {blocksStream.Length}."
                     );
                 }
-                file.stream = CreateNodeStream(node.size);
-                blocksStream.Position = node.offset;
-                blocksStream.CopyTo(file.stream, node.size);
-                file.stream.Position = 0;
+                var end = checked(node.offset + node.size);
+                ranges.Add((node.offset, end, node.path));
+            }
+
+            ranges.Sort((left, right) =>
+            {
+                var compare = left.Offset.CompareTo(right.Offset);
+                return compare != 0 ? compare : left.End.CompareTo(right.End);
+            });
+            for (var i = 1; i < ranges.Count; i++)
+            {
+                var previous = ranges[i - 1];
+                var current = ranges[i];
+                if (current.Offset < previous.End)
+                {
+                    throw new InvalidDataException(
+                        $"VFS overlapping directory ranges: '{previous.Path}' " +
+                        $"[{previous.Offset},{previous.End}) and '{current.Path}' " +
+                        $"[{current.Offset},{current.End}).");
+                }
+            }
+
+            fileList = new List<StreamFile>();
+            try
+            {
+                foreach (var node in m_DirectoryInfo)
+                {
+                    var file = new StreamFile
+                    {
+                        path = node.path,
+                        fileName = Path.GetFileName(node.path),
+                        stream = CreateNodeStream(node.size),
+                    };
+                    fileList.Add(file);
+                    blocksStream.Position = node.offset;
+                    CopyRange(blocksStream, file.stream, node.size, path, node.path);
+                    file.stream.Position = 0;
+                }
+            }
+            catch
+            {
+                foreach (var file in fileList)
+                {
+                    file.stream?.Dispose();
+                }
+                fileList.Clear();
+                throw;
+            }
+        }
+
+        private static void ValidateNodePath(string nodePath, int nodeIndex, string containerPath)
+        {
+            if (string.IsNullOrEmpty(nodePath))
+            {
+                throw new InvalidDataException(
+                    $"VFS directory node {nodeIndex} in '{containerPath}' has an empty path.");
+            }
+            if (nodePath.IndexOf('\0') >= 0 || Path.IsPathRooted(nodePath))
+            {
+                throw new InvalidDataException(
+                    $"VFS directory node {nodeIndex} path '{nodePath}' is rooted or contains NUL.");
+            }
+            var segments = nodePath.Replace('\\', '/').Split('/');
+            if (segments.Any(segment => segment == ".."))
+            {
+                throw new InvalidDataException(
+                    $"VFS directory node {nodeIndex} path '{nodePath}' contains path traversal.");
+            }
+        }
+
+        private static void CopyRange(Stream input, Stream output, long length, string containerPath, string nodePath)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            var remaining = length;
+            var copied = 0L;
+            try
+            {
+                while (remaining > 0)
+                {
+                    var requested = (int)Math.Min(buffer.Length, remaining);
+                    var read = input.Read(buffer, 0, requested);
+                    if (read <= 0)
+                    {
+                        throw new EndOfStreamException(
+                            $"VFS node '{nodePath}' in '{containerPath}' short read: " +
+                            $"expected={length}, actual={copied}.");
+                    }
+                    output.Write(buffer, 0, read);
+                    copied += read;
+                    remaining -= read;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer, true);
+            }
+            if (copied != length)
+            {
+                throw new EndOfStreamException(
+                    $"VFS node '{nodePath}' in '{containerPath}' short read: " +
+                    $"expected={length}, actual={copied}.");
+            }
+        }
+
+        private void ValidateCompressedBlockConsumption(FileReader reader, string path)
+        {
+            var expected = 0L;
+            foreach (var block in m_BlocksInfo)
+            {
+                expected = checked(expected + block.compressedSize);
+            }
+            var actual = reader.Position - (Offset + (m_Header.encFlags >= 7 ? 48 : 40));
+            if ((m_Header.flags & ArchiveFlags.BlocksInfoAtTheEnd) == 0)
+            {
+                var infoLength = checked((long)m_Header.compressedBlocksInfoSize);
+                if ((m_Header.flags & ArchiveFlags.BlockInfoNeedPaddingAtStart) != 0)
+                {
+                    infoLength = (infoLength + 15) & ~15L;
+                }
+                actual -= infoLength;
+            }
+            if (actual != expected)
+            {
+                throw new InvalidDataException(
+                    $"VFS compressed block consumption mismatch for '{path}': " +
+                    $"expected={expected}, actual={actual}.");
             }
         }
 

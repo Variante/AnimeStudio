@@ -43,6 +43,7 @@ static class Program
         StreamExtensionsTests.Run();
         VFSDirectoryInfoTests.Run();
         VFSFileType5Tests.Run();
+        VFSInnerStructureTests.Run();
         TestEndfieldCompressDataRecords();
         TestEndfieldCompressDataRejectsMalformedContainers();
         TestEndfieldCompressDataCliOutput();

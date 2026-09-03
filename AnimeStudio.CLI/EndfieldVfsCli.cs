@@ -25,6 +25,7 @@ namespace AnimeStudio.CLI
             "vfsindex",
             "vfs-audit",
             "vfs-profile",
+            "vfs-inner-audit",
             "list",
             "extend-data",
             "extenddata",
@@ -63,6 +64,9 @@ namespace AnimeStudio.CLI
                         return true;
                     case "vfs-profile":
                         RunVfsProfile(ParseVfsOptions(args, "./vfs_profile_ledger.jsonl.gz"));
+                        return true;
+                    case "vfs-inner-audit":
+                        RunVfsInnerAudit(ParseVfsOptions(args, "./vfs_inner_audit_ledger.jsonl.gz"));
                         return true;
                     case "audio":
                         EndfieldAudioCli.Run(args);
@@ -385,6 +389,322 @@ namespace AnimeStudio.CLI
                 throw;
             }
         }
+
+        private static void RunVfsInnerAudit(VfsOptions options)
+        {
+            var selectedRawIds = options.UseAllBlockTypes
+                ? new HashSet<byte>(new byte[] { (byte)EndfieldVfsBlockType.InitialBundle, (byte)EndfieldVfsBlockType.Bundle })
+                : new HashSet<byte>(options.BlockTypes
+                    .Where(item => item is EndfieldVfsBlockType.InitialBundle or EndfieldVfsBlockType.Bundle)
+                    .Select(item => (byte)item));
+            if (selectedRawIds.Count == 0)
+            {
+                throw new ArgumentException("vfs-inner-audit requires --block-type initial-bundle and/or bundle");
+            }
+
+            var finalLedger = options.Output;
+            var finalSummary = string.IsNullOrEmpty(options.SummaryOutput)
+                ? finalLedger + ".summary.json"
+                : options.SummaryOutput;
+            var temporaryLedger = CreateSiblingTemporaryPath(finalLedger);
+            var temporarySummary = CreateSiblingTemporaryPath(finalSummary);
+            var temporaryDirectory = Path.Combine(
+                Path.GetDirectoryName(Path.GetFullPath(finalLedger)) ?? ".",
+                $".vfs-inner-audit-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(temporaryDirectory);
+            var summary = new JObject
+            {
+                ["format"] = "animestudio-endfield-vfs-inner-audit",
+                ["schemaVersion"] = 1,
+                ["primaryAssets"] = NormalizePath(Path.GetFullPath(options.StreamingAssets)),
+                ["fallbackAssets"] = string.IsNullOrEmpty(options.FallbackAssets)
+                    ? string.Empty
+                    : NormalizePath(Path.GetFullPath(options.FallbackAssets)),
+                ["selectedBlockTypeValues"] = new JArray(selectedRawIds.OrderBy(item => item)),
+                ["fileCount"] = 0,
+                ["verifiedCount"] = 0,
+                ["failedCount"] = 0,
+                ["declaredBytes"] = 0L,
+                ["actualBytesRead"] = 0L,
+                ["innerNodeCount"] = 0L,
+                ["innerBlockCount"] = 0L,
+            };
+            var failureDiagnostics = new JArray();
+            try
+            {
+                var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+                var game = GameManager.GetGame(GameType.ArknightsEndfield)
+                    ?? throw new InvalidOperationException("Arknights Endfield game profile is unavailable");
+                using (var compressedLedger = File.Create(temporaryLedger))
+                using (var gzip = new System.IO.Compression.GZipStream(
+                    compressedLedger, System.IO.Compression.CompressionLevel.Optimal))
+                using (var writer = new StreamWriter(gzip, new UTF8Encoding(false)))
+                {
+                    foreach (var entry in loader.DiscoverCatalog()
+                        .Where(item => item.CanonicalInfo != null
+                            && selectedRawIds.Contains(item.CanonicalInfo.BlockTypeValue))
+                        .OrderBy(item => item.HashDirectory, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var info = entry.CanonicalInfo;
+                        foreach (var chunk in info.Chunks.OrderBy(item => item.FileName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            string chunkPath = null;
+                            string chunkSource = "missing";
+                            try
+                            {
+                                chunkPath = loader.ResolveChunkPath(entry, chunk);
+                                (chunkSource, _) = ClassifyChunkPath(
+                                    chunkPath, options.StreamingAssets, options.FallbackAssets);
+                            }
+                            catch (Exception exception)
+                            {
+                                foreach (var file in chunk.Files
+                                    .Where(item => options.ShouldIncludeFile(item.FileName))
+                                    .OrderBy(item => item.FileName, StringComparer.Ordinal))
+                                {
+                                    WriteInnerAuditFailure(
+                                        writer, summary, failureDiagnostics, entry, info, chunk, file,
+                                        chunkSource, chunkPath, "missing_chunk", exception.Message);
+                                }
+                                continue;
+                            }
+
+                            foreach (var file in chunk.Files
+                                .Where(item => options.ShouldIncludeFile(item.FileName))
+                                .OrderBy(item => item.FileName, StringComparer.Ordinal))
+                            {
+                                AuditInnerFile(
+                                    loader, game, writer, summary, failureDiagnostics,
+                                    entry, info, chunk, file, chunkSource, chunkPath, temporaryDirectory);
+                            }
+                        }
+                    }
+                }
+
+                summary["failureDiagnostics"] = failureDiagnostics;
+                summary["complete"] = (int)summary["failedCount"] == 0;
+                File.WriteAllText(
+                    temporarySummary,
+                    summary.ToString(Formatting.Indented).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+                    new UTF8Encoding(false));
+                File.Move(temporaryLedger, finalLedger, overwrite: true);
+                File.Move(temporarySummary, finalSummary, overwrite: true);
+                Console.WriteLine(
+                    $"  Inner-audited {summary["verifiedCount"]}/{summary["fileCount"]} logical files; " +
+                    $"failed={summary["failedCount"]}; ledger -> {finalLedger}; summary -> {finalSummary}");
+                if ((int)summary["failedCount"] != 0)
+                {
+                    throw new EndfieldVfsException(
+                        $"vfs-inner-audit failed for {(int)summary["failedCount"]} logical files");
+                }
+            }
+            catch
+            {
+                TryDeleteTemporaryFile(temporaryLedger);
+                TryDeleteTemporaryFile(temporarySummary);
+                throw;
+            }
+            finally
+            {
+                TryDeleteTemporaryDirectory(temporaryDirectory);
+            }
+        }
+
+        private static void AuditInnerFile(
+            EndfieldVfsLoader loader,
+            Game game,
+            TextWriter writer,
+            JObject summary,
+            JArray failureDiagnostics,
+            EndfieldVfsCatalogEntry entry,
+            EndfieldVfsBlockMainInfo info,
+            EndfieldVfsChunkInfo chunk,
+            EndfieldVfsFileInfo file,
+            string chunkSource,
+            string chunkPath,
+            string temporaryDirectory)
+        {
+            IncrementInnerAudit(summary, "fileCount", 1);
+            IncrementInnerAudit(summary, "declaredBytes", file.Length);
+            var row = new JObject
+            {
+                ["blockTypeValue"] = file.BlockTypeValue,
+                ["blockName"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                ["hashDirectory"] = entry.HashDirectory,
+                ["overlayState"] = FormatInnerAuditOverlayState(entry.State),
+                ["virtualPath"] = file.FileName,
+                ["chunk"] = chunk.FileName,
+                ["source"] = chunkSource,
+                ["physicalPath"] = chunkPath == null ? JValue.CreateNull() : NormalizePath(chunkPath),
+                ["chunkDeclaredLength"] = chunk.Length,
+                ["offset"] = file.Offset,
+                ["declaredLength"] = file.Length,
+                ["actualBytesRead"] = 0L,
+                ["encryption"] = file.UseEncrypt,
+                ["declaredFileDataMd5DisplayHex"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
+                ["declaredFileDataMd5LittleEndianHex"] = EndfieldVfsFormatting.UInt128LittleEndianHex(file.FileDataMd5),
+                ["fileDataMd5Verified"] = false,
+                ["status"] = "failed",
+            };
+            Stream payload = null;
+            VFSFile inner = null;
+            try
+            {
+                payload = CreateInnerAuditPayloadStream(file.Length, temporaryDirectory);
+                var actual = loader.ExtractFile(
+                    (EndfieldVfsBlockType)file.BlockTypeValue, chunk, file, payload, verifyMd5: true);
+                row["actualBytesRead"] = actual;
+                row["fileDataMd5Verified"] = true;
+                IncrementInnerAudit(summary, "actualBytesRead", actual);
+                payload.Position = 0;
+                using (var reader = new FileReader(file.FileName, payload, leaveOpen: true))
+                {
+                    if (reader.FileType != FileType.VFSFile)
+                    {
+                        throw new InvalidDataException($"inner signature is {reader.FileType}, expected VFSFile");
+                    }
+                    inner = new VFSFile(reader, file.FileName, GameType.ArknightsEndfield);
+                    row["status"] = "inner_structure_verified";
+                    // This decoded custom-header word is used only by the
+                    // BlocksInfoAtTheEnd variant.  Current files do not prove
+                    // that it is the logical container length.
+                    row["decodedHeaderSizeWord"] = inner.m_Header.size;
+                    row["headerFlags"] = (uint)inner.m_Header.flags;
+                    row["headerCompressedBlocksInfoSize"] = inner.m_Header.compressedBlocksInfoSize;
+                    row["headerUncompressedBlocksInfoSize"] = inner.m_Header.uncompressedBlocksInfoSize;
+                    row["storageBlockCount"] = inner.BlocksInfo.Count;
+                    row["directoryNodeCount"] = inner.DirectoryInfo.Count;
+                    row["decodedBlockBytes"] = inner.BlocksInfo.Sum(item => (long)item.uncompressedSize);
+                    IncrementInnerAudit(summary, "verifiedCount", 1);
+                    IncrementInnerAudit(summary, "innerNodeCount", inner.DirectoryInfo.Count);
+                    IncrementInnerAudit(summary, "innerBlockCount", inner.BlocksInfo.Count);
+                }
+            }
+            catch (Exception exception)
+            {
+                row["diagnostic"] = BoundInnerAuditDiagnostic(exception.Message);
+                IncrementInnerAudit(summary, "failedCount", 1);
+                if (failureDiagnostics.Count < MaxFailureDiagnostics)
+                {
+                    failureDiagnostics.Add(new JObject
+                    {
+                        ["blockTypeValue"] = file.BlockTypeValue,
+                        ["virtualPath"] = file.FileName,
+                        ["chunk"] = chunk.FileName,
+                        ["source"] = chunkSource,
+                        ["offset"] = file.Offset,
+                        ["expected"] = file.Length,
+                        ["actual"] = row["actualBytesRead"],
+                        ["diagnostic"] = row["diagnostic"],
+                    });
+                }
+            }
+            finally
+            {
+                if (inner?.fileList != null)
+                {
+                    foreach (var node in inner.fileList)
+                    {
+                        node.stream?.Dispose();
+                    }
+                }
+                payload?.Dispose();
+            }
+            WriteJsonLine(writer, row);
+        }
+
+        private static Stream CreateInnerAuditPayloadStream(long length, string temporaryDirectory)
+        {
+            const long maxMemoryPayload = 64L * 1024 * 1024;
+            if (length < 0)
+            {
+                throw new InvalidDataException($"negative VFS logical-file length {length}");
+            }
+            if (length <= maxMemoryPayload)
+            {
+                return new MemoryStream(checked((int)length));
+            }
+            var path = Path.Combine(temporaryDirectory, Guid.NewGuid().ToString("N") + ".bin");
+            return new FileStream(
+                path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
+                1024 * 1024, FileOptions.DeleteOnClose | FileOptions.SequentialScan);
+        }
+
+        private static void WriteInnerAuditFailure(
+            TextWriter writer,
+            JObject summary,
+            JArray failureDiagnostics,
+            EndfieldVfsCatalogEntry entry,
+            EndfieldVfsBlockMainInfo info,
+            EndfieldVfsChunkInfo chunk,
+            EndfieldVfsFileInfo file,
+            string chunkSource,
+            string chunkPath,
+            string status,
+            string diagnostic)
+        {
+            IncrementInnerAudit(summary, "fileCount", 1);
+            IncrementInnerAudit(summary, "declaredBytes", file.Length);
+            IncrementInnerAudit(summary, "failedCount", 1);
+            var bounded = BoundInnerAuditDiagnostic(diagnostic);
+            WriteJsonLine(writer, new JObject
+            {
+                ["blockTypeValue"] = file.BlockTypeValue,
+                ["blockName"] = EndfieldVfsBlockTypes.GetName(file.BlockTypeValue),
+                ["hashDirectory"] = entry.HashDirectory,
+                ["overlayState"] = FormatInnerAuditOverlayState(entry.State),
+                ["virtualPath"] = file.FileName,
+                ["chunk"] = chunk.FileName,
+                ["source"] = chunkSource,
+                ["physicalPath"] = chunkPath == null ? JValue.CreateNull() : NormalizePath(chunkPath),
+                ["chunkDeclaredLength"] = chunk.Length,
+                ["offset"] = file.Offset,
+                ["declaredLength"] = file.Length,
+                ["actualBytesRead"] = 0L,
+                ["encryption"] = file.UseEncrypt,
+                ["declaredFileDataMd5DisplayHex"] = EndfieldVfsFormatting.UInt128Hex(file.FileDataMd5),
+                ["declaredFileDataMd5LittleEndianHex"] = EndfieldVfsFormatting.UInt128LittleEndianHex(file.FileDataMd5),
+                ["fileDataMd5Verified"] = false,
+                ["status"] = status,
+                ["diagnostic"] = bounded,
+            });
+            if (failureDiagnostics.Count < MaxFailureDiagnostics)
+            {
+                failureDiagnostics.Add(new JObject
+                {
+                    ["blockTypeValue"] = file.BlockTypeValue,
+                    ["virtualPath"] = file.FileName,
+                    ["chunk"] = chunk.FileName,
+                    ["source"] = chunkSource,
+                    ["offset"] = file.Offset,
+                    ["expected"] = file.Length,
+                    ["actual"] = 0L,
+                    ["diagnostic"] = bounded,
+                });
+            }
+        }
+
+        private static void IncrementInnerAudit(JObject summary, string name, long amount)
+        {
+            summary[name] = (long)summary[name] + amount;
+        }
+
+        private static string BoundInnerAuditDiagnostic(string message)
+        {
+            var normalized = (message ?? "inner audit failed").Replace('\r', ' ').Replace('\n', ' ');
+            return normalized.Length <= 320 ? normalized : normalized[..320] + "...";
+        }
+
+        private static string FormatInnerAuditOverlayState(EndfieldVfsCatalogState state) => state switch
+        {
+            EndfieldVfsCatalogState.PrimaryOnly => "primary_only",
+            EndfieldVfsCatalogState.FallbackOnly => "fallback_only",
+            EndfieldVfsCatalogState.Identical => "identical",
+            EndfieldVfsCatalogState.Replaced => "replaced",
+            EndfieldVfsCatalogState.ShadowedEmpty => "shadowed_empty",
+            EndfieldVfsCatalogState.Conflicting => "conflicting_metadata",
+            _ => "missing_both",
+        };
 
         private static EndfieldVfsCorpusFile CreateProfileInput(
             EndfieldVfsLoader loader,
@@ -840,6 +1160,21 @@ namespace AnimeStudio.CLI
             }
         }
 
+        private static void TryDeleteTemporaryDirectory(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            }
+            catch (Exception cleanupException)
+            {
+                Console.Error.WriteLine($"Warning: failed to clean inner-audit temporary directory {path}: {cleanupException.Message}");
+            }
+        }
+
         private static bool ShouldFailOnFileErrors(VfsOptions options, EndfieldVfsBlockType blockType) =>
             !(options.UseAllBlockTypes && blockType is
                 EndfieldVfsBlockType.AudioEnglish or
@@ -1271,8 +1606,9 @@ namespace AnimeStudio.CLI
                         options.BoundedByteLimit = boundedBytes;
                         break;
                     case "--summary-json":
-                        if (!string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase))
-                            throw new ArgumentException("--summary-json is only valid for vfs-profile");
+                        if (!string.Equals(args[0], "vfs-profile", StringComparison.OrdinalIgnoreCase)
+                            && !string.Equals(args[0], "vfs-inner-audit", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("--summary-json is only valid for vfs-profile or vfs-inner-audit");
                         options.SummaryOutput = value ?? NextValue(args, ref i, token);
                         break;
                     case "--include-deferred-voice":
@@ -1485,6 +1821,30 @@ namespace AnimeStudio.CLI
                         "          Prefix/suffix bound (1..4096). [default: 64]",
                         "      --include-deferred-voice",
                         "          Include English, Japanese, and Korean voice blocks (normally excluded).",
+                        "  -h, --help",
+                        "          Print help");
+                    break;
+                case "vfs-inner-audit":
+                    PrintHelpLines(
+                        $"Usage: {executable} vfs-inner-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
+                        "",
+                        "Strictly audit nested Endfield VFS containers in InitBundle and Bundle logical files.",
+                        "The command verifies inner header/block framing, exact decompression, directory bounds, names, overlap, duplicates, and exact node reads.",
+                        "It does not parse Unity object payload semantics.",
+                        "",
+                        "Options:",
+                        "  -s, --streaming-assets <PRIMARY_ASSETS>",
+                        "          Primary VFS root (Persistent may be supplied here).",
+                        "      --fallback-assets <FALLBACK_ASSETS>",
+                        "          Optional fallback VFS root (StreamingAssets may be supplied here).",
+                        "  -o, --output <OUTPUT>",
+                        "          [default: ./vfs_inner_audit_ledger.jsonl.gz]",
+                        "      --summary-json <OUTPUT>",
+                        "          [default: <OUTPUT>.summary.json]",
+                        "  -b, --block-type <BLOCK_TYPE>",
+                        "          Repeatable; only initial-bundle and bundle are accepted.",
+                        "      --file-regex <REGEX>",
+                        "          Repeatable logical-path filter used for deterministic focused audits.",
                         "  -h, --help",
                         "          Print help");
                     break;
