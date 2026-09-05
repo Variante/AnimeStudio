@@ -124,6 +124,16 @@
       },
       "additionalProperties": false
     },
+    "fieldEntry": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "string" },
+        { "enum": ["s", "i", "u", "b", "f", "d"] },
+        {}
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
     "object": {
       "type": "object",
       "required": ["schemaVersion", "recordType", "object", "classId", "type", "decodeStatus", "scalars", "pptrs"],
@@ -148,6 +158,12 @@
             "maxItems": 3
           }
         },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fieldEntry" }
+        },
+        "fieldsStatus": { "enum": ["decoded", "partial", "unavailable"] },
+        "fieldsTruncated": { "type": "boolean" },
         "pptrs": { "type": "array", "items": { "$ref": "#/$defs/pptr" } },
         "opaque": {
           "type": "object",

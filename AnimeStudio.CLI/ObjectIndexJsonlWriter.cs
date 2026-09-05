@@ -22,7 +22,9 @@ namespace AnimeStudio.CLI
     {
         private const int SchemaVersion = 1;
         private const int MaxScalarCount = 256;
+        private const int MaxFieldCount = 4096;
         private const int MaxIdentifierLength = 160;
+        private const int MaxFieldValueLength = 4096;
         private const int MaxRecordedErrors = 100;
 
         private static readonly Regex IdentifierPattern = new Regex(
@@ -49,8 +51,10 @@ namespace AnimeStudio.CLI
         private long schemaCount;
         private long monoScriptCount;
         private long scalarCount;
+        private long fieldCount;
         private long pptrCount;
         private long truncatedScalarObjectCount;
+        private long truncatedFieldObjectCount;
         private long errorCount;
         private bool completed;
         private bool disposed;
@@ -137,6 +141,18 @@ namespace AnimeStudio.CLI
                 var scalars = new List<object>();
                 var scalarTruncated = false;
                 CollectScalars(payload, "$", scalars, ref scalarTruncated);
+                var fields = new List<object>();
+                var fieldsTruncated = false;
+                if (!string.Equals(NormalizeDecodeStatus(decodeStatus), "metadata_only", StringComparison.Ordinal))
+                {
+                    CollectScalars(
+                        payload,
+                        "$",
+                        fields,
+                        ref fieldsTruncated,
+                        includeAllScalars: true
+                    );
+                }
                 var pptrs = CollectNonNullPPtrs(metadata);
 
                 var row = new OrderedDictionary
@@ -153,6 +169,12 @@ namespace AnimeStudio.CLI
                     { "typeTreeSource", GetMetadataString(metadata, "typeTreeSource") },
                     { "schemaId", schemaId },
                     { "scalars", scalars },
+                    { "fields", fields },
+                    { "fieldsStatus", string.Equals(NormalizeDecodeStatus(decodeStatus), "metadata_only", StringComparison.Ordinal)
+                        ? "unavailable"
+                        : string.Equals(NormalizeDecodeStatus(decodeStatus), "partial", StringComparison.Ordinal)
+                            ? "partial"
+                            : "decoded" },
                     { "pptrs", pptrs },
                     { "opaque", new OrderedDictionary
                         {
@@ -188,9 +210,15 @@ namespace AnimeStudio.CLI
                     row["scalarsTruncated"] = true;
                     truncatedScalarObjectCount++;
                 }
+                if (fieldsTruncated)
+                {
+                    row["fieldsTruncated"] = true;
+                    truncatedFieldObjectCount++;
+                }
                 WriteRow(row);
                 objectCount++;
                 scalarCount += scalars.Count;
+                fieldCount += fields.Count;
                 pptrCount += pptrs.Count;
             }
         }
@@ -324,8 +352,10 @@ namespace AnimeStudio.CLI
                             { "schemas", schemaCount },
                             { "monoScripts", monoScriptCount },
                             { "scalars", scalarCount },
+                            { "fields", fieldCount },
                             { "pptrs", pptrCount },
                             { "objectsWithTruncatedScalars", truncatedScalarObjectCount },
+                            { "objectsWithTruncatedFields", truncatedFieldObjectCount },
                             { "errors", errorCount },
                             { "suppressedErrors", Math.Max(0, errorCount - errors.Count) },
                         }
@@ -514,14 +544,16 @@ namespace AnimeStudio.CLI
             object value,
             string path,
             List<object> result,
-            ref bool truncated
+            ref bool truncated,
+            bool includeAllScalars = false
         )
         {
             if (value == null || truncated)
             {
                 return;
             }
-            if (result.Count >= MaxScalarCount)
+            var maxCount = includeAllScalars ? MaxFieldCount : MaxScalarCount;
+            if (result.Count >= maxCount)
             {
                 truncated = true;
                 return;
@@ -529,7 +561,18 @@ namespace AnimeStudio.CLI
 
             if (value is string stringValue)
             {
-                if (stringValue.Length > 0
+                if (includeAllScalars)
+                {
+                    if (stringValue.Length <= MaxFieldValueLength)
+                    {
+                        result.Add(new object[] { path, "s", stringValue });
+                    }
+                    else
+                    {
+                        truncated = true;
+                    }
+                }
+                else if (stringValue.Length > 0
                     && stringValue.Length <= MaxIdentifierLength
                     && IdentifierPattern.IsMatch(stringValue))
                 {
@@ -539,21 +582,45 @@ namespace AnimeStudio.CLI
             }
             if (value is bool booleanValue)
             {
-                if (IsIdentityIntegerPath(path))
+                if (includeAllScalars || IsIdentityIntegerPath(path))
                 {
                     result.Add(new object[] { path, "b", booleanValue });
                 }
                 return;
             }
-            if (value is float || value is double || value is decimal || value is byte[])
+            if (value is byte[])
             {
+                return;
+            }
+            if (value is float floatValue)
+            {
+                if (includeAllScalars && !float.IsNaN(floatValue) && !float.IsInfinity(floatValue))
+                {
+                    result.Add(new object[] { path, "f", floatValue });
+                }
+                return;
+            }
+            if (value is double doubleValue)
+            {
+                if (includeAllScalars && !double.IsNaN(doubleValue) && !double.IsInfinity(doubleValue))
+                {
+                    result.Add(new object[] { path, "f", doubleValue });
+                }
+                return;
+            }
+            if (value is decimal decimalValue)
+            {
+                if (includeAllScalars)
+                {
+                    result.Add(new object[] { path, "d", decimalValue });
+                }
                 return;
             }
             if (TryConvertInteger(value, out var integerValue))
             {
-                if (!IsZeroInteger(integerValue) && IsIdentityIntegerPath(path))
+                if (includeAllScalars || (!IsZeroInteger(integerValue) && IsIdentityIntegerPath(path)))
                 {
-                    result.Add(new object[] { path, "i", integerValue });
+                    result.Add(new object[] { path, includeAllScalars && IsUnsignedInteger(value) ? "u" : "i", integerValue });
                 }
                 return;
             }
@@ -571,7 +638,7 @@ namespace AnimeStudio.CLI
                     {
                         continue;
                     }
-                    CollectScalars(entry.Value, $"{path}.{key}", result, ref truncated);
+                    CollectScalars(entry.Value, $"{path}.{key}", result, ref truncated, includeAllScalars);
                     if (truncated)
                     {
                         return;
@@ -585,7 +652,7 @@ namespace AnimeStudio.CLI
                 var index = 0;
                 foreach (var item in enumerable)
                 {
-                    CollectScalars(item, $"{path}[{index++}]", result, ref truncated);
+                    CollectScalars(item, $"{path}[{index++}]", result, ref truncated, includeAllScalars);
                     if (truncated)
                     {
                         return;
@@ -709,6 +776,8 @@ namespace AnimeStudio.CLI
             ulong number => number == 0,
             _ => false,
         };
+
+        private static bool IsUnsignedInteger(object value) => value is byte || value is ushort || value is uint || value is ulong;
 
         private static bool TryGetDictionaryInt64(IDictionary dictionary, string key, out long value)
         {
