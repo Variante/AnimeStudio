@@ -19,6 +19,7 @@ static class Program
         {
             return RunLuaSweep(args[1], args[2]);
         }
+        TestTexture2DNativeMipLayout();
         TestEnemySettlementBattleGraphPayload();
         TestObservedEnemySettlementBattleGraphVariants();
         TestEnemySettlementBattleGraphPayloadRejectsTrailingBytes();
@@ -59,6 +60,100 @@ static class Program
         EndfieldAkpkTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
+    }
+
+    private static void TestTexture2DNativeMipLayout()
+    {
+        const int clothNormalPayloadLength = 5_592_432;
+        AssertEqual(
+            true,
+            Texture2DNativeMipLayout.TryCreate(
+                TextureFormat.BC5,
+                2048,
+                2048,
+                12,
+                0,
+                1,
+                2,
+                clothNormalPayloadLength,
+                out var bc5Mips),
+            "BC5 native mip layout support");
+        AssertEqual(12, bc5Mips.Count, "BC5 native mip count");
+        AssertEqual(4_194_304, bc5Mips[0].ByteSize, "BC5 first mip block bytes");
+        AssertEqual(4_194_304, bc5Mips[1].Offset, "BC5 second mip offset");
+        AssertEqual(16, bc5Mips[^1].ByteSize, "BC5 terminal 1x1 block bytes");
+        AssertEqual(clothNormalPayloadLength, bc5Mips[^1].Offset + bc5Mips[^1].ByteSize, "BC5 exact payload end");
+
+        AssertEqual(
+            true,
+            Texture2DNativeMipLayout.TryCreate(
+                TextureFormat.BC7,
+                3,
+                5,
+                1,
+                0,
+                1,
+                2,
+                32,
+                out var bc7OddDimensions),
+            "BC7 shared block layout support");
+        AssertEqual(32, bc7OddDimensions[0].ByteSize, "BC7 rounded-up block dimensions");
+        AssertEqual(
+            true,
+            Texture2DNativeMipLayout.TryCreate(
+                TextureFormat.BC5,
+                1,
+                1,
+                1,
+                0,
+                1,
+                2,
+                16,
+                out var onePixel),
+            "BC5 minimum block layout");
+        AssertEqual(16, onePixel[0].ByteSize, "BC5 minimum block bytes");
+        AssertEqual(
+            false,
+            Texture2DNativeMipLayout.TryCreate(
+                TextureFormat.RGBA32,
+                4,
+                4,
+                1,
+                0,
+                1,
+                2,
+                64,
+                out _),
+            "unsupported native mip format remains unvalidated");
+
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 12, 0, 1, 2, clothNormalPayloadLength - 1, out _),
+            "totals 5592432 bytes",
+            "BC5 truncated payload rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 12, 0, 1, 2, clothNormalPayloadLength + 1, out _),
+            "payload has 5592433 bytes",
+            "BC5 trailing payload rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 0, 2048, 12, 0, 1, 2, clothNormalPayloadLength, out _),
+            "positive",
+            "BC5 invalid dimensions rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 13, 0, 1, 2, clothNormalPayloadLength, out _),
+            "exceeds the 12-level chain",
+            "BC5 excessive mip count rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 12, 1, 1, 2, clothNormalPayloadLength, out _),
+            "unstripped",
+            "BC5 stripped mip rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 12, 0, 2, 2, clothNormalPayloadLength, out _),
+            "single-image",
+            "BC5 multiple-image rejection");
+        AssertThrowsWithMessage<InvalidDataException>(
+            () => Texture2DNativeMipLayout.TryCreate(TextureFormat.BC5, 2048, 2048, 12, 0, 1, 3, clothNormalPayloadLength, out _),
+            "single-image",
+            "BC5 non-2D rejection");
     }
 
     private static int RunLuaSweep(string inputPath, string outputPath)

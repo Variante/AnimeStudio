@@ -307,9 +307,12 @@ namespace AnimeStudio.CLI
             Texture2D texture,
             string exportPath)
         {
-            var extension = texture.m_TextureFormat == TextureFormat.BC7
-                ? ".texture2d.bc7"
-                : ".texture2d.raw";
+            var extension = texture.m_TextureFormat switch
+            {
+                TextureFormat.BC5 => ".texture2d.bc5",
+                TextureFormat.BC7 => ".texture2d.bc7",
+                _ => ".texture2d.raw",
+            };
             if (!TryExportFile(exportPath, item, extension, out var payloadPath))
             {
                 throw new IOException(
@@ -319,39 +322,41 @@ namespace AnimeStudio.CLI
             var payload = texture.image_data.GetData();
             var mipCount = Math.Max(1, texture.m_MipCount);
             var mipDimensions = new List<object>();
-            var payloadOffset = 0;
-            var layoutValidated =
-                texture.m_TextureFormat == TextureFormat.BC7
-                && texture.m_ImageCount == 1
-                && texture.m_TextureDimension == 2
-                && texture.m_MipsStripped == 0;
+            var shouldValidateLayout =
+                texture.m_TextureFormat == TextureFormat.BC5
+                || (texture.m_TextureFormat == TextureFormat.BC7
+                    && texture.m_ImageCount == 1
+                    && texture.m_TextureDimension == 2
+                    && texture.m_MipsStripped == 0);
+            var layoutValidated = false;
+            IReadOnlyList<Texture2DMipRange> validatedMipRanges = Array.Empty<Texture2DMipRange>();
+            if (shouldValidateLayout)
+            {
+                layoutValidated = Texture2DNativeMipLayout.TryCreate(
+                    texture.m_TextureFormat,
+                    texture.m_Width,
+                    texture.m_Height,
+                    texture.m_TextureFormat == TextureFormat.BC5 ? texture.m_MipCount : mipCount,
+                    texture.m_MipsStripped,
+                    texture.m_ImageCount,
+                    texture.m_TextureDimension,
+                    payload.Length,
+                    out validatedMipRanges);
+            }
             for (var mip = 0; mip < mipCount; mip++)
             {
                 var width = Math.Max(1, texture.m_Width >> mip);
                 var height = Math.Max(1, texture.m_Height >> mip);
-                int? byteSize = null;
-                if (texture.m_TextureFormat == TextureFormat.BC7)
-                {
-                    byteSize = GetBC7MipByteSize(width, height);
-                }
+                var hasValidatedRange = layoutValidated && mip < validatedMipRanges.Count;
+                int? byteSize = hasValidatedRange ? validatedMipRanges[mip].ByteSize : null;
                 mipDimensions.Add(new
                 {
                     mip,
                     width,
                     height,
-                    offset = byteSize.HasValue ? payloadOffset : (int?)null,
+                    offset = hasValidatedRange ? validatedMipRanges[mip].Offset : (int?)null,
                     byteSize,
                 });
-                if (byteSize.HasValue)
-                {
-                    payloadOffset = checked(payloadOffset + byteSize.Value);
-                }
-            }
-            if (layoutValidated && payloadOffset != payload.Length)
-            {
-                throw new InvalidDataException(
-                    $"Texture2D {item.Text} ({item.m_PathID}) BC7 mip layout totals " +
-                    $"{payloadOffset} bytes, but the original resource payload has {payload.Length} bytes.");
             }
 
             File.WriteAllBytes(payloadPath, payload);
@@ -407,13 +412,6 @@ namespace AnimeStudio.CLI
             File.WriteAllText(
                 payloadPath + ".manifest.json",
                 JsonConvert.SerializeObject(manifest, Formatting.Indented));
-        }
-
-        private static int GetBC7MipByteSize(int width, int height)
-        {
-            var blocksWide = Math.Max(1, (width + 3) / 4);
-            var blocksHigh = Math.Max(1, (height + 3) / 4);
-            return checked(blocksWide * blocksHigh * 16);
         }
 
         private static int GetBC6HMipByteSize(int width, int height)
