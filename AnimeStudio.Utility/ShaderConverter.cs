@@ -670,7 +670,16 @@ namespace AnimeStudio
                     }
                     else if (target.Size != recoveredBuffer.Size)
                     {
-                        continue;
+                        // Shared parameters are a partial layout. A variant
+                        // can reserve a larger buffer while retaining those
+                        // shared fields; rejecting that extent drops every
+                        // variant-only field. Do not shrink a shared layout or
+                        // reconcile conflicting complete layouts this way.
+                        if (!target.IsPartialCB || recoveredBuffer.Size < target.Size)
+                        {
+                            continue;
+                        }
+                        target.Size = recoveredBuffer.Size;
                     }
 
                     var fieldsByName = target.MatrixParameters
@@ -2446,15 +2455,23 @@ namespace AnimeStudio
             }
             for (var resourceIndex = 0; resourceIndex < resourceCount; resourceIndex++)
             {
-                if (!TryReadAlignedString(record, ref offset, out _)
+                if (!TryReadAlignedString(record, ref offset, out var resourceName, allowEmpty: true)
                     || !TryReadUInt32(record, ref offset, out var resourceKind)
-                    || resourceKind > 1)
+                    || (resourceName.Length == 0 && resourceKind != 4))
                 {
                     return false;
                 }
-                // Including resourceKind, texture rows (kind 0) contain four
-                // uint32 words; constant-buffer rows (kind 1) contain three.
-                var remainingWordCount = resourceKind == 0 ? 3 : 2;
+                // Exact Endfield D3D11/Vulkan parameter records use four words
+                // for textures and three for CBs, buffers and sampler state.
+                // Only sampler state (kind 4) permits an unnamed row. Unknown
+                // kinds stay unsupported instead of guessing their width.
+                var remainingWordCount = resourceKind switch
+                {
+                    0 => 3,
+                    1 or 2 or 4 => 2,
+                    _ => -1,
+                };
+                if (remainingWordCount < 0) return false;
                 for (var wordIndex = 0; wordIndex < remainingWordCount; wordIndex++)
                 {
                     if (!TryReadUInt32(record, ref offset, out _))
@@ -2541,7 +2558,8 @@ namespace AnimeStudio
             return true;
         }
 
-        private static bool TryReadAlignedString(byte[] record, ref int offset, out string value)
+        private static bool TryReadAlignedString(byte[] record, ref int offset, out string value,
+            bool allowEmpty = false)
         {
             value = string.Empty;
             if (!TryReadInt32(record, ref offset, out var length)
@@ -2560,7 +2578,7 @@ namespace AnimeStudio
             {
                 return false;
             }
-            if (string.IsNullOrWhiteSpace(value)
+            if ((string.IsNullOrWhiteSpace(value) && !(allowEmpty && value.Length == 0))
                 || value.Any(ch => char.IsControl(ch)))
             {
                 return false;

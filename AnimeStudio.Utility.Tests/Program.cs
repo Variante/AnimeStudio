@@ -12,6 +12,8 @@ static class Program
         TestSpirVSnippetBoundsFailClosed();
         TestEndfieldConstantBufferTable();
         TestEndfieldConstantBufferTableFailsClosed();
+        TestEndfieldBufferAndSamplerResourceRows();
+        TestEndfieldPartialConstantBufferMetadata();
         TestShaderRecoveryContract();
         TestSpirvHlslEmitter();
         Console.WriteLine("Shader boundary synthetic tests passed.");
@@ -133,6 +135,85 @@ static class Program
         AssertEqual(1, output.Diagnostics.Count, "shader recovery diagnostics");
     }
 
+    private static void TestEndfieldBufferAndSamplerResourceRows()
+    {
+        var rows = new (string Name, uint Kind, uint[] Words)[]
+        {
+            ("_GlobalBinningBuffer", 2, new uint[] { 0x09000033, 1 }),
+            ("", 4, new uint[] { 0x0D000003, 84 }),
+        };
+        var valid = BuildEndfieldParameterRecord(0, 16, rows);
+        AssertEqual(true, EndfieldShaderParameterRecord.TryParse(valid, out var parsed), "buffer/sampler descriptor tail");
+        AssertEqual(true, parsed.ConstantBufferTableParsed, "buffer/sampler resource rows preserve CB table");
+        AssertEqual("_Matrix", parsed.ConstantBuffers[0].Fields[1].Name, "buffer/sampler retains named field");
+
+        foreach (var invalid in new (string Name, uint Kind, uint[] Words)[]
+        {
+            ("_Unknown", 3, new uint[] { 0, 0 }),
+            ("_Unknown", 5, new uint[] { 0, 0 }),
+            ("", 0, new uint[] { 0, 0, 0 }),
+            ("", 1, new uint[] { 0, 0 }),
+            ("", 2, new uint[] { 0, 0 }),
+            (" ", 4, new uint[] { 0, 0 }),
+            ("_Buffer", 2, new uint[] { 0 }),
+            ("", 4, new uint[] { 0 }),
+            ("_Buffer", 2, new uint[] { 0, 0, 0 }),
+        })
+        {
+            var record = BuildEndfieldParameterRecord(0, 16, new[] { invalid });
+            AssertEqual(true, EndfieldShaderParameterRecord.TryParse(record, out var rejected), "malformed resource preserves descriptor diagnostic");
+            AssertEqual(false, rejected.ConstantBufferTableParsed, $"malformed resource fails closed: {invalid.Name}/{invalid.Kind}/{invalid.Words.Length}");
+            AssertEqual(0, rejected.ConstantBuffers.Count, "malformed resource does not publish CBs");
+        }
+    }
+
+    private static void TestEndfieldPartialConstantBufferMetadata()
+    {
+        foreach (var (partial, variantSize, expectedSize, expectedFields) in new[]
+        {
+            (true, 448, 448, 2),
+            (false, 448, 400, 1),
+            (true, 320, 400, 1),
+        })
+        {
+            var common = (SerializedProgramParameters)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SerializedProgramParameters));
+            var cb = (ConstantBuffer)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ConstantBuffer));
+            var field = (VectorParameter)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(VectorParameter));
+            field.m_NameIndex = 1; field.m_Index = 0; field.m_Dim = 4;
+            cb.m_NameIndex = 0; cb.m_Size = 400; cb.m_IsPartialCB = partial;
+            cb.m_VectorParams = new List<VectorParameter> { field };
+            common.m_ConstantBuffers = new List<ConstantBuffer> { cb };
+            var record = new EndfieldShaderParameterRecord
+            {
+                ConstantBufferTableParsed = true,
+                ConstantBuffers = new List<EndfieldShaderConstantBuffer> { new()
+                {
+                    Name = "UnityPerMaterial", Size = variantSize,
+                    Fields = new List<EndfieldShaderConstantBufferField> { new()
+                    { Name = "_Variant", ByteOffset = 288, RowCount = 1, ColumnCount = 4 } },
+                } },
+                DescriptorSets = new List<EndfieldShaderParameterSet>(),
+            };
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var context = typeof(ShaderConverter).GetField("s_currentExportContext", flags)!;
+            var previous = context.GetValue(null);
+            try
+            {
+                context.SetValue(null, new ShaderConverter.ShaderExportContext("synthetic", null));
+                var method = typeof(ShaderConverter).GetMethod("BuildShaderRecoveryMetadataJson", flags)!;
+                var json = (string)method.Invoke(null, new object?[] { common, null, record, (uint)25,
+                    new List<KeyValuePair<string,int>> { new("UnityPerMaterial", 0), new("_Common", 1) },
+                    0, 0, "ForwardLit", "vertex", 36, (uint)126, (ShaderGpuProgramType)33,
+                    "d3d11", -1, Array.Empty<string>(), Array.Empty<string>() })!;
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                var exported = doc.RootElement.GetProperty("ConstantBufferParameters")[0];
+                AssertEqual(expectedSize, exported.GetProperty("Size").GetInt32(), "partial CB exported extent");
+                AssertEqual(expectedFields, exported.GetProperty("VectorParameters").GetArrayLength(), "partial CB exported fields");
+            }
+            finally { context.SetValue(null, previous); }
+        }
+    }
+
     private static void TestSpirvHlslEmitter()
     {
         var words = new uint[]
@@ -159,7 +240,8 @@ static class Program
     }
 
 
-    private static byte[] BuildEndfieldParameterRecord(int structCount, int secondFieldOffset)
+    private static byte[] BuildEndfieldParameterRecord(int structCount, int secondFieldOffset,
+        (string Name, uint Kind, uint[] Words)[]? extraResources = null)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -173,7 +255,7 @@ static class Program
         WriteConstantField(writer, "_Matrix", 0, 4, 4, 0, 0, secondFieldOffset);
         writer.Write(structCount);
 
-        writer.Write(2);
+        writer.Write(2 + (extraResources?.Length ?? 0));
         WriteAlignedString(writer, "_MainTex");
         writer.Write(0u);
         writer.Write(1u);
@@ -183,6 +265,12 @@ static class Program
         writer.Write(1u);
         writer.Write(4u);
         writer.Write(5u);
+        foreach (var resource in extraResources ?? Array.Empty<(string Name, uint Kind, uint[] Words)>())
+        {
+            WriteAlignedString(writer, resource.Name);
+            writer.Write(resource.Kind);
+            foreach (var word in resource.Words) writer.Write(word);
+        }
 
         writer.Write(1);
         WriteAlignedString(writer, "Global");
