@@ -537,6 +537,16 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
+                if (objectType == 7)
+                {
+                    RecordType7BodyFrame(
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
+                        structure.Version,
+                        bankId,
+                        ordinal,
+                        objectId,
+                        structure);
+                }
                 if (objectType == 4)
                 {
                     RecordType4U32VectorFrame(
@@ -978,7 +988,72 @@ namespace AnimeStudio.Endfield
 
             if (structure.Type2BodyFailureExamples.Count < 8)
             {
-                structure.Type2BodyFailureExamples.Add(new EndfieldHircType2BodyFrameExample
+                structure.Type2BodyFailureExamples.Add(new EndfieldHircBodyFrameExample
+                {
+                    BankId = bankId,
+                    Ordinal = ordinal,
+                    ObjectId = objectId,
+                    Status = result.Status,
+                    Category = result.Category,
+                    CursorOffset = result.CursorOffset,
+                    ExpectedBytes = result.ExpectedBytes,
+                    ActualBytes = result.ActualBytes,
+                });
+            }
+        }
+
+        private static void RecordType7BodyFrame(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            var result = FrameType7Body(body, bankVersion);
+            structure.Type7BodyFrameCount = checked(structure.Type7BodyFrameCount + 1);
+            structure.Type7BodyBytes = checked(structure.Type7BodyBytes + (uint)body.Length);
+            if (result.Status == "exact")
+            {
+                structure.Type7BodyExactCount = checked(structure.Type7BodyExactCount + 1);
+                structure.Type7BodyExactCursorBytes = checked(
+                    structure.Type7BodyExactCursorBytes + (uint)result.CursorOffset);
+                structure.Type7BodyMinExactBytes = structure.Type7BodyExactCount == 1
+                    ? (uint)result.CursorOffset
+                    : Math.Min(structure.Type7BodyMinExactBytes, (uint)result.CursorOffset);
+                structure.Type7BodyMaxExactBytes = Math.Max(
+                    structure.Type7BodyMaxExactBytes, (uint)result.CursorOffset);
+                foreach (var pair in result.GroupCounts)
+                {
+                    structure.Type7BodyGroupCounts.TryGetValue(pair.Key, out var groupTotal);
+                    structure.Type7BodyGroupCounts[pair.Key] = checked(groupTotal + pair.Value);
+                }
+                foreach (var pair in result.SelectorCounts)
+                {
+                    structure.Type7BodySelectorCounts.TryGetValue(pair.Key, out var selectorTotal);
+                    structure.Type7BodySelectorCounts[pair.Key] = checked(selectorTotal + pair.Value);
+                }
+                return;
+            }
+
+            structure.Type7BodyNonExactBytes = checked(
+                structure.Type7BodyNonExactBytes + (uint)body.Length);
+            if (result.Status == "unsupported")
+            {
+                structure.Type7BodyUnsupportedCount = checked(structure.Type7BodyUnsupportedCount + 1);
+                structure.Type7BodyUnsupportedCategories.TryGetValue(result.Category, out var unsupported);
+                structure.Type7BodyUnsupportedCategories[result.Category] = checked(unsupported + 1);
+            }
+            else
+            {
+                structure.Type7BodyFailedCount = checked(structure.Type7BodyFailedCount + 1);
+                structure.Type7BodyFailureCounts.TryGetValue(result.Category, out var failed);
+                structure.Type7BodyFailureCounts[result.Category] = checked(failed + 1);
+            }
+
+            if (structure.Type7BodyFailureExamples.Count < 8)
+            {
+                structure.Type7BodyFailureExamples.Add(new EndfieldHircBodyFrameExample
                 {
                     BankId = bankId,
                     Ordinal = ordinal,
@@ -994,13 +1069,13 @@ namespace AnimeStudio.Endfield
 
         // Anonymous group framing for numeric HIRC type 0x02 bodies. Group letters are
         // deliberate: the corpus proves byte extents, not field ownership or meaning.
-        internal static EndfieldHircType2BodyFrameResult FrameType2Body(
+        internal static EndfieldHircBodyFrameResult FrameType2Body(
             ReadOnlySpan<byte> body,
             uint? bankVersion)
         {
             if (bankVersion != 150)
             {
-                return Type2BodyOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
             }
 
             var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
@@ -1008,304 +1083,381 @@ namespace AnimeStudio.Endfield
             var cursor = 0;
 
             // Bounded 14-byte source prefix; plugin kind 2 adds a checked length-prefixed range.
-            if (!Type2Take(body, ref cursor, 4, out var failure, "prefixPluginId"))
+            if (!HircTake(body, ref cursor, 4, out var failure, "prefixPluginId"))
             {
                 return failure;
             }
             var pluginId = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
-            if (!Type2Take(body, ref cursor, 10, out failure, "prefixSourceInfo"))
+            if (!HircTake(body, ref cursor, 10, out failure, "prefixSourceInfo"))
             {
                 return failure;
             }
             if ((pluginId & 0x0F) == 2 && pluginId != 0)
             {
-                if (!Type2ReadUInt32(body, ref cursor, out var parameterLength, out failure, "prefixParamLength"))
+                if (!HircReadUInt32(body, ref cursor, out var parameterLength, out failure, "prefixParamLength"))
                 {
                     return failure;
                 }
                 if (parameterLength > (uint)(body.Length - cursor))
                 {
-                    return Type2BodyOutcome(
+                    return HircFrameOutcome(
                         "failed", "range_prefixParams", cursor, parameterLength, body.Length - cursor);
                 }
                 cursor = checked(cursor + (int)parameterLength);
-                Type2Bump(groups, "prefixParamBytes", parameterLength);
+                HircBump(groups, "prefixParamBytes", parameterLength);
             }
 
-            // Group A: one flag byte, one count byte, an optional shared mask byte and
-            // count fixed-width slots.
-            if (!Type2ReadByte(body, ref cursor, out var groupAFlag, out failure, "groupAFlag"))
-            {
-                return failure;
-            }
-            Type2Bump(selectors, $"groupAFlag_{groupAFlag:X2}", 1);
-            if (!Type2ReadByte(body, ref cursor, out var groupACount, out failure, "groupACount"))
-            {
-                return failure;
-            }
-            if (groupACount > 0)
-            {
-                if (!Type2Take(body, ref cursor, 1, out failure, "groupAMask"))
-                {
-                    return failure;
-                }
-                if (!Type2Take(body, ref cursor, groupACount * 6, out failure, "groupAEntries"))
-                {
-                    return failure;
-                }
-            }
-            Type2Bump(groups, "groupAEntries", groupACount);
-
-            // Group B: one flag byte and one count byte. The current corpus never carries a
-            // nonempty vector, so its element width is unresolved and must fail closed.
-            if (!Type2ReadByte(body, ref cursor, out var groupBFlag, out failure, "groupBFlag"))
-            {
-                return failure;
-            }
-            Type2Bump(selectors, $"groupBFlag_{groupBFlag:X2}", 1);
-            if (!Type2ReadByte(body, ref cursor, out var groupBCount, out failure, "groupBCount"))
-            {
-                return failure;
-            }
-            if (groupBCount > 0)
-            {
-                return Type2BodyOutcome(
-                    "unsupported", "unsupported_groupB_nonempty", cursor - 1, 0, groupBCount);
-            }
-
-            if (!Type2Take(body, ref cursor, 9, out failure, "anonymousScalars"))
-            {
-                return failure;
-            }
-
-            // Group C: count, count one-byte keys, count four-byte values.
-            if (!Type2ReadByte(body, ref cursor, out var groupCCount, out failure, "groupCCount"))
-            {
-                return failure;
-            }
-            if (!Type2Take(body, ref cursor, groupCCount * 5, out failure, "groupCEntries"))
-            {
-                return failure;
-            }
-            Type2Bump(groups, "groupCEntries", groupCCount);
-
-            // Group D: count, count one-byte keys, count eight-byte values.
-            if (!Type2ReadByte(body, ref cursor, out var groupDCount, out failure, "groupDCount"))
-            {
-                return failure;
-            }
-            if (!Type2Take(body, ref cursor, groupDCount * 9, out failure, "groupDEntries"))
-            {
-                return failure;
-            }
-            Type2Bump(groups, "groupDEntries", groupDCount);
-
-            if (!FrameType2GroupE(body, ref cursor, groups, selectors, out failure))
-            {
-                return failure;
-            }
-            if (!FrameType2GroupF(body, ref cursor, selectors, out failure))
-            {
-                return failure;
-            }
-            if (!Type2Take(body, ref cursor, 6, out failure, "groupG"))
-            {
-                return failure;
-            }
-            if (!FrameType2GroupH(body, ref cursor, groups, out failure))
-            {
-                return failure;
-            }
-            if (!FrameType2GroupI(body, ref cursor, groups, out failure))
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out failure))
             {
                 return failure;
             }
 
             if (cursor != body.Length)
             {
-                return Type2BodyOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
             }
-            return new EndfieldHircType2BodyFrameResult
-            {
-                Status = "exact",
-                Category = "",
-                CursorOffset = cursor,
-                ExpectedBytes = body.Length,
-                ActualBytes = cursor,
-                GroupCounts = groups,
-                SelectorCounts = selectors,
-            };
+            return HircFrameExact(cursor, body.Length, groups, selectors);
         }
 
-        private static bool FrameType2GroupE(
+        // The nine anonymous groups are shared by every HIRC type whose body opens with
+        // this node frame. Extents are proven by whole-corpus exact closure; group
+        // letters carry no field ownership or meaning.
+        private static bool FrameHircNodeGroups(
             ReadOnlySpan<byte> body,
             ref int cursor,
             Dictionary<string, uint> groups,
             Dictionary<string, uint> selectors,
-            out EndfieldHircType2BodyFrameResult failure)
+            out EndfieldHircBodyFrameResult failure)
         {
-            if (!Type2ReadByte(body, ref cursor, out var bits, out failure, "groupESelector"))
+            // Group A: one flag byte, one count byte, an optional shared mask byte and
+            // count fixed-width slots.
+            if (!HircReadByte(body, ref cursor, out var groupAFlag, out failure, "groupAFlag"))
             {
                 return false;
             }
-            Type2Bump(selectors, $"groupESelector_{bits:X2}", 1);
-            var low = bits & 0x03;
-            if (low != 0x00 && low != 0x03)
+            HircBump(selectors, $"groupAFlag_{groupAFlag:X2}", 1);
+            if (!HircReadByte(body, ref cursor, out var groupACount, out failure, "groupACount"))
             {
-                // The corpus never separates the two low selector bits, so a body that sets
-                // exactly one of them cannot choose a branch.
-                failure = Type2BodyOutcome(
+                return false;
+            }
+            if (groupACount > 0)
+            {
+                if (!HircTake(body, ref cursor, 1, out failure, "groupAMask"))
+                {
+                    return false;
+                }
+                if (!HircTake(body, ref cursor, groupACount * 6, out failure, "groupAEntries"))
+                {
+                    return false;
+                }
+            }
+            HircBump(groups, "groupAEntries", groupACount);
+
+            // Group B: one flag byte and one count byte. No body in any framed HIRC type
+            // carries a nonempty vector, so its element width is unresolved and must fail
+            // closed rather than assume a width from an empty sample.
+            if (!HircReadByte(body, ref cursor, out var groupBFlag, out failure, "groupBFlag"))
+            {
+                return false;
+            }
+            HircBump(selectors, $"groupBFlag_{groupBFlag:X2}", 1);
+            if (!HircReadByte(body, ref cursor, out var groupBCount, out failure, "groupBCount"))
+            {
+                return false;
+            }
+            if (groupBCount > 0)
+            {
+                failure = HircFrameOutcome(
+                    "unsupported", "unsupported_groupB_nonempty", cursor - 1, 0, groupBCount);
+                return false;
+            }
+
+            if (!HircTake(body, ref cursor, 9, out failure, "anonymousScalars"))
+            {
+                return false;
+            }
+
+            // Group C: count, count one-byte keys, count four-byte values.
+            if (!HircReadByte(body, ref cursor, out var groupCCount, out failure, "groupCCount"))
+            {
+                return false;
+            }
+            if (!HircTake(body, ref cursor, groupCCount * 5, out failure, "groupCEntries"))
+            {
+                return false;
+            }
+            HircBump(groups, "groupCEntries", groupCCount);
+
+            // Group D: count, count one-byte keys, count eight-byte values.
+            if (!HircReadByte(body, ref cursor, out var groupDCount, out failure, "groupDCount"))
+            {
+                return false;
+            }
+            if (!HircTake(body, ref cursor, groupDCount * 9, out failure, "groupDEntries"))
+            {
+                return false;
+            }
+            HircBump(groups, "groupDEntries", groupDCount);
+
+            if (!FrameHircGroupE(body, ref cursor, groups, selectors, out failure))
+            {
+                return false;
+            }
+            if (!FrameHircGroupF(body, ref cursor, selectors, out failure))
+            {
+                return false;
+            }
+            if (!HircTake(body, ref cursor, 6, out failure, "groupG"))
+            {
+                return false;
+            }
+            if (!FrameHircGroupH(body, ref cursor, groups, out failure))
+            {
+                return false;
+            }
+            return FrameHircGroupI(body, ref cursor, groups, selectors, out failure);
+        }
+
+        private static EndfieldHircBodyFrameResult HircFrameExact(
+            int cursor,
+            int length,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors) => new()
+            {
+                Status = "exact",
+                Category = "",
+                CursorOffset = cursor,
+                ExpectedBytes = length,
+                ActualBytes = cursor,
+                GroupCounts = groups,
+                SelectorCounts = selectors,
+            };
+
+        // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
+        // counted vector of fixed-width anonymous references.
+        internal static EndfieldHircBodyFrameResult FrameType7Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var childCount, out failure, "childCount"))
+            {
+                return failure;
+            }
+            if (childCount > (uint)((body.Length - cursor) / 4))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_childEntries", cursor - 4, (body.Length - cursor) / 4, childCount);
+            }
+            cursor = checked(cursor + (int)childCount * 4);
+            HircBump(groups, "childEntries", childCount);
+
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        private static bool FrameHircGroupE(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            if (!HircReadByte(body, ref cursor, out var bits, out failure, "groupESelector"))
+            {
+                return false;
+            }
+            HircBump(selectors, $"groupESelector_{bits:X2}", 1);
+            var low = bits & 0x03;
+            if (low == 0x02)
+            {
+                // Selector bit 1 alone is never observed, so this body cannot choose a
+                // branch: bit-1-only and both-bits-set remain indistinguishable predicates.
+                failure = HircFrameOutcome(
                     "unsupported", "unsupported_groupE_selector", cursor - 1, 0x03, low);
                 return false;
             }
-            if (low == 0x00)
+            if ((low & 0x02) == 0)
             {
+                // Selector 0x01 bodies carry no extension, which rules out a bit-0 predicate.
                 return true;
             }
-            if (!Type2Take(body, ref cursor, 1, out failure, "groupEFlags"))
+            if (!HircTake(body, ref cursor, 1, out failure, "groupEFlags"))
             {
                 return false;
             }
             var branch = (bits >> 5) & 0x03;
-            Type2Bump(selectors, $"groupEBranch_{branch}", 1);
+            HircBump(selectors, $"groupEBranch_{branch}", 1);
             if (branch == 0)
             {
                 return true;
             }
             if (branch == 3)
             {
-                failure = Type2BodyOutcome(
+                failure = HircFrameOutcome(
                     "unsupported", "unsupported_groupE_branch", cursor - 2, 2, branch);
                 return false;
             }
-            if (!Type2Take(body, ref cursor, 5, out failure, "groupEBranchHeader"))
+            if (!HircTake(body, ref cursor, 5, out failure, "groupEBranchHeader"))
             {
                 return false;
             }
-            if (!Type2ReadUInt32(body, ref cursor, out var vertexCount, out failure, "groupEVertexCount"))
+            if (!HircReadUInt32(body, ref cursor, out var vertexCount, out failure, "groupEVertexCount"))
             {
                 return false;
             }
             if (vertexCount > (uint)((body.Length - cursor) / 16))
             {
-                failure = Type2BodyOutcome(
+                failure = HircFrameOutcome(
                     "failed", "range_groupEVertices", cursor - 4, (body.Length - cursor) / 16, vertexCount);
                 return false;
             }
             cursor = checked(cursor + (int)vertexCount * 16);
-            if (!Type2ReadUInt32(body, ref cursor, out var itemCount, out failure, "groupEItemCount"))
+            if (!HircReadUInt32(body, ref cursor, out var itemCount, out failure, "groupEItemCount"))
             {
                 return false;
             }
             if (itemCount > (uint)((body.Length - cursor) / 20))
             {
-                failure = Type2BodyOutcome(
+                failure = HircFrameOutcome(
                     "failed", "range_groupEItems", cursor - 4, (body.Length - cursor) / 20, itemCount);
                 return false;
             }
             cursor = checked(cursor + (int)itemCount * 20);
-            Type2Bump(groups, "groupEVertices", vertexCount);
-            Type2Bump(groups, "groupEItems", itemCount);
+            HircBump(groups, "groupEVertices", vertexCount);
+            HircBump(groups, "groupEItems", itemCount);
             return true;
         }
 
-        private static bool FrameType2GroupF(
+        private static bool FrameHircGroupF(
             ReadOnlySpan<byte> body,
             ref int cursor,
             Dictionary<string, uint> selectors,
-            out EndfieldHircType2BodyFrameResult failure)
+            out EndfieldHircBodyFrameResult failure)
         {
-            if (!Type2ReadByte(body, ref cursor, out var bits, out failure, "groupFSelector"))
+            if (!HircReadByte(body, ref cursor, out var bits, out failure, "groupFSelector"))
             {
                 return false;
             }
-            Type2Bump(selectors, $"groupFSelector_{bits:X2}", 1);
-            if ((bits & 0x08) != 0 && !Type2Take(body, ref cursor, 16, out failure, "groupFBlock"))
+            HircBump(selectors, $"groupFSelector_{bits:X2}", 1);
+            if ((bits & 0x08) != 0 && !HircTake(body, ref cursor, 16, out failure, "groupFBlock"))
             {
                 return false;
             }
-            return Type2Take(body, ref cursor, 4, out failure, "groupFScalar");
+            return HircTake(body, ref cursor, 4, out failure, "groupFScalar");
         }
 
-        private static bool FrameType2GroupH(
+        private static bool FrameHircGroupH(
             ReadOnlySpan<byte> body,
             ref int cursor,
             Dictionary<string, uint> groups,
-            out EndfieldHircType2BodyFrameResult failure)
+            out EndfieldHircBodyFrameResult failure)
         {
-            if (!Type2ReadByte(body, ref cursor, out var propCount, out failure, "groupHPropCount"))
+            if (!HircReadByte(body, ref cursor, out var propCount, out failure, "groupHPropCount"))
             {
                 return false;
             }
-            if (!Type2Take(body, ref cursor, propCount * 3, out failure, "groupHProps"))
+            if (!HircTake(body, ref cursor, propCount * 3, out failure, "groupHProps"))
             {
                 return false;
             }
-            Type2Bump(groups, "groupHProps", propCount);
-            if (!Type2ReadByte(body, ref cursor, out var groupCount, out failure, "groupHGroupCount"))
+            HircBump(groups, "groupHProps", propCount);
+            if (!HircReadByte(body, ref cursor, out var groupCount, out failure, "groupHGroupCount"))
             {
                 return false;
             }
-            Type2Bump(groups, "groupHGroups", groupCount);
+            HircBump(groups, "groupHGroups", groupCount);
             for (var i = 0; i < groupCount; i++)
             {
-                if (!Type2Take(body, ref cursor, 5, out failure, "groupHGroupHeader"))
+                if (!HircTake(body, ref cursor, 5, out failure, "groupHGroupHeader"))
                 {
                     return false;
                 }
-                if (!Type2ReadByte(body, ref cursor, out var stateCount, out failure, "groupHStateCount"))
+                if (!HircReadByte(body, ref cursor, out var stateCount, out failure, "groupHStateCount"))
                 {
                     return false;
                 }
-                if (!Type2Take(body, ref cursor, stateCount * 12, out failure, "groupHStates"))
+                if (!HircTake(body, ref cursor, stateCount * 12, out failure, "groupHStates"))
                 {
                     return false;
                 }
-                Type2Bump(groups, "groupHStates", stateCount);
+                HircBump(groups, "groupHStates", stateCount);
             }
             return true;
         }
 
-        private static bool FrameType2GroupI(
+        private static bool FrameHircGroupI(
             ReadOnlySpan<byte> body,
             ref int cursor,
             Dictionary<string, uint> groups,
-            out EndfieldHircType2BodyFrameResult failure)
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
         {
-            if (!Type2ReadUInt16(body, ref cursor, out var entryCount, out failure, "groupICount"))
+            if (!HircReadUInt16(body, ref cursor, out var entryCount, out failure, "groupICount"))
             {
                 return false;
             }
             if (entryCount > (body.Length - cursor) / 14)
             {
-                failure = Type2BodyOutcome(
+                failure = HircFrameOutcome(
                     "failed", "range_groupIEntries", cursor - 2, (body.Length - cursor) / 14, entryCount);
                 return false;
             }
-            Type2Bump(groups, "groupIEntries", entryCount);
+            HircBump(groups, "groupIEntries", entryCount);
             for (var i = 0; i < entryCount; i++)
             {
-                if (!Type2Take(body, ref cursor, 12, out failure, "groupIEntryHeader"))
+                if (!HircTake(body, ref cursor, 6, out failure, "groupIEntryHead"))
                 {
                     return false;
                 }
-                if (!Type2ReadUInt16(body, ref cursor, out var pointCount, out failure, "groupIPointCount"))
+                // One anonymous variable-size key. Type 0x02 bodies only ever spend one
+                // byte here, so a fixed width survived that corpus; type 0x07 bodies
+                // carry continued values and disprove it.
+                var keyStart = cursor;
+                if (!HircReadVariableSize(body, ref cursor, out _, out failure, "groupIKey"))
+                {
+                    return false;
+                }
+                // Publish the observed width histogram: the five-byte cap and the 32-bit
+                // range are inherited policy, so a reader must be able to audit how wide
+                // this corpus actually goes.
+                HircBump(groups, "groupIKeyBytes", (uint)(cursor - keyStart));
+                HircBump(selectors, $"groupIKeyWidth_{cursor - keyStart}", 1);
+                if (!HircTake(body, ref cursor, 5, out failure, "groupIEntryTail"))
+                {
+                    return false;
+                }
+                if (!HircReadUInt16(body, ref cursor, out var pointCount, out failure, "groupIPointCount"))
                 {
                     return false;
                 }
                 if (pointCount > (body.Length - cursor) / 12)
                 {
-                    failure = Type2BodyOutcome(
+                    failure = HircFrameOutcome(
                         "failed", "range_groupIPoints", cursor - 2, (body.Length - cursor) / 12, pointCount);
                     return false;
                 }
                 cursor = checked(cursor + pointCount * 12);
-                Type2Bump(groups, "groupIPoints", pointCount);
+                HircBump(groups, "groupIPoints", pointCount);
             }
             return true;
         }
 
-        private static void Type2Bump(Dictionary<string, uint> counters, string key, uint value)
+        private static void HircBump(Dictionary<string, uint> counters, string key, uint value)
         {
             if (value == 0 && !counters.ContainsKey(key))
             {
@@ -1316,7 +1468,7 @@ namespace AnimeStudio.Endfield
             counters[key] = checked(current + value);
         }
 
-        private static EndfieldHircType2BodyFrameResult Type2BodyOutcome(
+        private static EndfieldHircBodyFrameResult HircFrameOutcome(
             string status,
             string category,
             int cursor,
@@ -1332,16 +1484,16 @@ namespace AnimeStudio.Endfield
                 SelectorCounts = new Dictionary<string, uint>(StringComparer.Ordinal),
             };
 
-        private static bool Type2Take(
+        private static bool HircTake(
             ReadOnlySpan<byte> body,
             ref int cursor,
             int length,
-            out EndfieldHircType2BodyFrameResult failure,
+            out EndfieldHircBodyFrameResult failure,
             string what)
         {
             if (length < 0 || body.Length - cursor < length)
             {
-                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, length, body.Length - cursor);
+                failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, length, body.Length - cursor);
                 return false;
             }
             cursor = checked(cursor + length);
@@ -1349,17 +1501,68 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
-        private static bool Type2ReadByte(
+        // Seven-bit continuation groups, least significant first, at most five bytes.
+        // This matches the encoding the type 0x03 Action reader already validates.
+        private static bool HircReadVariableSize(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            out ulong value,
+            out EndfieldHircBodyFrameResult failure,
+            string what)
+        {
+            value = 0;
+            // Four bytes may continue; the fifth must terminate, so there is no
+            // unreachable fall-through and every guard below is separately reachable.
+            for (var index = 0; index < 4; index++)
+            {
+                if (body.Length - cursor < 1)
+                {
+                    failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, 1, 0);
+                    return false;
+                }
+                var current = body[cursor];
+                cursor = checked(cursor + 1);
+                value |= (ulong)(current & 0x7F) << (index * 7);
+                if ((current & 0x80) == 0)
+                {
+                    failure = null;
+                    return true;
+                }
+            }
+            if (body.Length - cursor < 1)
+            {
+                failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, 1, 0);
+                return false;
+            }
+            var last = body[cursor];
+            cursor = checked(cursor + 1);
+            if ((last & 0x80) != 0)
+            {
+                failure = HircFrameOutcome("failed", $"unterminated_{what}", cursor - 1, 1, 1);
+                return false;
+            }
+            // Byte five contributes bits 28..34, so bits 4..6 would exceed 32 bits.
+            if ((last & 0x70) != 0)
+            {
+                failure = HircFrameOutcome("failed", $"overflow_{what}", cursor - 1, 1, 1);
+                return false;
+            }
+            value |= (ulong)(last & 0x7F) << 28;
+            failure = null;
+            return true;
+        }
+
+        private static bool HircReadByte(
             ReadOnlySpan<byte> body,
             ref int cursor,
             out byte value,
-            out EndfieldHircType2BodyFrameResult failure,
+            out EndfieldHircBodyFrameResult failure,
             string what)
         {
             if (body.Length - cursor < 1)
             {
                 value = 0;
-                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 1, body.Length - cursor);
+                failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, 1, body.Length - cursor);
                 return false;
             }
             value = body[cursor];
@@ -1368,17 +1571,17 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
-        private static bool Type2ReadUInt16(
+        private static bool HircReadUInt16(
             ReadOnlySpan<byte> body,
             ref int cursor,
             out ushort value,
-            out EndfieldHircType2BodyFrameResult failure,
+            out EndfieldHircBodyFrameResult failure,
             string what)
         {
             if (body.Length - cursor < 2)
             {
                 value = 0;
-                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 2, body.Length - cursor);
+                failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, 2, body.Length - cursor);
                 return false;
             }
             value = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
@@ -1387,17 +1590,17 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
-        private static bool Type2ReadUInt32(
+        private static bool HircReadUInt32(
             ReadOnlySpan<byte> body,
             ref int cursor,
             out uint value,
-            out EndfieldHircType2BodyFrameResult failure,
+            out EndfieldHircBodyFrameResult failure,
             string what)
         {
             if (body.Length - cursor < 4)
             {
                 value = 0;
-                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 4, body.Length - cursor);
+                failure = HircFrameOutcome("failed", $"truncated_{what}", cursor, 4, body.Length - cursor);
                 return false;
             }
             value = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
@@ -1635,10 +1838,24 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> Type2BodySelectorCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> Type2BodyFailureCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> Type2BodyUnsupportedCategories { get; } = new(StringComparer.Ordinal);
-        public List<EndfieldHircType2BodyFrameExample> Type2BodyFailureExamples { get; } = new();
+        public List<EndfieldHircBodyFrameExample> Type2BodyFailureExamples { get; } = new();
+        public uint Type7BodyFrameCount { get; set; }
+        public uint Type7BodyExactCount { get; set; }
+        public uint Type7BodyUnsupportedCount { get; set; }
+        public uint Type7BodyFailedCount { get; set; }
+        public uint Type7BodyBytes { get; set; }
+        public uint Type7BodyExactCursorBytes { get; set; }
+        public uint Type7BodyNonExactBytes { get; set; }
+        public uint Type7BodyMinExactBytes { get; set; }
+        public uint Type7BodyMaxExactBytes { get; set; }
+        public Dictionary<string, uint> Type7BodyGroupCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type7BodySelectorCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type7BodyFailureCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type7BodyUnsupportedCategories { get; } = new(StringComparer.Ordinal);
+        public List<EndfieldHircBodyFrameExample> Type7BodyFailureExamples { get; } = new();
     }
 
-    public sealed class EndfieldHircType2BodyFrameExample
+    public sealed class EndfieldHircBodyFrameExample
     {
         public ulong BankId { get; init; }
         public uint Ordinal { get; init; }
@@ -1650,7 +1867,7 @@ namespace AnimeStudio.Endfield
         public long ActualBytes { get; init; }
     }
 
-    public sealed class EndfieldHircType2BodyFrameResult
+    public sealed class EndfieldHircBodyFrameResult
     {
         public string Status { get; init; } = "";
         public string Category { get; init; } = "";

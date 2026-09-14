@@ -15,6 +15,8 @@ internal static class EndfieldAkpkTests
         TestType2BodyFramesConsumeSupportedBodiesExactly();
         TestType2BodyFramesFailClosed();
         TestType2BodyAmbiguousShapesStayUnsupported();
+        TestType7BodyFramesReuseTheSharedNodeGroups();
+        TestType7BodyFramesFailClosed();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -388,6 +390,18 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("type 0x02 body selector inventory mismatch");
         }
 
+        // No type 0x02 body in the current corpus carries a continued group I key, so
+        // without this fixture the shared variable-size read would be unpinned on the
+        // type 0x02 path and a regression there would be invisible.
+        var continuedKey = BuildType2Body(groupIEntries: 1, groupIKey: new byte[] { 0x82, 0x30 });
+        var continuedResult = FrameType2Fixture(continuedKey);
+        if (continuedResult.Type2BodyExactCount != 1
+            || continuedResult.Type2BodyGroupCounts["groupIKeyBytes"] != 2
+            || continuedResult.Type2BodySelectorCounts["groupIKeyWidth_2"] != 1)
+        {
+            throw new InvalidOperationException("continued type 0x02 group I key was not consumed");
+        }
+
         // The plug-in source prefix is length-prefixed and must be inside the cursor.
         var pluginBody = BuildType2Body(pluginId: 0x00650002, pluginParameterBytes: 6);
         var pluginPackage = EndfieldAkpkPackage.Parse(
@@ -479,19 +493,25 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("nonempty group B was not held unsupported");
         }
 
-        // The corpus never separates the two low group E selector bits.
-        foreach (var selector in new byte[] { 0x01, 0x02 })
+        // Type 0x07 bodies carry group E selector 0x01 with no extension, which rules
+        // out a bit-0 predicate. Selector 0x02 is still unobserved anywhere, so bit-1-only
+        // and both-bits-set remain indistinguishable and must stay unsupported.
+        var lowBitOnly = BuildType2Body();
+        lowBitOnly[14 + 4 + 9 + 2] = 0x01;
+        var lowBitResult = FrameType2Fixture(lowBitOnly);
+        if (lowBitResult.Type2BodyExactCount != 1 || lowBitResult.Type2BodyUnsupportedCount != 0)
         {
-            var ambiguous = BuildType2Body();
-            ambiguous[14 + 4 + 9 + 2] = selector;
-            var ambiguousResult = FrameType2Fixture(ambiguous);
-            if (ambiguousResult.Type2BodyUnsupportedCount != 1
-                || !ambiguousResult.Type2BodyUnsupportedCategories
-                    .ContainsKey("unsupported_groupE_selector"))
-            {
-                throw new InvalidOperationException(
-                    $"ambiguous group E selector 0x{selector:X2} was not held unsupported");
-            }
+            throw new InvalidOperationException("group E selector 0x01 body did not consume exactly");
+        }
+
+        var ambiguous = BuildType2Body();
+        ambiguous[14 + 4 + 9 + 2] = 0x02;
+        var ambiguousResult = FrameType2Fixture(ambiguous);
+        if (ambiguousResult.Type2BodyUnsupportedCount != 1
+            || !ambiguousResult.Type2BodyUnsupportedCategories
+                .ContainsKey("unsupported_groupE_selector"))
+        {
+            throw new InvalidOperationException("group E selector 0x02 was not held unsupported");
         }
 
         // Branch selector 3 never occurs in the current corpus.
@@ -526,16 +546,23 @@ internal static class EndfieldAkpkTests
         byte groupHProps = 0,
         byte groupHStates = 0,
         ushort groupIEntries = 0,
-        ushort groupIPoints = 0)
+        ushort groupIPoints = 0,
+        byte[]? groupIKey = null,
+        uint? childEntries = null,
+        bool writePrefix = true)
     {
+        groupIKey ??= new byte[] { 0x00 };
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
-        writer.Write(pluginId);
-        writer.Write(new byte[10]);
-        if ((pluginId & 0x0F) == 2)
+        if (writePrefix)
         {
-            writer.Write(checked((uint)pluginParameterBytes));
-            writer.Write(new byte[pluginParameterBytes]);
+            writer.Write(pluginId);
+            writer.Write(new byte[10]);
+            if ((pluginId & 0x0F) == 2)
+            {
+                writer.Write(checked((uint)pluginParameterBytes));
+                writer.Write(new byte[pluginParameterBytes]);
+            }
         }
         writer.Write(groupAFlag);
         writer.Write(groupAEntries);
@@ -583,12 +610,199 @@ internal static class EndfieldAkpkTests
         writer.Write(groupIEntries);
         for (var i = 0; i < groupIEntries; i++)
         {
-            writer.Write(new byte[12]);
+            writer.Write(new byte[6]);
+            writer.Write(groupIKey); // One anonymous variable-size key.
+            writer.Write(new byte[5]);
             writer.Write(groupIPoints);
             writer.Write(new byte[groupIPoints * 12]);
         }
+        if (childEntries.HasValue)
+        {
+            writer.Write(childEntries.Value);
+            writer.Write(new byte[checked((int)childEntries.Value * 4)]);
+        }
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private static void TestType7BodyFramesReuseTheSharedNodeGroups()
+    {
+        // Type 0x07 opens with the same node groups as type 0x02 and closes with one
+        // counted vector of four-byte anonymous references.
+        var minimal = BuildType2Body(childEntries: 0, writePrefix: false);
+        var rich = BuildType2Body(
+            groupAFlag: 1,
+            groupAEntries: 1,
+            groupCEntries: 2,
+            groupESelector: 0x03,
+            groupFSelector: 0x08,
+            groupHProps: 1,
+            groupHStates: 1,
+            groupIEntries: 1,
+            groupIPoints: 1,
+            childEntries: 3,
+            writePrefix: false);
+        var package = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x7000,
+                BuildBnk((0x07, 0x7001U, minimal), (0x07, 0x7002U, rich))));
+        var structure = package.BnkStructures[0];
+        var expectedBytes = (uint)(minimal.Length + rich.Length);
+        if (structure.Type7BodyFrameCount != 2
+            || structure.Type7BodyExactCount != 2
+            || structure.Type7BodyUnsupportedCount != 0
+            || structure.Type7BodyFailedCount != 0
+            || structure.Type7BodyBytes != expectedBytes
+            || structure.Type7BodyExactCursorBytes != expectedBytes
+            || structure.Type7BodyNonExactBytes != 0
+            || structure.Type7BodyMinExactBytes != (uint)minimal.Length
+            || structure.Type7BodyMaxExactBytes != (uint)rich.Length)
+        {
+            throw new InvalidOperationException("type 0x07 body frame census mismatch");
+        }
+        if (structure.Type7BodyGroupCounts["childEntries"] != 3
+            || structure.Type7BodyGroupCounts["groupAEntries"] != 1
+            || structure.Type7BodyGroupCounts["groupIPoints"] != 1)
+        {
+            throw new InvalidOperationException("type 0x07 anonymous group inventory mismatch");
+        }
+
+        // A continued variable-size group I key must be consumed, not assumed one byte.
+        var continuedKey = BuildType2Body(
+            groupIEntries: 1,
+            groupIKey: new byte[] { 0x82, 0x30 },
+            childEntries: 1,
+            writePrefix: false);
+        var continued = EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7100, BuildBnk((0x07, 0x7101U, continuedKey))))
+            .BnkStructures[0];
+        if (continued.Type7BodyExactCount != 1
+            || continued.Type7BodyGroupCounts["groupIKeyBytes"] != 2
+            || continued.Type7BodySelectorCounts["groupIKeyWidth_2"] != 1)
+        {
+            throw new InvalidOperationException("continued group I key was not consumed");
+        }
+
+        // Selector 0x01 carries no extension; the corpus disproves a bit-0 predicate.
+        var lowSelector = BuildType2Body(groupESelector: 0x01, childEntries: 1, writePrefix: false);
+        if (EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7200, BuildBnk((0x07, 0x7201U, lowSelector))))
+            .BnkStructures[0].Type7BodyExactCount != 1)
+        {
+            throw new InvalidOperationException("group E selector 0x01 body did not consume exactly");
+        }
+    }
+
+    private static void TestType7BodyFramesFailClosed()
+    {
+        var body = BuildType2Body(childEntries: 1, writePrefix: false);
+
+        // The tail is a four-byte count plus one four-byte entry; cut into the count.
+        var truncated = FrameType7Fixture(body[..^6]);
+        if (truncated.Type7BodyFailedCount != 1
+            || !truncated.Type7BodyFailureCounts.ContainsKey("truncated_childCount"))
+        {
+            throw new InvalidOperationException("truncated type 0x07 child count did not fail closed");
+        }
+
+        var shortVector = FrameType7Fixture(body[..^1]);
+        if (shortVector.Type7BodyFailedCount != 1
+            || !shortVector.Type7BodyFailureCounts.ContainsKey("range_childEntries"))
+        {
+            throw new InvalidOperationException("short type 0x07 child vector did not fail closed");
+        }
+
+        var trailing = FrameType7Fixture(body.Concat(new byte[] { 0x5A }).ToArray());
+        if (trailing.Type7BodyFailedCount != 1
+            || !trailing.Type7BodyFailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("trailing type 0x07 bytes were not reported");
+        }
+
+        var malformed = (byte[])body.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(malformed.AsSpan(malformed.Length - 8, 4), 0x4000_0000U);
+        if (!FrameType7Fixture(malformed).Type7BodyFailureCounts.ContainsKey("range_childEntries"))
+        {
+            throw new InvalidOperationException("type 0x07 child count was not range-checked");
+        }
+
+        // A fifth key byte that still continues must be rejected, never silently truncated.
+        var unterminated = BuildType2Body(
+            groupIEntries: 1,
+            groupIKey: new byte[] { 0x80, 0x80, 0x80, 0x80, 0x80 },
+            childEntries: 1,
+            writePrefix: false);
+        if (!FrameType7Fixture(unterminated).Type7BodyFailureCounts.ContainsKey("unterminated_groupIKey"))
+        {
+            throw new InvalidOperationException("unterminated group I key was not rejected");
+        }
+
+        // A fifth byte that both continues and exceeds 32 bits must report the
+        // continuation first, so the two guards cannot be reordered unnoticed.
+        var unterminatedAndWide = BuildType2Body(
+            groupIEntries: 1,
+            groupIKey: new byte[] { 0x80, 0x80, 0x80, 0x80, 0x90 },
+            childEntries: 1,
+            writePrefix: false);
+        var wideResult = FrameType7Fixture(unterminatedAndWide);
+        if (!wideResult.Type7BodyFailureCounts.ContainsKey("unterminated_groupIKey")
+            || wideResult.Type7BodyFailureCounts.ContainsKey("overflow_groupIKey"))
+        {
+            throw new InvalidOperationException("continuation must outrank overflow on the fifth key byte");
+        }
+
+        var overflowing = BuildType2Body(
+            groupIEntries: 1,
+            groupIKey: new byte[] { 0x80, 0x80, 0x80, 0x80, 0x10 },
+            childEntries: 1,
+            writePrefix: false);
+        if (!FrameType7Fixture(overflowing).Type7BodyFailureCounts.ContainsKey("overflow_groupIKey"))
+        {
+            throw new InvalidOperationException("overflowing group I key was not rejected");
+        }
+
+        // A key cut off at EOF must fail closed. The group I entry-count precheck only
+        // reserves the 14-byte minimum per entry, so this is reachable only once an
+        // earlier points-bearing entry has eaten the slack: two entries reserve 28
+        // bytes, the first consumes 26, and the second is cut off right after its head.
+        var twoEntries = BuildType2Body(
+            groupIEntries: 2,
+            groupIPoints: 1,
+            childEntries: 0,
+            writePrefix: false);
+        const int nodeGroupsThroughGroupICount = 31;
+        const int firstEntryBytes = 6 + 1 + 5 + 2 + 12;
+        var truncatedKey = twoEntries[..(nodeGroupsThroughGroupICount + firstEntryBytes + 6)];
+        if (!FrameType7Fixture(truncatedKey).Type7BodyFailureCounts.ContainsKey("truncated_groupIKey"))
+        {
+            throw new InvalidOperationException("truncated group I key was not rejected");
+        }
+
+        // Selector bit 1 alone is unobserved, so the branch predicate stays ambiguous.
+        var ambiguous = BuildType2Body(childEntries: 1, writePrefix: false);
+        ambiguous[4 + 9 + 2] = 0x02;
+        var ambiguousResult = FrameType7Fixture(ambiguous);
+        if (ambiguousResult.Type7BodyUnsupportedCount != 1
+            || !ambiguousResult.Type7BodyUnsupportedCategories.ContainsKey("unsupported_groupE_selector"))
+        {
+            throw new InvalidOperationException("ambiguous group E selector was not held unsupported");
+        }
+
+        var wrongVersion = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x7400, BuildBnk(149, (0x07, 0x7401U, body))));
+        if (wrongVersion.BnkStructures[0].Type7BodyUnsupportedCount != 1
+            || !wrongVersion.BnkStructures[0].Type7BodyUnsupportedCategories
+                .ContainsKey("unsupported_bank_version"))
+        {
+            throw new InvalidOperationException("non-current bank version was not held unsupported");
+        }
+    }
+
+    private static EndfieldBnkStructure FrameType7Fixture(byte[] body)
+    {
+        return EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7300, BuildBnk((0x07, 0x7301U, body))))
+            .BnkStructures[0];
     }
 
     private static void TestType4U32VectorFramesClassifyExactAndOpaqueBodies()
