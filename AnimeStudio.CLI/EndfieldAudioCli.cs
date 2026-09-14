@@ -182,6 +182,7 @@ namespace AnimeStudio.CLI
                             ["hircReferenceCensus"] = BuildReferenceCensusSummary(package.BnkStructures),
                             ["hircNamedReachCensus"] = BuildNamedReachSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
+                            ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -235,6 +236,7 @@ namespace AnimeStudio.CLI
                                 ["hircType06BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type6Body),
                                 ["hircReferenceCensus"] = BuildReferenceCensusSummary(new[] { x }),
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
+                                ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(

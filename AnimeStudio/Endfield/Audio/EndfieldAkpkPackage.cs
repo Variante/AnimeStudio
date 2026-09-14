@@ -574,7 +574,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7)
+                if (objectType is 2 or 5 or 6 or 7 or 14)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -586,6 +586,7 @@ namespace AnimeStudio.Endfield
                         5 => structure.Type5Body,
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
+                        14 => structure.Type14Body,
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body census is not defined for type {objectType}"),
                     };
@@ -595,6 +596,7 @@ namespace AnimeStudio.Endfield
                         5 => FrameType5Body(bodySpan, structure.Version),
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
+                        14 => FrameType14Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
@@ -1647,6 +1649,8 @@ namespace AnimeStudio.Endfield
 
         // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
         // counted vector of fixed-width anonymous references.
+        internal const int Type14ElementBytes = 12;
+
         internal static EndfieldHircBodyFrameResult FrameType7Body(
             ReadOnlySpan<byte> body,
             uint? bankVersion)
@@ -1685,6 +1689,100 @@ namespace AnimeStudio.Endfield
                 return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
             }
             return HircFrameExact(cursor, body.Length, groups, selectors, references);
+        }
+
+        // Numeric type 0x0E does not use the shared node frame. Its body is a fixed
+        // 21-byte head, an optional 20-byte block selected by the second byte, then a
+        // counted list whose entries each carry a selector, a counted run of 12-byte
+        // elements, and finally a two-byte terminator.
+        //
+        // The optional block is the only branch, and it is decided by a byte, not by a
+        // search: byte 1 is 0 or 1 across the whole corpus and predicts the prefix
+        // length in every body. Any other value fails closed rather than guessing.
+        internal const int Type14FixedHeadBytes = 21;
+        internal const int Type14OptionalBlockBytes = 20;
+
+        internal static EndfieldHircBodyFrameResult FrameType14Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (body.Length < Type14FixedHeadBytes)
+            {
+                return HircFrameOutcome(
+                    "failed", "short_fixedHead", 0, Type14FixedHeadBytes, body.Length);
+            }
+            HircBump(selectors, $"headByte_{body[0]:X2}", 1);
+
+            var flag = body[1];
+            if (flag > 1)
+            {
+                // The prefix length depends on this byte, so an unobserved value means the
+                // body cannot be framed at all. Widening it would be a guess.
+                return HircFrameOutcome("failed", "unknown_optionalBlockFlag", 1, 1, flag);
+            }
+            HircBump(selectors, $"optionalBlockFlag_{flag:X2}", 1);
+            cursor = Type14FixedHeadBytes;
+            if (flag == 1)
+            {
+                if (!HircTake(body, ref cursor, Type14OptionalBlockBytes, out var blockFailure, "optionalBlock"))
+                {
+                    return blockFailure;
+                }
+                HircBump(groups, "optionalBlock", 1);
+            }
+
+            if (!HircReadByte(body, ref cursor, out var entryCount, out var failure, "listEntryCount"))
+            {
+                return failure;
+            }
+            HircBump(groups, "listEntries", entryCount);
+            for (var entry = 0; entry < entryCount; entry++)
+            {
+                if (!HircReadByte(body, ref cursor, out var entrySelector, out failure, "listEntrySelector"))
+                {
+                    return failure;
+                }
+                HircBump(selectors, $"listEntrySelector_{entrySelector:X2}", 1);
+                if (!HircReadUInt16(body, ref cursor, out var elementCount, out failure, "listElementCount"))
+                {
+                    return failure;
+                }
+                if (elementCount > (body.Length - cursor) / Type14ElementBytes)
+                {
+                    return HircFrameOutcome(
+                        "failed",
+                        "range_listElements",
+                        cursor - 2,
+                        (body.Length - cursor) / Type14ElementBytes,
+                        elementCount);
+                }
+                cursor = checked(cursor + elementCount * Type14ElementBytes);
+                HircBump(groups, "listElements", elementCount);
+            }
+
+            // Two bytes close every body. They read as zero everywhere, so a nonzero value
+            // would mean content this frame does not describe: reject instead of ignoring.
+            if (!HircReadUInt16(body, ref cursor, out var terminator, out failure, "listTerminator"))
+            {
+                return failure;
+            }
+            if (terminator != 0)
+            {
+                return HircFrameOutcome("failed", "nonzero_listTerminator", cursor - 2, 0, terminator);
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
         private static bool FrameHircGroupE(
@@ -2308,6 +2406,7 @@ namespace AnimeStudio.Endfield
         public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
+        public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();

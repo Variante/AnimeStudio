@@ -19,6 +19,8 @@ internal static class EndfieldAkpkTests
         TestType7BodyFramesFailClosed();
         TestType5BodyFramesFrameTwoIndependentVectors();
         TestType5BodyFramesFailClosed();
+        TestType14BodyFramesBothBranches();
+        TestType14BodyFramesFailClosed();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -524,6 +526,145 @@ internal static class EndfieldAkpkTests
             || !branchResult.Type2Body.UnsupportedCategories.ContainsKey("unsupported_groupE_branch"))
         {
             throw new InvalidOperationException("unobserved group E branch was not held unsupported");
+        }
+    }
+
+
+    private static byte[] BuildType14Body(
+        byte headByte = 0,
+        byte optionalBlockFlag = 0,
+        (byte selector, ushort elements)[]? entries = null,
+        ushort terminator = 0,
+        int extraTrailingBytes = 0,
+        int truncateBy = 0)
+    {
+        entries ??= new[] { ((byte)0x02, (ushort)2) };
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        writer.Write(headByte);
+        writer.Write(optionalBlockFlag);
+        // Remainder of the fixed twenty-one byte head.
+        writer.Write(new byte[19]);
+        if (optionalBlockFlag == 1)
+        {
+            writer.Write(new byte[20]);
+        }
+        writer.Write((byte)entries.Length);
+        foreach (var (selector, elements) in entries)
+        {
+            writer.Write(selector);
+            writer.Write(elements);
+            writer.Write(new byte[elements * 12]);
+        }
+        writer.Write(terminator);
+        writer.Flush();
+        var body = stream.ToArray();
+        if (extraTrailingBytes > 0)
+        {
+            body = body.Concat(new byte[extraTrailingBytes]).ToArray();
+        }
+        if (truncateBy > 0)
+        {
+            body = body[..^truncateBy];
+        }
+        return body;
+    }
+
+    private static EndfieldBnkStructure FrameType14Fixture(byte[] body)
+    {
+        return EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x6E00, BuildBnk((0x0E, 0x6E01U, body))))
+            .BnkStructures[0];
+    }
+
+    private static void TestType14BodyFramesBothBranches()
+    {
+        // The short branch: no optional block. 21 + 1 + 3 + 24 + 2 = 51 bytes.
+        var shortBranch = FrameType14Fixture(BuildType14Body());
+        if (shortBranch.Type14Body.ExactCount != 1
+            || shortBranch.Type14Body.ExactCursorBytes != 51
+            || shortBranch.Type14Body.GroupCounts["listElements"] != 2
+            || shortBranch.Type14Body.GroupCounts["listEntries"] != 1
+            || shortBranch.Type14Body.GroupCounts.ContainsKey("optionalBlock")
+            || shortBranch.Type14Body.SelectorCounts["optionalBlockFlag_00"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0E short branch did not frame exactly");
+        }
+
+        // The long branch adds exactly twenty bytes and nothing else.
+        var longBranch = FrameType14Fixture(BuildType14Body(headByte: 1, optionalBlockFlag: 1));
+        if (longBranch.Type14Body.ExactCount != 1
+            || longBranch.Type14Body.ExactCursorBytes != 71
+            || longBranch.Type14Body.GroupCounts["optionalBlock"] != 1
+            || longBranch.Type14Body.SelectorCounts["optionalBlockFlag_01"] != 1
+            || longBranch.Type14Body.SelectorCounts["headByte_01"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0E long branch did not frame exactly");
+        }
+
+        // An empty list is still a complete body: head, a zero count, terminator.
+        var empty = FrameType14Fixture(BuildType14Body(entries: Array.Empty<(byte, ushort)>()));
+        if (empty.Type14Body.ExactCount != 1 || empty.Type14Body.ExactCursorBytes != 24)
+        {
+            throw new InvalidOperationException("type 0x0E empty list did not frame exactly");
+        }
+
+        // Several entries, so the per-entry header is exercised more than once.
+        var many = FrameType14Fixture(BuildType14Body(
+            entries: new[] { ((byte)0x00, (ushort)1), ((byte)0x02, (ushort)3), ((byte)0x00, (ushort)0) }));
+        if (many.Type14Body.ExactCount != 1
+            || many.Type14Body.GroupCounts["listEntries"] != 3
+            || many.Type14Body.GroupCounts["listElements"] != 4
+            || many.Type14Body.SelectorCounts["listEntrySelector_00"] != 2
+            || many.Type14Body.SelectorCounts["listEntrySelector_02"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0E multi-entry list did not frame exactly");
+        }
+    }
+
+    private static void TestType14BodyFramesFailClosed()
+    {
+        // The branch byte decides the prefix length, so an unobserved value cannot be
+        // framed at all. Guessing either branch would silently mis-frame the body.
+        var unknownFlag = BuildType14Body();
+        unknownFlag[1] = 2;
+        if (!FrameType14Fixture(unknownFlag).Type14Body.FailureCounts
+                .ContainsKey("unknown_optionalBlockFlag"))
+        {
+            throw new InvalidOperationException("type 0x0E accepted an unknown branch byte");
+        }
+
+        // A count that overruns the body must be rejected on its own terms rather than
+        // clamped to whatever bytes happen to remain.
+        var overrun = BuildType14Body();
+        overrun[22] = 0xFF;
+        overrun[23] = 0xFF;
+        if (!FrameType14Fixture(overrun).Type14Body.FailureCounts.ContainsKey("range_listElements"))
+        {
+            throw new InvalidOperationException("type 0x0E accepted an out-of-range element count");
+        }
+
+        // Trailing bytes and truncation are both failures, not partial successes.
+        if (!FrameType14Fixture(BuildType14Body(extraTrailingBytes: 1)).Type14Body
+                .FailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("type 0x0E accepted trailing bytes");
+        }
+        if (FrameType14Fixture(BuildType14Body(truncateBy: 1)).Type14Body.ExactCount != 0)
+        {
+            throw new InvalidOperationException("type 0x0E accepted a truncated body");
+        }
+        if (FrameType14Fixture(new byte[20]).Type14Body.FailureCounts.Count == 0)
+        {
+            throw new InvalidOperationException("type 0x0E accepted a body shorter than its head");
+        }
+
+        // The two closing bytes read as zero everywhere. A nonzero value means content
+        // this frame does not describe, so it must fail rather than be ignored.
+        if (!FrameType14Fixture(BuildType14Body(terminator: 1)).Type14Body
+                .FailureCounts.ContainsKey("nonzero_listTerminator"))
+        {
+            throw new InvalidOperationException("type 0x0E accepted a nonzero terminator");
         }
     }
 
