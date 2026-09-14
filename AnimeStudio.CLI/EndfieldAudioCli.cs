@@ -170,6 +170,7 @@ namespace AnimeStudio.CLI
                             ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(package.BnkStructures),
                             ["hircType02BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type2Body),
                             ["hircType05BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type5Body),
+                            ["hircType06BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type6Body),
                             ["hircReferenceCensus"] = BuildReferenceCensusSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircObjectTypeCounts"] = package.BnkStructures
@@ -222,6 +223,7 @@ namespace AnimeStudio.CLI
                                 ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(new[] { x }),
                                 ["hircType02BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type2Body),
                                 ["hircType05BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type5Body),
+                                ["hircType06BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type6Body),
                                 ["hircReferenceCensus"] = BuildReferenceCensusSummary(new[] { x }),
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
@@ -564,6 +566,8 @@ namespace AnimeStudio.CLI
                 ["targetsWithMultipleReferrers"] = rows.Sum(row => (long)row.TargetsWithMultipleReferrers),
                 ["duplicateObjectIds"] = rows.Sum(row => (long)row.DuplicateObjectIds),
                 ["referencesToDuplicateIds"] = rows.Sum(row => (long)row.ReferencesToDuplicateIds),
+                ["candidateWords"] = rows.Sum(row => (long)row.CandidateWords),
+                ["candidateWordsMatchingAnObject"] = rows.Sum(row => (long)row.CandidateWordsMatchingAnObject),
                 ["referenceCycleOrFeedingNodes"] = rows.Sum(row => (long)row.ReferenceCycleOrFeedingNodes),
                 ["distinctDuplicateObjectIds"] = rows.Sum(row => (long)row.DistinctDuplicateObjectIds),
                 ["objectCountsByType"] = rows

@@ -568,7 +568,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 7)
+                if (objectType is 2 or 5 or 6 or 7)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -578,6 +578,7 @@ namespace AnimeStudio.Endfield
                     {
                         2 => structure.Type2Body,
                         5 => structure.Type5Body,
+                        6 => structure.Type6Body,
                         7 => structure.Type7Body,
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body census is not defined for type {objectType}"),
@@ -586,6 +587,7 @@ namespace AnimeStudio.Endfield
                     {
                         2 => FrameType2Body(bodySpan, structure.Version),
                         5 => FrameType5Body(bodySpan, structure.Version),
+                        6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
@@ -1078,6 +1080,15 @@ namespace AnimeStudio.Endfield
             {
                 return;
             }
+            foreach (var word in frame.CandidateWords ?? new List<uint>())
+            {
+                census.CandidateWords = checked(census.CandidateWords + 1);
+                if (bankObjectTypes.ContainsKey(word))
+                {
+                    census.CandidateWordsMatchingAnObject =
+                        checked(census.CandidateWordsMatchingAnObject + 1);
+                }
+            }
             foreach (var reference in frame.References)
             {
                 census.References = checked(census.References + 1);
@@ -1334,7 +1345,8 @@ namespace AnimeStudio.Endfield
             int length,
             Dictionary<string, uint> groups,
             Dictionary<string, uint> selectors,
-            List<uint> references = null) => new()
+            List<uint> references = null,
+            List<uint> candidateWords = null) => new()
             {
                 Status = "exact",
                 Category = "",
@@ -1344,7 +1356,112 @@ namespace AnimeStudio.Endfield
                 GroupCounts = groups,
                 SelectorCounts = selectors,
                 References = references ?? new List<uint>(),
+                CandidateWords = candidateWords ?? new List<uint>(),
             };
+
+        // Numeric HIRC type 0x06 opens with the shared node groups, then a fixed
+        // ten-byte opaque header, one counted vector of four-byte anonymous references,
+        // one counted list of groups each holding its own counted reference vector, and
+        // one counted vector of fourteen-byte records that open with a reference.
+        internal static EndfieldHircBodyFrameResult FrameType6Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var references = new List<uint>();
+            // Group items and record leading words match a bank object most of the time but
+            // not always, so they are not claimed as references; they are counted instead.
+            var candidateWords = new List<uint>();
+            var cursor = 0;
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            // The header carries two id-shaped words that no bank object matches, so they
+            // are consumed opaquely rather than offered to the reference join.
+            if (!HircTake(body, ref cursor, 10, out failure, "suffixHeader"))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var childCount, out failure, "childCount"))
+            {
+                return failure;
+            }
+            if (childCount > (uint)((body.Length - cursor) / 4))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_childEntries", cursor - 4, (body.Length - cursor) / 4, childCount);
+            }
+            for (var i = 0U; i < childCount; i++)
+            {
+                references.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                cursor = checked(cursor + 4);
+            }
+            HircBump(groups, "childEntries", childCount);
+
+            if (!HircReadUInt32(body, ref cursor, out var groupCount, out failure, "groupCount"))
+            {
+                return failure;
+            }
+            if (groupCount > (uint)((body.Length - cursor) / 8))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_groupEntries", cursor - 4, (body.Length - cursor) / 8, groupCount);
+            }
+            HircBump(groups, "groupEntries", groupCount);
+            HircBump(groups, "groupItemEntries", 0);
+            for (var i = 0U; i < groupCount; i++)
+            {
+                // The group's own key is not a bank object identity either.
+                if (!HircTake(body, ref cursor, 4, out failure, "groupKey"))
+                {
+                    return failure;
+                }
+                if (!HircReadUInt32(body, ref cursor, out var itemCount, out failure, "groupItemCount"))
+                {
+                    return failure;
+                }
+                if (itemCount > (uint)((body.Length - cursor) / 4))
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_groupItemEntries", cursor - 4, (body.Length - cursor) / 4, itemCount);
+                }
+                for (var item = 0U; item < itemCount; item++)
+                {
+                    candidateWords.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                    cursor = checked(cursor + 4);
+                }
+                HircBump(groups, "groupItemEntries", itemCount);
+            }
+
+            if (!HircReadUInt32(body, ref cursor, out var recordCount, out failure, "recordCount"))
+            {
+                return failure;
+            }
+            if (recordCount > (uint)((body.Length - cursor) / 14))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_recordEntries", cursor - 4, (body.Length - cursor) / 14, recordCount);
+            }
+            for (var i = 0U; i < recordCount; i++)
+            {
+                candidateWords.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                cursor = checked(cursor + 14);
+            }
+            HircBump(groups, "recordEntries", recordCount);
+
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors, references, candidateWords);
+        }
 
         // Numeric HIRC type 0x05 opens with the shared node groups, then a fixed opaque
         // block, one counted vector of four-byte anonymous references and one counted
@@ -2071,6 +2188,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
+        public EndfieldHircBodyCensus Type6Body { get; } = new();
         public EndfieldHircBodyCensus Type7Body { get; } = new();
     }
 
@@ -2105,6 +2223,8 @@ namespace AnimeStudio.Endfield
         public uint TargetsWithMultipleReferrers { get; set; }
         public uint DuplicateObjectIds { get; set; }
         public uint ReferencesToDuplicateIds { get; set; }
+        public uint CandidateWords { get; set; }
+        public uint CandidateWordsMatchingAnObject { get; set; }
         // Nodes on a cycle plus any tail feeding it: the walk stops at the repeat and
         // cannot separate the two, so the name must not promise cycle membership.
         public uint ReferenceCycleOrFeedingNodes { get; set; }
@@ -2136,6 +2256,9 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> GroupCounts { get; init; }
         public Dictionary<string, uint> SelectorCounts { get; init; }
         public List<uint> References { get; init; }
+        // Words that look like identities but are not claimed as references. They are
+        // counted against the bank so the counter-evidence is published, not hidden.
+        public List<uint> CandidateWords { get; init; }
     }
 
     public sealed class EndfieldHircActionFrameResult
