@@ -527,25 +527,29 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType == 2)
+                if (objectType is 2 or 5 or 7)
                 {
-                    RecordType2BodyFrame(
-                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
-                        structure.Version,
-                        bankId,
-                        ordinal,
-                        objectId,
-                        structure);
-                }
-                if (objectType == 7)
-                {
-                    RecordType7BodyFrame(
-                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
-                        structure.Version,
-                        bankId,
-                        ordinal,
-                        objectId,
-                        structure);
+                    var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    // Both switches are exhaustive on purpose: widening the guard above
+                    // without adding arms here must fail loudly rather than silently
+                    // frame a new type with another type's framer and census.
+                    var census = objectType switch
+                    {
+                        2 => structure.Type2Body,
+                        5 => structure.Type5Body,
+                        7 => structure.Type7Body,
+                        _ => throw new InvalidDataException(
+                            $"AKPK HIRC body census is not defined for type {objectType}"),
+                    };
+                    var frame = objectType switch
+                    {
+                        2 => FrameType2Body(bodySpan, structure.Version),
+                        5 => FrameType5Body(bodySpan, structure.Version),
+                        7 => FrameType7Body(bodySpan, structure.Version),
+                        _ => throw new InvalidDataException(
+                            $"AKPK HIRC body framer is not defined for type {objectType}"),
+                    };
+                    RecordHircBodyFrame(census, frame, bodySpan, bankId, ordinal, objectId);
                 }
                 if (objectType == 4)
                 {
@@ -937,123 +941,54 @@ namespace AnimeStudio.Endfield
             structure.Type2MaxOpaqueTailBytes = Math.Max(structure.Type2MaxOpaqueTailBytes, (uint)opaqueLength);
         }
 
-        private static void RecordType2BodyFrame(
+        private static void RecordHircBodyFrame(
+            EndfieldHircBodyCensus census,
+            EndfieldHircBodyFrameResult result,
             ReadOnlySpan<byte> body,
-            uint? bankVersion,
             ulong bankId,
             uint ordinal,
-            uint objectId,
-            EndfieldBnkStructure structure)
+            uint objectId)
         {
-            var result = FrameType2Body(body, bankVersion);
-            structure.Type2BodyFrameCount = checked(structure.Type2BodyFrameCount + 1);
-            structure.Type2BodyBytes = checked(structure.Type2BodyBytes + (uint)body.Length);
+            census.FrameCount = checked(census.FrameCount + 1);
+            census.BodyBytes = checked(census.BodyBytes + (uint)body.Length);
             if (result.Status == "exact")
             {
-                structure.Type2BodyExactCount = checked(structure.Type2BodyExactCount + 1);
-                structure.Type2BodyExactCursorBytes = checked(
-                    structure.Type2BodyExactCursorBytes + (uint)result.CursorOffset);
-                structure.Type2BodyMinExactBytes = structure.Type2BodyExactCount == 1
+                census.ExactCount = checked(census.ExactCount + 1);
+                census.ExactCursorBytes = checked(census.ExactCursorBytes + (uint)result.CursorOffset);
+                census.MinExactBytes = census.ExactCount == 1
                     ? (uint)result.CursorOffset
-                    : Math.Min(structure.Type2BodyMinExactBytes, (uint)result.CursorOffset);
-                structure.Type2BodyMaxExactBytes = Math.Max(
-                    structure.Type2BodyMaxExactBytes, (uint)result.CursorOffset);
+                    : Math.Min(census.MinExactBytes, (uint)result.CursorOffset);
+                census.MaxExactBytes = Math.Max(census.MaxExactBytes, (uint)result.CursorOffset);
                 foreach (var pair in result.GroupCounts)
                 {
-                    structure.Type2BodyGroupCounts.TryGetValue(pair.Key, out var groupTotal);
-                    structure.Type2BodyGroupCounts[pair.Key] = checked(groupTotal + pair.Value);
+                    census.GroupCounts.TryGetValue(pair.Key, out var groupTotal);
+                    census.GroupCounts[pair.Key] = checked(groupTotal + pair.Value);
                 }
                 foreach (var pair in result.SelectorCounts)
                 {
-                    structure.Type2BodySelectorCounts.TryGetValue(pair.Key, out var selectorTotal);
-                    structure.Type2BodySelectorCounts[pair.Key] = checked(selectorTotal + pair.Value);
+                    census.SelectorCounts.TryGetValue(pair.Key, out var selectorTotal);
+                    census.SelectorCounts[pair.Key] = checked(selectorTotal + pair.Value);
                 }
                 return;
             }
 
-            structure.Type2BodyNonExactBytes = checked(
-                structure.Type2BodyNonExactBytes + (uint)body.Length);
+            census.NonExactBytes = checked(census.NonExactBytes + (uint)body.Length);
             if (result.Status == "unsupported")
             {
-                structure.Type2BodyUnsupportedCount = checked(structure.Type2BodyUnsupportedCount + 1);
-                structure.Type2BodyUnsupportedCategories.TryGetValue(result.Category, out var unsupported);
-                structure.Type2BodyUnsupportedCategories[result.Category] = checked(unsupported + 1);
+                census.UnsupportedCount = checked(census.UnsupportedCount + 1);
+                census.UnsupportedCategories.TryGetValue(result.Category, out var unsupported);
+                census.UnsupportedCategories[result.Category] = checked(unsupported + 1);
             }
             else
             {
-                structure.Type2BodyFailedCount = checked(structure.Type2BodyFailedCount + 1);
-                structure.Type2BodyFailureCounts.TryGetValue(result.Category, out var failed);
-                structure.Type2BodyFailureCounts[result.Category] = checked(failed + 1);
+                census.FailedCount = checked(census.FailedCount + 1);
+                census.FailureCounts.TryGetValue(result.Category, out var failed);
+                census.FailureCounts[result.Category] = checked(failed + 1);
             }
 
-            if (structure.Type2BodyFailureExamples.Count < 8)
+            if (census.FailureExamples.Count < 8)
             {
-                structure.Type2BodyFailureExamples.Add(new EndfieldHircBodyFrameExample
-                {
-                    BankId = bankId,
-                    Ordinal = ordinal,
-                    ObjectId = objectId,
-                    Status = result.Status,
-                    Category = result.Category,
-                    CursorOffset = result.CursorOffset,
-                    ExpectedBytes = result.ExpectedBytes,
-                    ActualBytes = result.ActualBytes,
-                });
-            }
-        }
-
-        private static void RecordType7BodyFrame(
-            ReadOnlySpan<byte> body,
-            uint? bankVersion,
-            ulong bankId,
-            uint ordinal,
-            uint objectId,
-            EndfieldBnkStructure structure)
-        {
-            var result = FrameType7Body(body, bankVersion);
-            structure.Type7BodyFrameCount = checked(structure.Type7BodyFrameCount + 1);
-            structure.Type7BodyBytes = checked(structure.Type7BodyBytes + (uint)body.Length);
-            if (result.Status == "exact")
-            {
-                structure.Type7BodyExactCount = checked(structure.Type7BodyExactCount + 1);
-                structure.Type7BodyExactCursorBytes = checked(
-                    structure.Type7BodyExactCursorBytes + (uint)result.CursorOffset);
-                structure.Type7BodyMinExactBytes = structure.Type7BodyExactCount == 1
-                    ? (uint)result.CursorOffset
-                    : Math.Min(structure.Type7BodyMinExactBytes, (uint)result.CursorOffset);
-                structure.Type7BodyMaxExactBytes = Math.Max(
-                    structure.Type7BodyMaxExactBytes, (uint)result.CursorOffset);
-                foreach (var pair in result.GroupCounts)
-                {
-                    structure.Type7BodyGroupCounts.TryGetValue(pair.Key, out var groupTotal);
-                    structure.Type7BodyGroupCounts[pair.Key] = checked(groupTotal + pair.Value);
-                }
-                foreach (var pair in result.SelectorCounts)
-                {
-                    structure.Type7BodySelectorCounts.TryGetValue(pair.Key, out var selectorTotal);
-                    structure.Type7BodySelectorCounts[pair.Key] = checked(selectorTotal + pair.Value);
-                }
-                return;
-            }
-
-            structure.Type7BodyNonExactBytes = checked(
-                structure.Type7BodyNonExactBytes + (uint)body.Length);
-            if (result.Status == "unsupported")
-            {
-                structure.Type7BodyUnsupportedCount = checked(structure.Type7BodyUnsupportedCount + 1);
-                structure.Type7BodyUnsupportedCategories.TryGetValue(result.Category, out var unsupported);
-                structure.Type7BodyUnsupportedCategories[result.Category] = checked(unsupported + 1);
-            }
-            else
-            {
-                structure.Type7BodyFailedCount = checked(structure.Type7BodyFailedCount + 1);
-                structure.Type7BodyFailureCounts.TryGetValue(result.Category, out var failed);
-                structure.Type7BodyFailureCounts[result.Category] = checked(failed + 1);
-            }
-
-            if (structure.Type7BodyFailureExamples.Count < 8)
-            {
-                structure.Type7BodyFailureExamples.Add(new EndfieldHircBodyFrameExample
+                census.FailureExamples.Add(new EndfieldHircBodyFrameExample
                 {
                     BankId = bankId,
                     Ordinal = ordinal,
@@ -1232,6 +1167,62 @@ namespace AnimeStudio.Endfield
                 GroupCounts = groups,
                 SelectorCounts = selectors,
             };
+
+        // Numeric HIRC type 0x05 opens with the shared node groups, then a fixed opaque
+        // block, one counted vector of four-byte anonymous references and one counted
+        // vector of eight-byte anonymous records. The two counts are independent.
+        internal static EndfieldHircBodyFrameResult FrameType5Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircTake(body, ref cursor, 24, out failure, "suffixHeader"))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var referenceCount, out failure, "referenceCount"))
+            {
+                return failure;
+            }
+            if (referenceCount > (uint)((body.Length - cursor) / 4))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_referenceEntries", cursor - 4, (body.Length - cursor) / 4, referenceCount);
+            }
+            cursor = checked(cursor + (int)referenceCount * 4);
+            HircBump(groups, "referenceEntries", referenceCount);
+            if (!HircReadUInt16(body, ref cursor, out var recordCount, out failure, "recordCount"))
+            {
+                return failure;
+            }
+            if (recordCount > (body.Length - cursor) / 8)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_recordEntries", cursor - 2, (body.Length - cursor) / 8, recordCount);
+            }
+            cursor = checked(cursor + recordCount * 8);
+            HircBump(groups, "recordEntries", recordCount);
+            // Publish how often the two counts disagree so "the vectors are counted
+            // independently" is a corpus measurement rather than an assertion.
+            HircBump(groups, "referenceRecordCountMismatch", referenceCount == recordCount ? 0u : 1u);
+
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
 
         // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
         // counted vector of fixed-width anonymous references.
@@ -1825,34 +1816,29 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> Type4U32VectorFailureCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> Type4U32VectorUnsupportedCategories { get; } = new(StringComparer.Ordinal);
         public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
-        public uint Type2BodyFrameCount { get; set; }
-        public uint Type2BodyExactCount { get; set; }
-        public uint Type2BodyUnsupportedCount { get; set; }
-        public uint Type2BodyFailedCount { get; set; }
-        public uint Type2BodyBytes { get; set; }
-        public uint Type2BodyExactCursorBytes { get; set; }
-        public uint Type2BodyMinExactBytes { get; set; }
-        public uint Type2BodyMaxExactBytes { get; set; }
-        public uint Type2BodyNonExactBytes { get; set; }
-        public Dictionary<string, uint> Type2BodyGroupCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type2BodySelectorCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type2BodyFailureCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type2BodyUnsupportedCategories { get; } = new(StringComparer.Ordinal);
-        public List<EndfieldHircBodyFrameExample> Type2BodyFailureExamples { get; } = new();
-        public uint Type7BodyFrameCount { get; set; }
-        public uint Type7BodyExactCount { get; set; }
-        public uint Type7BodyUnsupportedCount { get; set; }
-        public uint Type7BodyFailedCount { get; set; }
-        public uint Type7BodyBytes { get; set; }
-        public uint Type7BodyExactCursorBytes { get; set; }
-        public uint Type7BodyNonExactBytes { get; set; }
-        public uint Type7BodyMinExactBytes { get; set; }
-        public uint Type7BodyMaxExactBytes { get; set; }
-        public Dictionary<string, uint> Type7BodyGroupCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type7BodySelectorCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type7BodyFailureCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> Type7BodyUnsupportedCategories { get; } = new(StringComparer.Ordinal);
-        public List<EndfieldHircBodyFrameExample> Type7BodyFailureExamples { get; } = new();
+        public EndfieldHircBodyCensus Type2Body { get; } = new();
+        public EndfieldHircBodyCensus Type5Body { get; } = new();
+        public EndfieldHircBodyCensus Type7Body { get; } = new();
+    }
+
+    // One numeric HIRC type's whole-body census. Every type that opens with the shared
+    // node frame accumulates through this, so their counters cannot drift apart.
+    public sealed class EndfieldHircBodyCensus
+    {
+        public uint FrameCount { get; set; }
+        public uint ExactCount { get; set; }
+        public uint UnsupportedCount { get; set; }
+        public uint FailedCount { get; set; }
+        public uint BodyBytes { get; set; }
+        public uint ExactCursorBytes { get; set; }
+        public uint NonExactBytes { get; set; }
+        public uint MinExactBytes { get; set; }
+        public uint MaxExactBytes { get; set; }
+        public Dictionary<string, uint> GroupCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> SelectorCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> UnsupportedCategories { get; } = new(StringComparer.Ordinal);
+        public List<EndfieldHircBodyFrameExample> FailureExamples { get; } = new();
     }
 
     public sealed class EndfieldHircBodyFrameExample
