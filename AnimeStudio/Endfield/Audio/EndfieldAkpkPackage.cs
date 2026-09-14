@@ -28,6 +28,9 @@ namespace AnimeStudio.Endfield
         public int SoundCount { get; private set; }
         public int ExternalCount { get; private set; }
         public List<EndfieldBnkStructure> BnkStructures { get; } = new();
+        // Identities the caller wants walked. Empty by default, so the walk costs
+        // nothing unless a consumer supplies them.
+        public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
 
         public static EndfieldAkpkPackage Parse(byte[] input)
         {
@@ -424,7 +427,7 @@ namespace AnimeStudio.Endfield
                 }
                 else if (tag == "HIRC")
                 {
-                    ParseHirc(payload, bodyStart, checked((int)sectionSize), bankId, structure);
+                    ParseHirc(payload, bodyStart, checked((int)sectionSize), bankId, structure, NamedIdentityHashes);
                 }
                 pos = bodyEnd;
             }
@@ -450,7 +453,8 @@ namespace AnimeStudio.Endfield
             int bodyStart,
             int bodyLength,
             ulong bankId,
-            EndfieldBnkStructure structure)
+            EndfieldBnkStructure structure,
+            HashSet<uint> namedIdentityHashes)
         {
             if (bodyLength < 4)
             {
@@ -508,6 +512,8 @@ namespace AnimeStudio.Endfield
 
             var referrerCounts = new Dictionary<uint, uint>();
             var referrerOf = new Dictionary<uint, uint>();
+            var bankEdges = new Dictionary<uint, List<uint>>();
+            var bankSourceIds = new Dictionary<uint, uint>();
             for (var ordinal = 0U; ordinal < objectCount; ordinal++)
             {
                 if (bodyEnd - cursor < 9)
@@ -593,6 +599,15 @@ namespace AnimeStudio.Endfield
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
                     RecordHircBodyFrame(census, frame, bodySpan, bankId, ordinal, objectId);
+                    if (frame.Status == "exact" && frame.References is { Count: > 0 })
+                    {
+                        bankEdges[objectId] = new List<uint>(frame.References);
+                    }
+                    if (objectType == 2 && bodySpan.Length >= 14)
+                    {
+                        bankSourceIds[objectId] =
+                            BinaryPrimitives.ReadUInt32LittleEndian(bodySpan.Slice(5, 4));
+                    }
                     ResolveHircReferences(
                         structure.ReferenceCensus,
                         frame,
@@ -602,6 +617,30 @@ namespace AnimeStudio.Endfield
                         duplicateObjectIds,
                         referrerCounts,
                         referrerOf);
+                }
+                // Type 0x04 is framed by its own candidate-vector reader, so its edges
+                // have to be collected here rather than from the shared body result.
+                if (objectType == 4 && objectSize >= 5)
+                {
+                    var vectorStart = checked(cursor + 9);
+                    var vectorLength = checked((int)objectSize - 4);
+                    var entryCount = payload[vectorStart];
+                    if (checked(1 + entryCount * 4) <= vectorLength)
+                    {
+                        var targets = new List<uint>(entryCount);
+                        for (var entry = 0; entry < entryCount; entry++)
+                        {
+                            targets.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                                payload.AsSpan(checked(vectorStart + 1 + entry * 4), 4)));
+                        }
+                        bankEdges[objectId] = targets;
+                    }
+                }
+                if (objectType == 3 && objectSize >= 10)
+                {
+                    var target = BinaryPrimitives.ReadUInt32LittleEndian(
+                        payload.AsSpan(checked(cursor + 11), 4));
+                    bankEdges[objectId] = new List<uint> { target };
                 }
                 if (objectType == 4)
                 {
@@ -628,6 +667,12 @@ namespace AnimeStudio.Endfield
             structure.ReferenceCensus.DistinctDuplicateObjectIds = checked(
                 structure.ReferenceCensus.DistinctDuplicateObjectIds + (uint)duplicateObjectIds.Count);
             MeasureHircReferenceShape(structure.ReferenceCensus, referrerOf);
+            WalkHircNamedReach(
+                structure.NamedReachCensus,
+                namedIdentityHashes,
+                bankObjectTypes,
+                bankEdges,
+                bankSourceIds);
 
             if (cursor != bodyEnd)
             {
@@ -1005,6 +1050,82 @@ namespace AnimeStudio.Endfield
                 ? (uint)opaqueLength
                 : Math.Min(structure.Type2MinOpaqueTailBytes, (uint)opaqueLength);
             structure.Type2MaxOpaqueTailBytes = Math.Max(structure.Type2MaxOpaqueTailBytes, (uint)opaqueLength);
+        }
+
+        // Breadth-first closure from every object whose identity the caller supplied.
+        // Edges that leave the bank are counted, never followed: this corpus cannot
+        // say what they name.
+        private static void WalkHircNamedReach(
+            EndfieldHircNamedReachCensus census,
+            HashSet<uint> namedIdentityHashes,
+            Dictionary<uint, byte> bankObjectTypes,
+            Dictionary<uint, List<uint>> bankEdges,
+            Dictionary<uint, uint> bankSourceIds)
+        {
+            if (namedIdentityHashes == null || namedIdentityHashes.Count == 0)
+            {
+                return;
+            }
+            foreach (var pair in bankObjectTypes)
+            {
+                if (!namedIdentityHashes.Contains(pair.Key))
+                {
+                    continue;
+                }
+                census.MatchedObjects = checked(census.MatchedObjects + 1);
+                var typeKey = $"type{pair.Value:X2}";
+                census.MatchesByObjectType.TryGetValue(typeKey, out var typeCount);
+                census.MatchesByObjectType[typeKey] = checked(typeCount + 1);
+                if (pair.Value != 4)
+                {
+                    continue;
+                }
+                census.MatchedNamedType = checked(census.MatchedNamedType + 1);
+
+                var seen = new HashSet<uint> { pair.Key };
+                var queue = new Queue<uint>();
+                queue.Enqueue(pair.Key);
+                var sources = new HashSet<uint>();
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (!bankEdges.TryGetValue(current, out var references))
+                    {
+                        continue;
+                    }
+                    foreach (var reference in references)
+                    {
+                        if (!bankObjectTypes.ContainsKey(reference))
+                        {
+                            census.WalkEdgesLeavingTheBank =
+                                checked(census.WalkEdgesLeavingTheBank + 1);
+                            continue;
+                        }
+                        if (!seen.Add(reference))
+                        {
+                            continue;
+                        }
+                        if (bankSourceIds.TryGetValue(reference, out var sourceId))
+                        {
+                            sources.Add(sourceId);
+                        }
+                        queue.Enqueue(reference);
+                    }
+                }
+                if (sources.Count > 0)
+                {
+                    census.ReachingASource = checked(census.ReachingASource + 1);
+                }
+                else
+                {
+                    census.ReachingNoSource = checked(census.ReachingNoSource + 1);
+                }
+                census.ReachedSourceIds = checked(census.ReachedSourceIds + (uint)sources.Count);
+                var identity = pair.Key.ToString("X8");
+                census.ReachedSourceIdsByIdentity.TryGetValue(identity, out var existing);
+                census.ReachedSourceIdsByIdentity[identity] =
+                    Math.Max(existing, (uint)sources.Count);
+            }
         }
 
         // Depth and acyclicity of the reference relation inside one bank. In-degree at
@@ -2186,6 +2307,7 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> Type4U32VectorUnsupportedCategories { get; } = new(StringComparer.Ordinal);
         public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
+        public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2232,6 +2354,21 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> ObjectCountsByType { get; } = new(StringComparer.Ordinal);
         public uint MaximumReferenceDepth { get; set; }
         public Dictionary<string, uint> EdgeCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Where a shipped identifier reaches. Counters only: the walk direction is the
+    // physical one, which object's body holds the value, and nothing is named here
+    // except the entry point the caller supplied a hash for.
+    public sealed class EndfieldHircNamedReachCensus
+    {
+        public uint MatchedObjects { get; set; }
+        public uint MatchedNamedType { get; set; }
+        public uint ReachingASource { get; set; }
+        public uint ReachingNoSource { get; set; }
+        public uint ReachedSourceIds { get; set; }
+        public uint WalkEdgesLeavingTheBank { get; set; }
+        public Dictionary<string, uint> MatchesByObjectType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ReachedSourceIdsByIdentity { get; } = new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircBodyFrameExample

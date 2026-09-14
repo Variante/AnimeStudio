@@ -16,6 +16,14 @@ namespace AnimeStudio.CLI
         public static int RunAudit(string[] args)
         {
             var options = ParseAuditOptions(args);
+            // Identities to walk from. Supplied by the caller so the reader never has to
+            // decide what counts as a name.
+            EndfieldAkpkPackage.NamedIdentityHashes = string.IsNullOrEmpty(options.NamedHashFile)
+                ? new HashSet<uint>()
+                : new HashSet<uint>(File.ReadAllLines(options.NamedHashFile)
+                    .Select(line => line.Trim())
+                    .Where(line => line.Length == 8)
+                    .Select(line => Convert.ToUInt32(line, 16)));
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
             var rows = new List<Dictionary<string, object?>>();
             var failures = 0;
@@ -172,6 +180,7 @@ namespace AnimeStudio.CLI
                             ["hircType05BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type5Body),
                             ["hircType06BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type6Body),
                             ["hircReferenceCensus"] = BuildReferenceCensusSummary(package.BnkStructures),
+                            ["hircNamedReachCensus"] = BuildNamedReachSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
@@ -553,6 +562,37 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static Dictionary<string, object?> BuildNamedReachSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var rows = structures.Select(row => row.NamedReachCensus).ToArray();
+            return new Dictionary<string, object?>
+            {
+                ["matchedObjects"] = rows.Sum(row => (long)row.MatchedObjects),
+                ["matchedNamedType"] = rows.Sum(row => (long)row.MatchedNamedType),
+                ["reachingASource"] = rows.Sum(row => (long)row.ReachingASource),
+                ["reachingNoSource"] = rows.Sum(row => (long)row.ReachingNoSource),
+                ["reachedSourceIds"] = rows.Sum(row => (long)row.ReachedSourceIds),
+                ["walkEdgesLeavingTheBank"] = rows.Sum(row => (long)row.WalkEdgesLeavingTheBank),
+                ["matchesByObjectType"] = rows
+                    .SelectMany(row => row.MatchesByObjectType)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["reachedSourceIdsByIdentity"] = rows
+                    .SelectMany(row => row.ReachedSourceIdsByIdentity)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Max(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+            };
+        }
+
         private static Dictionary<string, object?> BuildReferenceCensusSummary(
             IEnumerable<EndfieldBnkStructure> structures)
         {
@@ -703,6 +743,7 @@ namespace AnimeStudio.CLI
             public string Output { get; set; } = "./akpk_audit.json";
             public List<EndfieldVfsBlockType> BlockTypes { get; } = new();
             public bool HircOnly { get; set; }
+            public string NamedHashFile { get; set; }
         }
 
         private static AudioAuditOptions ParseAuditOptions(string[] args)
@@ -728,6 +769,7 @@ namespace AnimeStudio.CLI
                     case "--streaming-assets": options.StreamingAssets = Next(); break;
                     case "--fallback-assets": options.FallbackAssets = Next(); break;
                     case "--hirc-only": options.HircOnly = true; break;
+                    case "--named-hash-file": options.NamedHashFile = Next(); break;
                     case "-o":
                     case "--output": options.Output = Next(); break;
                     case "-b":
