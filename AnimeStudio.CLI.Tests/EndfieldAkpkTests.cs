@@ -9,6 +9,8 @@ internal static class EndfieldAkpkTests
         TestBankPayloadIsDecryptedAndFramed();
         TestHircObjectFramingAndUnknownTypeArePreserved();
         TestType2SourcePrefixIsBounded();
+        TestType3ActionFramesConsumeSupportedBodiesExactly();
+        TestType3ActionFramesFailClosed();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -100,6 +102,212 @@ internal static class EndfieldAkpkTests
             "type 0x02 source plugin range out of object");
     }
 
+    private static void TestType3ActionFramesConsumeSupportedBodiesExactly()
+    {
+        var operations = new ushort[]
+        {
+            0x0100, 0x0200, 0x0300, 0x0400, 0x0600, 0x0700,
+            0x0800, 0x0900, 0x0A00, 0x0B00, 0x0C00, 0x0D00,
+            0x0E00, 0x0F00, 0x1000, 0x1100, 0x1200, 0x1300,
+            0x1400, 0x1900, 0x1A00, 0x1B00, 0x1E00, 0x1F00,
+            0x2000, 0x2100, 0x2200, 0x3000, 0x3100, 0x3200,
+            0x3300, 0x3400, 0x3500, 0x3600, 0x3700, 0x6100,
+        };
+        var objects = operations
+            .Select((operation, index) => (
+                Type: (byte)0x03,
+                Id: checked((uint)(0x4000 + index)),
+                Body: BuildActionBody(operation)))
+            .ToArray();
+        var package = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4000, BuildBnk(objects)));
+        var structure = package.BnkStructures[0];
+        var expectedBytes = (uint)objects.Sum(item => item.Body.Length);
+        if (structure.Type3ActionFrameCount != (uint)operations.Length
+            || structure.Type3ActionExactCount != (uint)operations.Length
+            || structure.Type3ActionUnsupportedCount != 0
+            || structure.Type3ActionFailedCount != 0
+            || structure.Type3ActionBodyBytes != expectedBytes
+            || structure.Type3ActionExactCursorBytes != expectedBytes
+            || structure.Type3ActionOperationCounts.Count != operations.Length)
+        {
+            throw new InvalidOperationException("type 0x03 supported operation cursor census mismatch");
+        }
+    }
+
+    private static void TestType3ActionFramesFailClosed()
+    {
+        var truncatedHeader = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk((0x03, 0x4101U, Array.Empty<byte>()))))
+            .BnkStructures[0];
+        if (truncatedHeader.Type3ActionFailedCount != 1
+            || !truncatedHeader.Type3ActionFailureCounts.ContainsKey("truncated_action_type"))
+        {
+            throw new InvalidOperationException("truncated type 0x03 action header was not rejected");
+        }
+
+        var malformedCountBody = new byte[]
+        {
+            0x00, 0x10, 0, 0, 0, 0, 0, // Action type, fixed header
+            2, // Two property IDs are declared but neither fits.
+        };
+        var malformedCount = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk((0x03, 0x4102U, malformedCountBody))))
+            .BnkStructures[0];
+        if (!malformedCount.Type3ActionFailureCounts.ContainsKey("truncated_scalar_property_ids"))
+        {
+            throw new InvalidOperationException("malformed type 0x03 property count was not rejected");
+        }
+
+        var overrunExceptions = BuildActionBody(0x0100);
+        overrunExceptions[^1] = 1;
+        var exceptionOverrun = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk((0x03, 0x4103U, overrunExceptions))))
+            .BnkStructures[0];
+        if (!exceptionOverrun.Type3ActionFailureCounts.ContainsKey("exception_rows_out_of_range"))
+        {
+            throw new InvalidOperationException("out-of-range type 0x03 exception count was not rejected");
+        }
+
+        var validMultiByteExceptions = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x4100,
+                BuildBnk((0x03, 0x4107U, BuildActionBodyWithExceptionRows(0x0100, new byte[] { 0x80, 0x01 }, 128)))))
+            .BnkStructures[0];
+        if (validMultiByteExceptions.Type3ActionExactCount != 1
+            || validMultiByteExceptions.Type3ActionFailureCounts.Count != 0)
+        {
+            throw new InvalidOperationException("valid multi-byte type 0x03 exception count was not framed exactly");
+        }
+
+        var exceptionCountOverflow = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x4100,
+                BuildBnk((0x03, 0x4108U, BuildActionBodyWithExceptionRows(
+                    0x0100,
+                    new byte[] { 0x80, 0x80, 0x80, 0x80, 0x10 },
+                    0)))))
+            .BnkStructures[0];
+        if (!exceptionCountOverflow.Type3ActionFailureCounts.ContainsKey("exception_count_overflow"))
+        {
+            throw new InvalidOperationException("overflowing type 0x03 exception count was not rejected");
+        }
+
+        var unterminatedExceptionCount = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x4100,
+                BuildBnk((0x03, 0x4109U, BuildActionBodyWithExceptionRows(
+                    0x0100,
+                    new byte[] { 0x80, 0x80, 0x80, 0x80, 0x80 },
+                    0)))))
+            .BnkStructures[0];
+        if (!unterminatedExceptionCount.Type3ActionFailureCounts.ContainsKey("unterminated_exception_count"))
+        {
+            throw new InvalidOperationException("unterminated five-byte type 0x03 exception count was not rejected");
+        }
+
+        var trailingBody = BuildActionBody(0x1000).Append((byte)0x7F).ToArray();
+        var trailing = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk((0x03, 0x4104U, trailingBody))))
+            .BnkStructures[0];
+        if (!trailing.Type3ActionFailureCounts.ContainsKey("unexpected_trailing_bytes"))
+        {
+            throw new InvalidOperationException("trailing type 0x03 action byte was not rejected");
+        }
+
+        var unsupported = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk((0x03, 0x4105U, BuildActionBody(0x0500)))))
+            .BnkStructures[0];
+        if (unsupported.Type3ActionUnsupportedCount != 1
+            || !unsupported.Type3ActionFailureCounts.ContainsKey("unsupported_operation"))
+        {
+            throw new InvalidOperationException("unknown type 0x03 operation was not kept unsupported");
+        }
+
+        var wrongVersion = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x4100, BuildBnk(151, (0x03, 0x4106U, BuildActionBody(0x1000)))))
+            .BnkStructures[0];
+        if (wrongVersion.Type3ActionUnsupportedCount != 1
+            || !wrongVersion.Type3ActionFailureCounts.ContainsKey("unsupported_bank_version"))
+        {
+            throw new InvalidOperationException("non-v150 type 0x03 action was not kept unsupported");
+        }
+    }
+
+    private static byte[] BuildActionBody(ushort operation)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        writer.Write(operation);
+        writer.Write(0U);
+        writer.Write((byte)0);
+        writer.Write((byte)0); // Scalar property count.
+        writer.Write((byte)0); // Ranged property count.
+        if (operation == 0x0400)
+        {
+            writer.Write(new byte[9]);
+        }
+        else if (operation is 0x1200 or 0x1900 or 0x6100)
+        {
+            writer.Write(new byte[8]);
+        }
+        else if (operation is 0x1300 or 0x1400)
+        {
+            writer.Write(new byte[15]);
+            writer.Write((byte)0); // Empty exception list.
+        }
+        else if (operation is 0x0100 or 0x0200 or 0x0300)
+        {
+            writer.Write(new byte[2]);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x0600 or 0x0700)
+        {
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x0800 or 0x0900 or 0x0A00 or 0x0B00 or 0x0C00
+            or 0x0D00 or 0x0E00 or 0x0F00 or 0x2000 or 0x3000)
+        {
+            writer.Write(new byte[14]);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x3100 or 0x3200)
+        {
+            writer.Write(new byte[7]);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x3300 or 0x3400 or 0x3500 or 0x3600 or 0x3700)
+        {
+            writer.Write(new byte[2]);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x1E00)
+        {
+            writer.Write(new byte[14]);
+            writer.Write((byte)0);
+        }
+        else if (operation is 0x2200)
+        {
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+        }
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildActionBodyWithExceptionRows(ushort operation, byte[] encodedCount, int rowCount)
+    {
+        var body = BuildActionBody(operation);
+        if (body.Length == 0 || body[^1] != 0)
+        {
+            throw new InvalidOperationException("fixture action body does not end with an empty exception count");
+        }
+        return body[..^1]
+            .Concat(encodedCount)
+            .Concat(new byte[checked(rowCount * 5)])
+            .ToArray();
+    }
+
     private static void TestBankPayloadIsDecryptedAndFramed()
     {
         const uint bankId = 0x12345678;
@@ -189,6 +397,11 @@ internal static class EndfieldAkpkTests
 
     private static byte[] BuildBnk(params (byte Type, uint Id, byte[] Body)[] objects)
     {
+        return BuildBnk(150, objects);
+    }
+
+    private static byte[] BuildBnk(uint bankVersion, params (byte Type, uint Id, byte[] Body)[] objects)
+    {
         using var hircStream = new MemoryStream();
         using (var hircWriter = new BinaryWriter(hircStream, Encoding.UTF8, true))
         {
@@ -207,7 +420,7 @@ internal static class EndfieldAkpkTests
         {
             writer.Write(Encoding.ASCII.GetBytes("BKHD"));
             writer.Write(4U);
-            writer.Write(150U);
+            writer.Write(bankVersion);
             writer.Write(Encoding.ASCII.GetBytes("HIRC"));
             writer.Write(checked((uint)hircStream.Length));
             writer.Write(hircStream.ToArray());

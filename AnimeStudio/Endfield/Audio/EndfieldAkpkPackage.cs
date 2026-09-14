@@ -504,6 +504,18 @@ namespace AnimeStudio.Endfield
                 stats.MinDeclaredLength = Math.Min(stats.MinDeclaredLength, objectSize);
                 stats.MaxDeclaredLength = Math.Max(stats.MaxDeclaredLength, objectSize);
                 stats.Count = checked(stats.Count + 1);
+                if (objectType == 3)
+                {
+                    var actionBodyStart = checked(cursor + 9);
+                    var actionBodyLength = checked((int)objectSize - 4);
+                    RecordType3ActionFrame(
+                        payload.AsSpan(actionBodyStart, actionBodyLength),
+                        structure.Version,
+                        bankId,
+                        ordinal,
+                        objectId,
+                        structure);
+                }
                 if (objectType == 2)
                 {
                     ParseType2SourcePrefix(
@@ -523,6 +535,331 @@ namespace AnimeStudio.Endfield
                 throw new InvalidDataException(
                     $"AKPK HIRC cursor mismatch: id={bankId}, cursor={cursor}, end={bodyEnd}, trailing={bodyEnd - cursor}");
             }
+        }
+
+        private static void RecordType3ActionFrame(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            var result = FrameType3ActionBody(body, bankVersion);
+            structure.Type3ActionFrameCount = checked(structure.Type3ActionFrameCount + 1);
+            structure.Type3ActionBodyBytes = checked(structure.Type3ActionBodyBytes + (uint)body.Length);
+            if (result.OperationCode is ushort operationCode)
+            {
+                structure.Type3ActionOperationCounts.TryGetValue(operationCode, out var operationCount);
+                structure.Type3ActionOperationCounts[operationCode] = checked(operationCount + 1);
+            }
+
+            if (result.Status == "exact")
+            {
+                structure.Type3ActionExactCount = checked(structure.Type3ActionExactCount + 1);
+                structure.Type3ActionExactCursorBytes = checked(
+                    structure.Type3ActionExactCursorBytes + (uint)result.CursorOffset);
+                return;
+            }
+            if (result.Status == "unsupported")
+            {
+                structure.Type3ActionUnsupportedCount = checked(
+                    structure.Type3ActionUnsupportedCount + 1);
+            }
+            else
+            {
+                structure.Type3ActionFailedCount = checked(structure.Type3ActionFailedCount + 1);
+            }
+
+            var failureCategory = string.IsNullOrEmpty(result.FailureCategory)
+                ? result.Status
+                : result.FailureCategory;
+            structure.Type3ActionFailureCounts.TryGetValue(failureCategory, out var failureCount);
+            structure.Type3ActionFailureCounts[failureCategory] = checked(failureCount + 1);
+            if (structure.Type3ActionFailureExamples.Count < 8)
+            {
+                structure.Type3ActionFailureExamples.Add(new EndfieldHircActionFrameFailure
+                {
+                    BankId = bankId,
+                    Ordinal = ordinal,
+                    ObjectId = objectId,
+                    OperationCode = result.OperationCode,
+                    Status = result.Status,
+                    FailureCategory = failureCategory,
+                    CursorOffset = result.CursorOffset,
+                    ExpectedBytes = result.ExpectedBytes,
+                    ActualBytes = result.ActualBytes,
+                });
+            }
+        }
+
+        private static EndfieldHircActionFrameResult FrameType3ActionBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return new EndfieldHircActionFrameResult
+                {
+                    Status = "unsupported",
+                    FailureCategory = "unsupported_bank_version",
+                };
+            }
+            if (body.Length < 2)
+            {
+                return ActionFrameFailure("truncated_action_type", null, 0, 2, body.Length);
+            }
+
+            var actionType = BinaryPrimitives.ReadUInt16LittleEndian(body);
+            var operationCode = (ushort)(actionType & 0xFF00);
+            if (body.Length < 7)
+            {
+                return ActionFrameFailure("truncated_action_header", operationCode, 0, 7, body.Length);
+            }
+
+            var cursor = 7;
+            if (!TryReadByteCount(body, ref cursor, "truncated_scalar_property_count", operationCode, out var scalarCount, out var failure)
+                || !TrySkip(body, ref cursor, scalarCount, "truncated_scalar_property_ids", operationCode, out failure)
+                || !TrySkip(body, ref cursor, scalarCount * 4, "truncated_scalar_property_values", operationCode, out failure))
+            {
+                return failure!;
+            }
+            if (!TryReadByteCount(body, ref cursor, "truncated_range_property_count", operationCode, out var rangeCount, out failure)
+                || !TrySkip(body, ref cursor, rangeCount, "truncated_range_property_ids", operationCode, out failure)
+                || !TrySkip(body, ref cursor, rangeCount * 8, "truncated_range_property_values", operationCode, out failure))
+            {
+                return failure!;
+            }
+
+            if (operationCode == 0x0400)
+            {
+                if (!TrySkip(body, ref cursor, 9, "truncated_play_tail", operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode == 0x2100)
+            {
+                // The v150 PlayEvent body ends after the common header and property bundles.
+            }
+            else if (operationCode == 0x1200 || operationCode == 0x1900)
+            {
+                if (!TrySkip(body, ref cursor, 8, "truncated_pair_tail", operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode == 0x1300 || operationCode == 0x1400)
+            {
+                if (!TrySkip(body, ref cursor, 15, "truncated_game_parameter_tail", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode == 0x6100)
+            {
+                if (!TrySkip(body, ref cursor, 8, "truncated_rtpc_tail", operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x0100 or 0x0200 or 0x0300)
+            {
+                if (!TrySkip(body, ref cursor, 2, "truncated_action_flags", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x0600 or 0x0700)
+            {
+                if (!TrySkip(body, ref cursor, 1, "truncated_fade_flags", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x0800 or 0x0900 or 0x0A00 or 0x0B00 or 0x0C00
+                or 0x0D00 or 0x0E00 or 0x0F00 or 0x2000 or 0x3000)
+            {
+                if (!TrySkip(body, ref cursor, 14, "truncated_value_tail", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x3100 or 0x3200)
+            {
+                if (!TrySkip(body, ref cursor, 7, "truncated_effect_slot_tail", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x3300 or 0x3400 or 0x3500 or 0x3600 or 0x3700)
+            {
+                if (!TrySkip(body, ref cursor, 2, "truncated_effect_flags", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode == 0x1E00)
+            {
+                if (!TrySkip(body, ref cursor, 14, "truncated_seek_tail", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode == 0x2200)
+            {
+                if (!TrySkip(body, ref cursor, 1, "truncated_fade_flags", operationCode, out failure)
+                    || !TrySkipExceptionRows(body, ref cursor, operationCode, out failure))
+                {
+                    return failure!;
+                }
+            }
+            else if (operationCode is 0x1000 or 0x1100 or 0x1A00 or 0x1B00 or 0x1F00)
+            {
+                // These v150 operation variants have no serialized tail after the common bundles.
+            }
+            else
+            {
+                return new EndfieldHircActionFrameResult
+                {
+                    Status = "unsupported",
+                    OperationCode = operationCode,
+                    FailureCategory = "unsupported_operation",
+                    CursorOffset = cursor,
+                };
+            }
+
+            if (cursor != body.Length)
+            {
+                return ActionFrameFailure(
+                    "unexpected_trailing_bytes",
+                    operationCode,
+                    cursor,
+                    0,
+                    body.Length - cursor);
+            }
+            return new EndfieldHircActionFrameResult
+            {
+                Status = "exact",
+                OperationCode = operationCode,
+                CursorOffset = cursor,
+            };
+        }
+
+        private static EndfieldHircActionFrameResult ActionFrameFailure(
+            string category,
+            ushort? operationCode,
+            int offset,
+            long expectedBytes,
+            long actualBytes) => new()
+        {
+            Status = "failed",
+            OperationCode = operationCode,
+            FailureCategory = category,
+            CursorOffset = offset,
+            ExpectedBytes = expectedBytes,
+            ActualBytes = actualBytes,
+        };
+
+        private static bool TryReadByteCount(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            string category,
+            ushort operationCode,
+            out int count,
+            out EndfieldHircActionFrameResult failure)
+        {
+            if (cursor >= body.Length)
+            {
+                count = 0;
+                failure = ActionFrameFailure(category, operationCode, cursor, 1, 0);
+                return false;
+            }
+            count = body[cursor++];
+            failure = null!;
+            return true;
+        }
+
+        private static bool TrySkip(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            int count,
+            string category,
+            ushort operationCode,
+            out EndfieldHircActionFrameResult failure)
+        {
+            var available = body.Length - cursor;
+            if (count < 0 || count > available)
+            {
+                failure = ActionFrameFailure(category, operationCode, cursor, count, available);
+                return false;
+            }
+            cursor += count;
+            failure = null!;
+            return true;
+        }
+
+        private static bool TrySkipExceptionRows(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            ushort operationCode,
+            out EndfieldHircActionFrameResult failure)
+        {
+            ulong count = 0;
+            var terminated = false;
+            for (var index = 0; index < 5; index++)
+            {
+                if (cursor >= body.Length)
+                {
+                    failure = ActionFrameFailure("truncated_exception_count", operationCode, cursor, 1, 0);
+                    return false;
+                }
+                var value = body[cursor++];
+                if (index == 4 && (value & 0x80) != 0)
+                {
+                    failure = ActionFrameFailure("unterminated_exception_count", operationCode, cursor - 1, 1, 1);
+                    return false;
+                }
+                if (index == 4 && (value & 0x70) != 0)
+                {
+                    failure = ActionFrameFailure("exception_count_overflow", operationCode, cursor - 1, 1, 1);
+                    return false;
+                }
+                count |= (ulong)(value & 0x7F) << (index * 7);
+                if ((value & 0x80) == 0)
+                {
+                    terminated = true;
+                    break;
+                }
+            }
+            if (!terminated)
+            {
+                failure = ActionFrameFailure("unterminated_exception_count", operationCode, cursor, 0, body.Length - cursor);
+                return false;
+            }
+
+            var available = body.Length - cursor;
+            var expected = count * 5UL;
+            if (expected > (ulong)available)
+            {
+                failure = ActionFrameFailure(
+                    "exception_rows_out_of_range",
+                    operationCode,
+                    cursor,
+                    checked((long)expected),
+                    available);
+                return false;
+            }
+            cursor += checked((int)expected);
+            failure = null!;
+            return true;
         }
 
         private static void ParseType2SourcePrefix(
@@ -654,6 +991,38 @@ namespace AnimeStudio.Endfield
         public uint Type2OpaqueTailBytes { get; set; }
         public uint Type2MinOpaqueTailBytes { get; set; }
         public uint Type2MaxOpaqueTailBytes { get; set; }
+        public uint Type3ActionFrameCount { get; set; }
+        public uint Type3ActionExactCount { get; set; }
+        public uint Type3ActionUnsupportedCount { get; set; }
+        public uint Type3ActionFailedCount { get; set; }
+        public uint Type3ActionBodyBytes { get; set; }
+        public uint Type3ActionExactCursorBytes { get; set; }
+        public Dictionary<ushort, uint> Type3ActionOperationCounts { get; } = new();
+        public Dictionary<string, uint> Type3ActionFailureCounts { get; } = new(StringComparer.Ordinal);
+        public List<EndfieldHircActionFrameFailure> Type3ActionFailureExamples { get; } = new();
+    }
+
+    public sealed class EndfieldHircActionFrameResult
+    {
+        public string Status { get; init; } = "";
+        public ushort? OperationCode { get; init; }
+        public string FailureCategory { get; init; } = "";
+        public int CursorOffset { get; init; }
+        public long? ExpectedBytes { get; init; }
+        public long? ActualBytes { get; init; }
+    }
+
+    public sealed class EndfieldHircActionFrameFailure
+    {
+        public ulong BankId { get; init; }
+        public uint Ordinal { get; init; }
+        public uint ObjectId { get; init; }
+        public ushort? OperationCode { get; init; }
+        public string Status { get; init; } = "";
+        public string FailureCategory { get; init; } = "";
+        public int CursorOffset { get; init; }
+        public long? ExpectedBytes { get; init; }
+        public long? ActualBytes { get; init; }
     }
 
     public sealed class EndfieldBnkObjectTypeStats

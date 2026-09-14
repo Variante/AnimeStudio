@@ -1308,7 +1308,7 @@ static class Program
             });
             var missingReport = File.ReadAllText(output);
             if (missingExit != 0
-                || !missingReport.Contains("\"status\": \"excluded_missing_audio\"", StringComparison.Ordinal)
+                || !missingReport.Contains("\"status\": \"excluded_missing_voice\"", StringComparison.Ordinal)
                 || !missingReport.Contains("\"excluded\": 1", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(

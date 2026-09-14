@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,10 +44,15 @@ namespace AnimeStudio.CLI
                     && blockInfo.Chunks.Count > 0
                     && blockInfo.Chunks.All(chunk => IsChunkMissing(loader, blockType, chunk)))
                 {
+                    var exclusionStatus = blockType is EndfieldVfsBlockType.AudioEnglish
+                        or EndfieldVfsBlockType.AudioJapanese
+                        or EndfieldVfsBlockType.AudioKorean
+                        ? "excluded_missing_voice"
+                        : "excluded_missing_audio";
                     rows.Add(new Dictionary<string, object?>
                     {
                         ["block"] = blockType.GetName(),
-                        ["status"] = "excluded_missing_audio",
+                        ["status"] = exclusionStatus,
                         ["source"] = "missing_both",
                         ["declaredChunks"] = blockInfo.Chunks.Count,
                         ["declaredFiles"] = blockInfo.GroupFileInfoNum,
@@ -88,8 +94,9 @@ namespace AnimeStudio.CLI
                     try
                     {
                         row["source"] = loader.ResolveChunkPath(blockType, chunk);
-                        var package = EndfieldAkpkPackage.Parse(
-                            loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5: true));
+                        var pckBytes = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5: true);
+                        row["verifiedFileDataMd5"] = Convert.ToHexString(MD5.HashData(pckBytes));
+                        var package = EndfieldAkpkPackage.Parse(pckBytes);
                         var mediaRiff = 0;
                         var mediaPlugin = 0;
                         var mediaInvalid = 0;
@@ -157,8 +164,9 @@ namespace AnimeStudio.CLI
                                     .SelectMany(x => x.Type2PluginTypeCounts)
                                     .GroupBy(x => x.Key)
                                     .OrderBy(x => x.Key)
-                                    .ToDictionary(x => $"0x{x.Key:X}", x => x.Sum(y => (long)y.Value)),
+                                        .ToDictionary(x => $"0x{x.Key:X}", x => x.Sum(y => (long)y.Value)),
                             },
+                            ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -205,6 +213,7 @@ namespace AnimeStudio.CLI
                                         .OrderBy(pair => pair.Key)
                                         .ToDictionary(pair => $"0x{pair.Key:X}", pair => pair.Value),
                                 },
+                                ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -248,7 +257,9 @@ namespace AnimeStudio.CLI
                     ["verified"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "verified")),
                     ["failures"] = failures,
                     ["missingBlocks"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "missing_block")),
-                    ["excluded"] = rows.Count(x => Equals(x.GetValueOrDefault("status"), "excluded_missing_audio")),
+                    ["excluded"] = rows.Count(x =>
+                        x.GetValueOrDefault("status") is string status
+                        && status.StartsWith("excluded_", StringComparison.Ordinal)),
                 },
             };
             var outputParent = Path.GetDirectoryName(Path.GetFullPath(options.Output));
@@ -479,6 +490,56 @@ namespace AnimeStudio.CLI
 
         private static string BoundDiagnostic(string message) =>
             string.IsNullOrEmpty(message) ? "unknown AKPK failure" : message.Length <= 240 ? message : message[..240];
+
+        private static Dictionary<string, object?> BuildType3ActionFrameSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var rows = structures.ToArray();
+            var failureExamples = rows
+                .SelectMany(row => row.Type3ActionFailureExamples)
+                .Take(16)
+                .Select(failure => new Dictionary<string, object?>
+                {
+                    ["bankId"] = failure.BankId,
+                    ["ordinal"] = failure.Ordinal,
+                    ["objectId"] = failure.ObjectId,
+                    ["operationCode"] = failure.OperationCode is ushort operationCode
+                        ? $"0x{operationCode:X4}"
+                        : null,
+                    ["status"] = failure.Status,
+                    ["failureCategory"] = failure.FailureCategory,
+                    ["cursorOffset"] = failure.CursorOffset,
+                    ["expectedBytes"] = failure.ExpectedBytes,
+                    ["actualBytes"] = failure.ActualBytes,
+                })
+                .ToArray();
+            return new Dictionary<string, object?>
+            {
+                ["count"] = rows.Sum(row => (long)row.Type3ActionFrameCount),
+                ["exact"] = rows.Sum(row => (long)row.Type3ActionExactCount),
+                ["unsupported"] = rows.Sum(row => (long)row.Type3ActionUnsupportedCount),
+                ["failed"] = rows.Sum(row => (long)row.Type3ActionFailedCount),
+                ["ambiguous"] = 0,
+                ["bodyBytes"] = rows.Sum(row => (long)row.Type3ActionBodyBytes),
+                ["exactCursorBytes"] = rows.Sum(row => (long)row.Type3ActionExactCursorBytes),
+                ["operationCounts"] = rows
+                    .SelectMany(row => row.Type3ActionOperationCounts)
+                    .GroupBy(pair => pair.Key)
+                    .OrderBy(group => group.Key)
+                    .ToDictionary(
+                        group => $"0x{group.Key:X4}",
+                        group => group.Sum(pair => (long)pair.Value)),
+                ["failureCategories"] = rows
+                    .SelectMany(row => row.Type3ActionFailureCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["nonExactExamples"] = failureExamples,
+            };
+        }
 
         private sealed class AudioAuditOptions
         {
