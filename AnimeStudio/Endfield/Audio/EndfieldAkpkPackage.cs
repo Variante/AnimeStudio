@@ -1146,7 +1146,7 @@ namespace AnimeStudio.Endfield
             {
                 return false;
             }
-            if (!FrameHircGroupH(body, ref cursor, groups, out failure))
+            if (!FrameHircGroupH(body, ref cursor, groups, selectors, out failure))
             {
                 return false;
             }
@@ -1352,10 +1352,15 @@ namespace AnimeStudio.Endfield
             return HircTake(body, ref cursor, 4, out failure, "groupFScalar");
         }
 
+        // Widths above this are bucketed so a malformed bank cannot flood the published
+        // selector inventory with one key per observed element count.
+        private const int HircStateWidthHistogramLimit = 8;
+
         private static bool FrameHircGroupH(
             ReadOnlySpan<byte> body,
             ref int cursor,
             Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
             out EndfieldHircBodyFrameResult failure)
         {
             if (!HircReadByte(body, ref cursor, out var propCount, out failure, "groupHPropCount"))
@@ -1372,6 +1377,10 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             HircBump(groups, "groupHGroups", groupCount);
+            // Seed both state counters so a body that frames no group still publishes the
+            // rows; an absent row and a zero row must not look different to a consumer.
+            HircBump(groups, "groupHStates", 0);
+            HircBump(groups, "groupHStateElements", 0);
             for (var i = 0; i < groupCount; i++)
             {
                 if (!HircTake(body, ref cursor, 5, out failure, "groupHGroupHeader"))
@@ -1382,11 +1391,42 @@ namespace AnimeStudio.Endfield
                 {
                     return false;
                 }
-                if (!HircTake(body, ref cursor, stateCount * 12, out failure, "groupHStates"))
-                {
-                    return false;
-                }
                 HircBump(groups, "groupHStates", stateCount);
+                // Each state is a four-byte key and its own counted vector of six-byte
+                // elements, not a fixed twelve bytes. Every state in types 0x02, 0x05 and
+                // 0x07 carries exactly one element, so a fixed width survived all three
+                // corpora; type 0x09 bodies carry two and disprove it.
+                for (var state = 0; state < stateCount; state++)
+                {
+                    if (!HircTake(body, ref cursor, 4, out failure, "groupHStateKey"))
+                    {
+                        return false;
+                    }
+                    if (!HircReadUInt16(body, ref cursor, out var elementCount, out failure, "groupHStateElementCount"))
+                    {
+                        return false;
+                    }
+                    if (elementCount > (body.Length - cursor) / 6)
+                    {
+                        failure = HircFrameOutcome(
+                            "failed",
+                            "range_groupHStateElements",
+                            cursor - 2,
+                            (body.Length - cursor) / 6,
+                            elementCount);
+                        return false;
+                    }
+                    cursor = checked(cursor + elementCount * 6);
+                    HircBump(groups, "groupHStateElements", elementCount);
+                    // Bucket wide states rather than minting one selector key per width:
+                    // a malformed bank could otherwise put 65,536 rows in the report.
+                    HircBump(
+                        selectors,
+                        elementCount <= HircStateWidthHistogramLimit
+                            ? $"groupHStateWidth_{6 + elementCount * 6}"
+                            : $"groupHStateWidth_over_{6 + HircStateWidthHistogramLimit * 6}",
+                        1);
+                }
             }
             return true;
         }

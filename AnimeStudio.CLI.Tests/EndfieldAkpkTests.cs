@@ -547,6 +547,7 @@ internal static class EndfieldAkpkTests
         byte groupFSelector = 0,
         byte groupHProps = 0,
         byte groupHStates = 0,
+        ushort groupHStateElements = 1,
         ushort groupIEntries = 0,
         ushort groupIPoints = 0,
         byte[]? groupIKey = null,
@@ -607,7 +608,12 @@ internal static class EndfieldAkpkTests
         {
             writer.Write(new byte[5]);
             writer.Write(groupHStates);
-            writer.Write(new byte[groupHStates * 12]);
+            for (var state = 0; state < groupHStates; state++)
+            {
+                writer.Write(new byte[4]); // State key.
+                writer.Write(groupHStateElements);
+                writer.Write(new byte[groupHStateElements * 6]);
+            }
         }
         writer.Write(groupIEntries);
         for (var i = 0; i < groupIEntries; i++)
@@ -629,6 +635,66 @@ internal static class EndfieldAkpkTests
 
     private static void TestType7BodyFramesReuseTheSharedNodeGroups()
     {
+        // A group H state carries its own counted element vector. Every state in the
+        // current type 0x02, 0x05 and 0x07 corpora holds exactly one element, so a
+        // multi-element state must be pinned by fixture or the width is untested.
+        // Two elements is the shape that actually disproved the fixed width, so pin it
+        // first and by name; three exercises the general case.
+        var twoElementState = BuildType2Body(
+            groupHStates: 1,
+            groupHStateElements: 2,
+            childEntries: 0,
+            writePrefix: false);
+        var twoElement = FrameType7Fixture(twoElementState);
+        if (twoElement.Type7Body.ExactCount != 1
+            || twoElement.Type7Body.GroupCounts["groupHStateElements"] != 2
+            || twoElement.Type7Body.SelectorCounts["groupHStateWidth_18"] != 1)
+        {
+            throw new InvalidOperationException("two-element group H state was not consumed");
+        }
+
+        var multiElementState = BuildType2Body(
+            groupHStates: 1,
+            groupHStateElements: 3,
+            childEntries: 0,
+            writePrefix: false);
+        var multiElement = FrameType7Fixture(multiElementState);
+        if (multiElement.Type7Body.ExactCount != 1
+            || multiElement.Type7Body.GroupCounts["groupHStates"] != 1
+            || multiElement.Type7Body.GroupCounts["groupHStateElements"] != 3
+            || multiElement.Type7Body.SelectorCounts["groupHStateWidth_24"] != 1)
+        {
+            throw new InvalidOperationException("multi-element group H state was not consumed");
+        }
+
+        // Wide states must bucket instead of minting a key per observed width.
+        var wideState = BuildType2Body(
+            groupHStates: 1,
+            groupHStateElements: 12,
+            childEntries: 0,
+            writePrefix: false);
+        if (FrameType7Fixture(wideState).Type7Body.SelectorCounts["groupHStateWidth_over_54"] != 1)
+        {
+            throw new InvalidOperationException("wide group H state was not bucketed");
+        }
+
+        // A lane that frames no state at all must still publish the element row.
+        if (!FrameType7Fixture(BuildType2Body(childEntries: 0, writePrefix: false))
+            .Type7Body.GroupCounts.ContainsKey("groupHStateElements"))
+        {
+            throw new InvalidOperationException("group H element counter was not seeded");
+        }
+
+        var emptyState = BuildType2Body(
+            groupHStates: 1,
+            groupHStateElements: 0,
+            childEntries: 0,
+            writePrefix: false);
+        if (FrameType7Fixture(emptyState).Type7Body.SelectorCounts["groupHStateWidth_6"] != 1)
+        {
+            throw new InvalidOperationException("empty group H state was not consumed");
+        }
+
         // Type 0x07 opens with the same node groups as type 0x02 and closes with one
         // counted vector of four-byte anonymous references.
         var minimal = BuildType2Body(childEntries: 0, writePrefix: false);
@@ -766,6 +832,34 @@ internal static class EndfieldAkpkTests
         if (!FrameType7Fixture(overflowing).Type7Body.FailureCounts.ContainsKey("overflow_groupIKey"))
         {
             throw new InvalidOperationException("overflowing group I key was not rejected");
+        }
+
+        // In a prefix-free body with one group H state: 4 flag/count bytes, 9 scalars,
+        // empty group C and D counts, the two selectors, group F's scalar, group G,
+        // the prop count, the group count, the 5-byte group header and the state count
+        // put the state key at 35 and its element count at 39.
+        const int stateKeyOffset = 35;
+        const int stateElementCountOffset = 39;
+
+        var stateOverrun = BuildType2Body(groupHStates: 1, childEntries: 0, writePrefix: false);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            stateOverrun.AsSpan(stateElementCountOffset, 2), 0x0FFF);
+        if (!FrameType7Fixture(stateOverrun).Type7Body.FailureCounts.ContainsKey("range_groupHStateElements"))
+        {
+            throw new InvalidOperationException("group H state element count was not range-checked");
+        }
+
+        var truncatedState = BuildType2Body(groupHStates: 1, childEntries: 0, writePrefix: false);
+        if (!FrameType7Fixture(truncatedState[..(stateKeyOffset + 2)])
+            .Type7Body.FailureCounts.ContainsKey("truncated_groupHStateKey"))
+        {
+            throw new InvalidOperationException("truncated group H state key was not rejected");
+        }
+
+        if (!FrameType7Fixture(truncatedState[..(stateElementCountOffset + 1)])
+            .Type7Body.FailureCounts.ContainsKey("truncated_groupHStateElementCount"))
+        {
+            throw new InvalidOperationException("truncated group H element count was not rejected");
         }
 
         // A key cut off at EOF must fail closed. The group I entry-count precheck only
