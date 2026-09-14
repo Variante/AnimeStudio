@@ -11,6 +11,10 @@ internal static class EndfieldAkpkTests
         TestType2SourcePrefixIsBounded();
         TestType3ActionFramesConsumeSupportedBodiesExactly();
         TestType3ActionFramesFailClosed();
+        TestType4U32VectorFramesClassifyExactAndOpaqueBodies();
+        TestType2BodyFramesConsumeSupportedBodiesExactly();
+        TestType2BodyFramesFailClosed();
+        TestType2BodyAmbiguousShapesStayUnsupported();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -324,6 +328,334 @@ internal static class EndfieldAkpkTests
         if (package.BankCount != 1 || package.Entries.Count != 0)
         {
             throw new InvalidOperationException("AKPK bank fixture did not produce one framed bank and no media");
+        }
+    }
+
+    private static void TestType2BodyFramesConsumeSupportedBodiesExactly()
+    {
+        var minimal = BuildType2Body();
+        var rich = BuildType2Body(
+            groupAFlag: 1,
+            groupAEntries: 2,
+            groupCEntries: 3,
+            groupDEntries: 1,
+            groupESelector: 0x23,
+            groupEVertices: 2,
+            groupEItems: 1,
+            groupFSelector: 0x0A,
+            groupHProps: 2,
+            groupHStates: 1,
+            groupIEntries: 1,
+            groupIPoints: 2);
+        var package = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x6000,
+                BuildBnk((0x02, 0x6001U, minimal), (0x02, 0x6002U, rich))));
+        var structure = package.BnkStructures[0];
+        var expectedBytes = (uint)(minimal.Length + rich.Length);
+        if (structure.Type2BodyFrameCount != 2
+            || structure.Type2BodyExactCount != 2
+            || structure.Type2BodyUnsupportedCount != 0
+            || structure.Type2BodyFailedCount != 0
+            || structure.Type2BodyBytes != expectedBytes
+            || structure.Type2BodyExactCursorBytes != expectedBytes
+            || structure.Type2BodyNonExactBytes != 0)
+        {
+            throw new InvalidOperationException("type 0x02 body frame census mismatch");
+        }
+        if (structure.Type2BodyMinExactBytes != (uint)minimal.Length
+            || structure.Type2BodyMaxExactBytes != (uint)rich.Length)
+        {
+            throw new InvalidOperationException("type 0x02 body exact-length range mismatch");
+        }
+        if (structure.Type2BodyGroupCounts["groupAEntries"] != 2
+            || structure.Type2BodyGroupCounts["groupCEntries"] != 3
+            || structure.Type2BodyGroupCounts["groupDEntries"] != 1
+            || structure.Type2BodyGroupCounts["groupEVertices"] != 2
+            || structure.Type2BodyGroupCounts["groupEItems"] != 1
+            || structure.Type2BodyGroupCounts["groupHProps"] != 2
+            || structure.Type2BodyGroupCounts["groupHGroups"] != 1
+            || structure.Type2BodyGroupCounts["groupHStates"] != 1
+            || structure.Type2BodyGroupCounts["groupIEntries"] != 1
+            || structure.Type2BodyGroupCounts["groupIPoints"] != 2)
+        {
+            throw new InvalidOperationException("type 0x02 body anonymous group inventory mismatch");
+        }
+        if (structure.Type2BodySelectorCounts["groupESelector_23"] != 1
+            || structure.Type2BodySelectorCounts["groupEBranch_1"] != 1
+            || structure.Type2BodySelectorCounts["groupFSelector_0A"] != 1)
+        {
+            throw new InvalidOperationException("type 0x02 body selector inventory mismatch");
+        }
+
+        // The plug-in source prefix is length-prefixed and must be inside the cursor.
+        var pluginBody = BuildType2Body(pluginId: 0x00650002, pluginParameterBytes: 6);
+        var pluginPackage = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x6100, BuildBnk((0x02, 0x6101U, pluginBody))));
+        if (pluginPackage.BnkStructures[0].Type2BodyExactCount != 1
+            || pluginPackage.BnkStructures[0].Type2BodyExactCursorBytes != (uint)pluginBody.Length)
+        {
+            throw new InvalidOperationException("type 0x02 plug-in source body did not consume exactly");
+        }
+    }
+
+    private static void TestType2BodyFramesFailClosed()
+    {
+        var body = BuildType2Body();
+
+        var truncated = FrameType2Fixture(body[..^1]);
+        if (truncated.Type2BodyFailedCount != 1
+            || !truncated.Type2BodyFailureCounts.ContainsKey("truncated_groupICount")
+            || truncated.Type2BodyNonExactBytes != (uint)(body.Length - 1))
+        {
+            throw new InvalidOperationException("truncated type 0x02 body did not fail closed");
+        }
+
+        var trailing = FrameType2Fixture(body.Concat(new byte[] { 0x7F }).ToArray());
+        if (trailing.Type2BodyFailedCount != 1
+            || !trailing.Type2BodyFailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("trailing type 0x02 bytes were not reported");
+        }
+
+        // Malformed count: an entry count that cannot fit in the remaining body.
+        var malformed = (byte[])body.Clone();
+        BinaryPrimitives.WriteUInt16LittleEndian(malformed.AsSpan(malformed.Length - 2, 2), 0x0FFF);
+        var malformedResult = FrameType2Fixture(malformed);
+        if (malformedResult.Type2BodyFailedCount != 1
+            || !malformedResult.Type2BodyFailureCounts.ContainsKey("range_groupIEntries"))
+        {
+            throw new InvalidOperationException("malformed type 0x02 entry count was not range-checked");
+        }
+
+        var pointOverrun = BuildType2Body(groupIEntries: 1, groupIPoints: 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            pointOverrun.AsSpan(pointOverrun.Length - 2 - 12, 2), 0x0FFF);
+        if (!FrameType2Fixture(pointOverrun).Type2BodyFailureCounts.ContainsKey("range_groupIPoints"))
+        {
+            throw new InvalidOperationException("malformed type 0x02 point count was not range-checked");
+        }
+
+        const int groupECountOffsetFromEnd = 39;
+
+        var vertexOverrun = BuildType2Body(groupESelector: 0x23, groupEVertices: 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            vertexOverrun.AsSpan(vertexOverrun.Length - groupECountOffsetFromEnd, 4),
+            0x4000_0000U);
+        if (!FrameType2Fixture(vertexOverrun).Type2BodyFailureCounts.ContainsKey("range_groupEVertices"))
+        {
+            throw new InvalidOperationException("group E vertex count was not range-checked");
+        }
+
+        var itemOverrun = BuildType2Body(groupESelector: 0x23, groupEItems: 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            itemOverrun.AsSpan(itemOverrun.Length - groupECountOffsetFromEnd, 4),
+            0x4000_0000U);
+        if (!FrameType2Fixture(itemOverrun).Type2BodyFailureCounts.ContainsKey("range_groupEItems"))
+        {
+            throw new InvalidOperationException("group E item count was not range-checked");
+        }
+
+        var wrongVersion = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(0x6300, BuildBnk(149, (0x02, 0x6301U, body))));
+        if (wrongVersion.BnkStructures[0].Type2BodyUnsupportedCount != 1
+            || !wrongVersion.BnkStructures[0].Type2BodyUnsupportedCategories
+                .ContainsKey("unsupported_bank_version"))
+        {
+            throw new InvalidOperationException("non-current bank version was not held unsupported");
+        }
+    }
+
+    private static void TestType2BodyAmbiguousShapesStayUnsupported()
+    {
+        // The current corpus never carries a nonempty group B vector, so its element
+        // width is unresolved and any nonempty vector must stay unsupported.
+        var groupB = BuildType2Body();
+        groupB[14 + 3] = 1;
+        var groupBResult = FrameType2Fixture(groupB);
+        if (groupBResult.Type2BodyUnsupportedCount != 1
+            || !groupBResult.Type2BodyUnsupportedCategories.ContainsKey("unsupported_groupB_nonempty"))
+        {
+            throw new InvalidOperationException("nonempty group B was not held unsupported");
+        }
+
+        // The corpus never separates the two low group E selector bits.
+        foreach (var selector in new byte[] { 0x01, 0x02 })
+        {
+            var ambiguous = BuildType2Body();
+            ambiguous[14 + 4 + 9 + 2] = selector;
+            var ambiguousResult = FrameType2Fixture(ambiguous);
+            if (ambiguousResult.Type2BodyUnsupportedCount != 1
+                || !ambiguousResult.Type2BodyUnsupportedCategories
+                    .ContainsKey("unsupported_groupE_selector"))
+            {
+                throw new InvalidOperationException(
+                    $"ambiguous group E selector 0x{selector:X2} was not held unsupported");
+            }
+        }
+
+        // Branch selector 3 never occurs in the current corpus.
+        var branch = BuildType2Body(groupESelector: 0x03);
+        branch[14 + 4 + 9 + 2] = 0x63;
+        var branchResult = FrameType2Fixture(branch);
+        if (branchResult.Type2BodyUnsupportedCount != 1
+            || !branchResult.Type2BodyUnsupportedCategories.ContainsKey("unsupported_groupE_branch"))
+        {
+            throw new InvalidOperationException("unobserved group E branch was not held unsupported");
+        }
+    }
+
+    private static EndfieldBnkStructure FrameType2Fixture(byte[] body)
+    {
+        return EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x6200, BuildBnk((0x02, 0x6201U, body))))
+            .BnkStructures[0];
+    }
+
+    private static byte[] BuildType2Body(
+        uint pluginId = 0x00040001,
+        int pluginParameterBytes = 0,
+        byte groupAFlag = 0,
+        byte groupAEntries = 0,
+        byte groupCEntries = 0,
+        byte groupDEntries = 0,
+        byte groupESelector = 0,
+        uint groupEVertices = 0,
+        uint groupEItems = 0,
+        byte groupFSelector = 0,
+        byte groupHProps = 0,
+        byte groupHStates = 0,
+        ushort groupIEntries = 0,
+        ushort groupIPoints = 0)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        writer.Write(pluginId);
+        writer.Write(new byte[10]);
+        if ((pluginId & 0x0F) == 2)
+        {
+            writer.Write(checked((uint)pluginParameterBytes));
+            writer.Write(new byte[pluginParameterBytes]);
+        }
+        writer.Write(groupAFlag);
+        writer.Write(groupAEntries);
+        if (groupAEntries > 0)
+        {
+            writer.Write((byte)0);
+            writer.Write(new byte[groupAEntries * 6]);
+        }
+        writer.Write((byte)0); // Group B flag.
+        writer.Write((byte)0); // Group B count.
+        writer.Write(new byte[9]);
+        writer.Write(groupCEntries);
+        writer.Write(new byte[groupCEntries * 5]);
+        writer.Write(groupDEntries);
+        writer.Write(new byte[groupDEntries * 9]);
+        writer.Write(groupESelector);
+        if ((groupESelector & 0x03) == 0x03)
+        {
+            writer.Write((byte)0);
+            if (((groupESelector >> 5) & 0x03) != 0)
+            {
+                writer.Write(new byte[5]);
+                writer.Write(groupEVertices);
+                writer.Write(new byte[checked((int)groupEVertices * 16)]);
+                writer.Write(groupEItems);
+                writer.Write(new byte[checked((int)groupEItems * 20)]);
+            }
+        }
+        writer.Write(groupFSelector);
+        if ((groupFSelector & 0x08) != 0)
+        {
+            writer.Write(new byte[16]);
+        }
+        writer.Write(new byte[4]);
+        writer.Write(new byte[6]);
+        writer.Write(groupHProps);
+        writer.Write(new byte[groupHProps * 3]);
+        writer.Write((byte)(groupHStates > 0 ? 1 : 0));
+        if (groupHStates > 0)
+        {
+            writer.Write(new byte[5]);
+            writer.Write(groupHStates);
+            writer.Write(new byte[groupHStates * 12]);
+        }
+        writer.Write(groupIEntries);
+        for (var i = 0; i < groupIEntries; i++)
+        {
+            writer.Write(new byte[12]);
+            writer.Write(groupIPoints);
+            writer.Write(new byte[groupIPoints * 12]);
+        }
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static void TestType4U32VectorFramesClassifyExactAndOpaqueBodies()
+    {
+        var exactVector = new byte[9];
+        exactVector[0] = 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(exactVector.AsSpan(1, 4), 0x5001);
+        BinaryPrimitives.WriteUInt32LittleEndian(exactVector.AsSpan(5, 4), 0x5002);
+        var exact = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x5000,
+                BuildBnk(
+                    (0x04, 0x5101U, exactVector),
+                    (0x04, 0x5102U, new byte[] { 0 }))));
+        var exactStructure = exact.BnkStructures[0];
+        if (exactStructure.Type4U32VectorFrameCount != 2
+            || exactStructure.Type4U32VectorExactCount != 2
+            || exactStructure.Type4U32VectorUnsupportedCount != 0
+            || exactStructure.Type4U32VectorFailedCount != 0
+            || exactStructure.Type4U32VectorEntryCount != 2
+            || exactStructure.Type4U32VectorBodyBytes != 10
+            || exactStructure.Type4U32VectorPrefixBytes != 10
+            || exactStructure.Type4U32VectorExactCursorBytes != 10)
+        {
+            throw new InvalidOperationException("type 0x04 exact vector frame census mismatch");
+        }
+
+        var truncated = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x5200,
+                BuildBnk((0x04, 0x5201U, new byte[] { 2, 1, 2, 3, 4 }))))
+            .BnkStructures[0];
+        if (truncated.Type4U32VectorFrameCount != 1
+            || truncated.Type4U32VectorFailedCount != 1
+            || !truncated.Type4U32VectorFailureCounts.ContainsKey("truncated_entries")
+            || truncated.Type4U32VectorFailureCounts["truncated_entries"] != 1
+            || truncated.Type4U32VectorFailedBodyBytes != 5)
+        {
+            throw new InvalidOperationException("truncated type 0x04 vector was not rejected");
+        }
+
+        var empty = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x5300,
+                BuildBnk((0x04, 0x5301U, Array.Empty<byte>()))))
+            .BnkStructures[0];
+        if (empty.Type4U32VectorFailedCount != 1
+            || !empty.Type4U32VectorFailureCounts.ContainsKey("truncated_count"))
+        {
+            throw new InvalidOperationException("empty type 0x04 body did not fail closed");
+        }
+
+        var trailing = EndfieldAkpkPackage.Parse(
+            BuildEncryptedBankPackage(
+                0x5400,
+                BuildBnk((0x04, 0x5401U, new byte[] { 1, 0x34, 0x12, 0, 0, 0xEE }))))
+            .BnkStructures[0];
+        if (trailing.Type4U32VectorUnsupportedCount != 1
+            || trailing.Type4U32VectorExactCount != 0
+            || !trailing.Type4U32VectorUnsupportedCategories.ContainsKey("opaque_tail_after_candidate_vector")
+            || trailing.Type4U32VectorUnsupportedCategories["opaque_tail_after_candidate_vector"] != 1
+            || trailing.Type4U32VectorPrefixBytes != 5
+            || trailing.Type4U32VectorOpaqueTailBytes != 1
+            || trailing.Type4U32VectorBodyBytes != 6
+            || trailing.Type4U32VectorExactCursorBytes != 0)
+        {
+            throw new InvalidOperationException("type 0x04 trailing bytes were not kept opaque");
         }
     }
 

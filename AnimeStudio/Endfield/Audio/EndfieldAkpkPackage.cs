@@ -527,6 +527,25 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
+                if (objectType == 2)
+                {
+                    RecordType2BodyFrame(
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
+                        structure.Version,
+                        bankId,
+                        ordinal,
+                        objectId,
+                        structure);
+                }
+                if (objectType == 4)
+                {
+                    RecordType4U32VectorFrame(
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
+                        bankId,
+                        ordinal,
+                        objectId,
+                        structure);
+                }
                 cursor = checked((int)objectEnd);
             }
 
@@ -908,6 +927,595 @@ namespace AnimeStudio.Endfield
             structure.Type2MaxOpaqueTailBytes = Math.Max(structure.Type2MaxOpaqueTailBytes, (uint)opaqueLength);
         }
 
+        private static void RecordType2BodyFrame(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            var result = FrameType2Body(body, bankVersion);
+            structure.Type2BodyFrameCount = checked(structure.Type2BodyFrameCount + 1);
+            structure.Type2BodyBytes = checked(structure.Type2BodyBytes + (uint)body.Length);
+            if (result.Status == "exact")
+            {
+                structure.Type2BodyExactCount = checked(structure.Type2BodyExactCount + 1);
+                structure.Type2BodyExactCursorBytes = checked(
+                    structure.Type2BodyExactCursorBytes + (uint)result.CursorOffset);
+                structure.Type2BodyMinExactBytes = structure.Type2BodyExactCount == 1
+                    ? (uint)result.CursorOffset
+                    : Math.Min(structure.Type2BodyMinExactBytes, (uint)result.CursorOffset);
+                structure.Type2BodyMaxExactBytes = Math.Max(
+                    structure.Type2BodyMaxExactBytes, (uint)result.CursorOffset);
+                foreach (var pair in result.GroupCounts)
+                {
+                    structure.Type2BodyGroupCounts.TryGetValue(pair.Key, out var groupTotal);
+                    structure.Type2BodyGroupCounts[pair.Key] = checked(groupTotal + pair.Value);
+                }
+                foreach (var pair in result.SelectorCounts)
+                {
+                    structure.Type2BodySelectorCounts.TryGetValue(pair.Key, out var selectorTotal);
+                    structure.Type2BodySelectorCounts[pair.Key] = checked(selectorTotal + pair.Value);
+                }
+                return;
+            }
+
+            structure.Type2BodyNonExactBytes = checked(
+                structure.Type2BodyNonExactBytes + (uint)body.Length);
+            if (result.Status == "unsupported")
+            {
+                structure.Type2BodyUnsupportedCount = checked(structure.Type2BodyUnsupportedCount + 1);
+                structure.Type2BodyUnsupportedCategories.TryGetValue(result.Category, out var unsupported);
+                structure.Type2BodyUnsupportedCategories[result.Category] = checked(unsupported + 1);
+            }
+            else
+            {
+                structure.Type2BodyFailedCount = checked(structure.Type2BodyFailedCount + 1);
+                structure.Type2BodyFailureCounts.TryGetValue(result.Category, out var failed);
+                structure.Type2BodyFailureCounts[result.Category] = checked(failed + 1);
+            }
+
+            if (structure.Type2BodyFailureExamples.Count < 8)
+            {
+                structure.Type2BodyFailureExamples.Add(new EndfieldHircType2BodyFrameExample
+                {
+                    BankId = bankId,
+                    Ordinal = ordinal,
+                    ObjectId = objectId,
+                    Status = result.Status,
+                    Category = result.Category,
+                    CursorOffset = result.CursorOffset,
+                    ExpectedBytes = result.ExpectedBytes,
+                    ActualBytes = result.ActualBytes,
+                });
+            }
+        }
+
+        // Anonymous group framing for numeric HIRC type 0x02 bodies. Group letters are
+        // deliberate: the corpus proves byte extents, not field ownership or meaning.
+        internal static EndfieldHircType2BodyFrameResult FrameType2Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return Type2BodyOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+
+            // Bounded 14-byte source prefix; plugin kind 2 adds a checked length-prefixed range.
+            if (!Type2Take(body, ref cursor, 4, out var failure, "prefixPluginId"))
+            {
+                return failure;
+            }
+            var pluginId = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
+            if (!Type2Take(body, ref cursor, 10, out failure, "prefixSourceInfo"))
+            {
+                return failure;
+            }
+            if ((pluginId & 0x0F) == 2 && pluginId != 0)
+            {
+                if (!Type2ReadUInt32(body, ref cursor, out var parameterLength, out failure, "prefixParamLength"))
+                {
+                    return failure;
+                }
+                if (parameterLength > (uint)(body.Length - cursor))
+                {
+                    return Type2BodyOutcome(
+                        "failed", "range_prefixParams", cursor, parameterLength, body.Length - cursor);
+                }
+                cursor = checked(cursor + (int)parameterLength);
+                Type2Bump(groups, "prefixParamBytes", parameterLength);
+            }
+
+            // Group A: one flag byte, one count byte, an optional shared mask byte and
+            // count fixed-width slots.
+            if (!Type2ReadByte(body, ref cursor, out var groupAFlag, out failure, "groupAFlag"))
+            {
+                return failure;
+            }
+            Type2Bump(selectors, $"groupAFlag_{groupAFlag:X2}", 1);
+            if (!Type2ReadByte(body, ref cursor, out var groupACount, out failure, "groupACount"))
+            {
+                return failure;
+            }
+            if (groupACount > 0)
+            {
+                if (!Type2Take(body, ref cursor, 1, out failure, "groupAMask"))
+                {
+                    return failure;
+                }
+                if (!Type2Take(body, ref cursor, groupACount * 6, out failure, "groupAEntries"))
+                {
+                    return failure;
+                }
+            }
+            Type2Bump(groups, "groupAEntries", groupACount);
+
+            // Group B: one flag byte and one count byte. The current corpus never carries a
+            // nonempty vector, so its element width is unresolved and must fail closed.
+            if (!Type2ReadByte(body, ref cursor, out var groupBFlag, out failure, "groupBFlag"))
+            {
+                return failure;
+            }
+            Type2Bump(selectors, $"groupBFlag_{groupBFlag:X2}", 1);
+            if (!Type2ReadByte(body, ref cursor, out var groupBCount, out failure, "groupBCount"))
+            {
+                return failure;
+            }
+            if (groupBCount > 0)
+            {
+                return Type2BodyOutcome(
+                    "unsupported", "unsupported_groupB_nonempty", cursor - 1, 0, groupBCount);
+            }
+
+            if (!Type2Take(body, ref cursor, 9, out failure, "anonymousScalars"))
+            {
+                return failure;
+            }
+
+            // Group C: count, count one-byte keys, count four-byte values.
+            if (!Type2ReadByte(body, ref cursor, out var groupCCount, out failure, "groupCCount"))
+            {
+                return failure;
+            }
+            if (!Type2Take(body, ref cursor, groupCCount * 5, out failure, "groupCEntries"))
+            {
+                return failure;
+            }
+            Type2Bump(groups, "groupCEntries", groupCCount);
+
+            // Group D: count, count one-byte keys, count eight-byte values.
+            if (!Type2ReadByte(body, ref cursor, out var groupDCount, out failure, "groupDCount"))
+            {
+                return failure;
+            }
+            if (!Type2Take(body, ref cursor, groupDCount * 9, out failure, "groupDEntries"))
+            {
+                return failure;
+            }
+            Type2Bump(groups, "groupDEntries", groupDCount);
+
+            if (!FrameType2GroupE(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (!FrameType2GroupF(body, ref cursor, selectors, out failure))
+            {
+                return failure;
+            }
+            if (!Type2Take(body, ref cursor, 6, out failure, "groupG"))
+            {
+                return failure;
+            }
+            if (!FrameType2GroupH(body, ref cursor, groups, out failure))
+            {
+                return failure;
+            }
+            if (!FrameType2GroupI(body, ref cursor, groups, out failure))
+            {
+                return failure;
+            }
+
+            if (cursor != body.Length)
+            {
+                return Type2BodyOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return new EndfieldHircType2BodyFrameResult
+            {
+                Status = "exact",
+                Category = "",
+                CursorOffset = cursor,
+                ExpectedBytes = body.Length,
+                ActualBytes = cursor,
+                GroupCounts = groups,
+                SelectorCounts = selectors,
+            };
+        }
+
+        private static bool FrameType2GroupE(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircType2BodyFrameResult failure)
+        {
+            if (!Type2ReadByte(body, ref cursor, out var bits, out failure, "groupESelector"))
+            {
+                return false;
+            }
+            Type2Bump(selectors, $"groupESelector_{bits:X2}", 1);
+            var low = bits & 0x03;
+            if (low != 0x00 && low != 0x03)
+            {
+                // The corpus never separates the two low selector bits, so a body that sets
+                // exactly one of them cannot choose a branch.
+                failure = Type2BodyOutcome(
+                    "unsupported", "unsupported_groupE_selector", cursor - 1, 0x03, low);
+                return false;
+            }
+            if (low == 0x00)
+            {
+                return true;
+            }
+            if (!Type2Take(body, ref cursor, 1, out failure, "groupEFlags"))
+            {
+                return false;
+            }
+            var branch = (bits >> 5) & 0x03;
+            Type2Bump(selectors, $"groupEBranch_{branch}", 1);
+            if (branch == 0)
+            {
+                return true;
+            }
+            if (branch == 3)
+            {
+                failure = Type2BodyOutcome(
+                    "unsupported", "unsupported_groupE_branch", cursor - 2, 2, branch);
+                return false;
+            }
+            if (!Type2Take(body, ref cursor, 5, out failure, "groupEBranchHeader"))
+            {
+                return false;
+            }
+            if (!Type2ReadUInt32(body, ref cursor, out var vertexCount, out failure, "groupEVertexCount"))
+            {
+                return false;
+            }
+            if (vertexCount > (uint)((body.Length - cursor) / 16))
+            {
+                failure = Type2BodyOutcome(
+                    "failed", "range_groupEVertices", cursor - 4, (body.Length - cursor) / 16, vertexCount);
+                return false;
+            }
+            cursor = checked(cursor + (int)vertexCount * 16);
+            if (!Type2ReadUInt32(body, ref cursor, out var itemCount, out failure, "groupEItemCount"))
+            {
+                return false;
+            }
+            if (itemCount > (uint)((body.Length - cursor) / 20))
+            {
+                failure = Type2BodyOutcome(
+                    "failed", "range_groupEItems", cursor - 4, (body.Length - cursor) / 20, itemCount);
+                return false;
+            }
+            cursor = checked(cursor + (int)itemCount * 20);
+            Type2Bump(groups, "groupEVertices", vertexCount);
+            Type2Bump(groups, "groupEItems", itemCount);
+            return true;
+        }
+
+        private static bool FrameType2GroupF(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircType2BodyFrameResult failure)
+        {
+            if (!Type2ReadByte(body, ref cursor, out var bits, out failure, "groupFSelector"))
+            {
+                return false;
+            }
+            Type2Bump(selectors, $"groupFSelector_{bits:X2}", 1);
+            if ((bits & 0x08) != 0 && !Type2Take(body, ref cursor, 16, out failure, "groupFBlock"))
+            {
+                return false;
+            }
+            return Type2Take(body, ref cursor, 4, out failure, "groupFScalar");
+        }
+
+        private static bool FrameType2GroupH(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            out EndfieldHircType2BodyFrameResult failure)
+        {
+            if (!Type2ReadByte(body, ref cursor, out var propCount, out failure, "groupHPropCount"))
+            {
+                return false;
+            }
+            if (!Type2Take(body, ref cursor, propCount * 3, out failure, "groupHProps"))
+            {
+                return false;
+            }
+            Type2Bump(groups, "groupHProps", propCount);
+            if (!Type2ReadByte(body, ref cursor, out var groupCount, out failure, "groupHGroupCount"))
+            {
+                return false;
+            }
+            Type2Bump(groups, "groupHGroups", groupCount);
+            for (var i = 0; i < groupCount; i++)
+            {
+                if (!Type2Take(body, ref cursor, 5, out failure, "groupHGroupHeader"))
+                {
+                    return false;
+                }
+                if (!Type2ReadByte(body, ref cursor, out var stateCount, out failure, "groupHStateCount"))
+                {
+                    return false;
+                }
+                if (!Type2Take(body, ref cursor, stateCount * 12, out failure, "groupHStates"))
+                {
+                    return false;
+                }
+                Type2Bump(groups, "groupHStates", stateCount);
+            }
+            return true;
+        }
+
+        private static bool FrameType2GroupI(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            out EndfieldHircType2BodyFrameResult failure)
+        {
+            if (!Type2ReadUInt16(body, ref cursor, out var entryCount, out failure, "groupICount"))
+            {
+                return false;
+            }
+            if (entryCount > (body.Length - cursor) / 14)
+            {
+                failure = Type2BodyOutcome(
+                    "failed", "range_groupIEntries", cursor - 2, (body.Length - cursor) / 14, entryCount);
+                return false;
+            }
+            Type2Bump(groups, "groupIEntries", entryCount);
+            for (var i = 0; i < entryCount; i++)
+            {
+                if (!Type2Take(body, ref cursor, 12, out failure, "groupIEntryHeader"))
+                {
+                    return false;
+                }
+                if (!Type2ReadUInt16(body, ref cursor, out var pointCount, out failure, "groupIPointCount"))
+                {
+                    return false;
+                }
+                if (pointCount > (body.Length - cursor) / 12)
+                {
+                    failure = Type2BodyOutcome(
+                        "failed", "range_groupIPoints", cursor - 2, (body.Length - cursor) / 12, pointCount);
+                    return false;
+                }
+                cursor = checked(cursor + pointCount * 12);
+                Type2Bump(groups, "groupIPoints", pointCount);
+            }
+            return true;
+        }
+
+        private static void Type2Bump(Dictionary<string, uint> counters, string key, uint value)
+        {
+            if (value == 0 && !counters.ContainsKey(key))
+            {
+                counters[key] = 0;
+                return;
+            }
+            counters.TryGetValue(key, out var current);
+            counters[key] = checked(current + value);
+        }
+
+        private static EndfieldHircType2BodyFrameResult Type2BodyOutcome(
+            string status,
+            string category,
+            int cursor,
+            long expected,
+            long actual) => new()
+            {
+                Status = status,
+                Category = category,
+                CursorOffset = cursor,
+                ExpectedBytes = expected,
+                ActualBytes = actual,
+                GroupCounts = new Dictionary<string, uint>(StringComparer.Ordinal),
+                SelectorCounts = new Dictionary<string, uint>(StringComparer.Ordinal),
+            };
+
+        private static bool Type2Take(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            int length,
+            out EndfieldHircType2BodyFrameResult failure,
+            string what)
+        {
+            if (length < 0 || body.Length - cursor < length)
+            {
+                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, length, body.Length - cursor);
+                return false;
+            }
+            cursor = checked(cursor + length);
+            failure = null;
+            return true;
+        }
+
+        private static bool Type2ReadByte(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            out byte value,
+            out EndfieldHircType2BodyFrameResult failure,
+            string what)
+        {
+            if (body.Length - cursor < 1)
+            {
+                value = 0;
+                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 1, body.Length - cursor);
+                return false;
+            }
+            value = body[cursor];
+            cursor = checked(cursor + 1);
+            failure = null;
+            return true;
+        }
+
+        private static bool Type2ReadUInt16(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            out ushort value,
+            out EndfieldHircType2BodyFrameResult failure,
+            string what)
+        {
+            if (body.Length - cursor < 2)
+            {
+                value = 0;
+                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 2, body.Length - cursor);
+                return false;
+            }
+            value = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
+            cursor = checked(cursor + 2);
+            failure = null;
+            return true;
+        }
+
+        private static bool Type2ReadUInt32(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            out uint value,
+            out EndfieldHircType2BodyFrameResult failure,
+            string what)
+        {
+            if (body.Length - cursor < 4)
+            {
+                value = 0;
+                failure = Type2BodyOutcome("failed", $"truncated_{what}", cursor, 4, body.Length - cursor);
+                return false;
+            }
+            value = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
+            cursor = checked(cursor + 4);
+            failure = null;
+            return true;
+        }
+
+        private static void RecordType4U32VectorFrame(
+            ReadOnlySpan<byte> body,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            structure.Type4U32VectorFrameCount = checked(structure.Type4U32VectorFrameCount + 1);
+            structure.Type4U32VectorBodyBytes = checked(
+                structure.Type4U32VectorBodyBytes + (uint)body.Length);
+
+            if (body.Length < 1)
+            {
+                RecordType4U32VectorFailure(
+                    "truncated_count",
+                    1,
+                    body.Length,
+                    bankId,
+                    ordinal,
+                    objectId,
+                    structure);
+                structure.Type4U32VectorFailedBodyBytes = checked(
+                    structure.Type4U32VectorFailedBodyBytes + (uint)body.Length);
+                return;
+            }
+
+            var entryCount = body[0];
+            var expectedBytes = checked(1 + entryCount * sizeof(uint));
+            if (expectedBytes > body.Length)
+            {
+                RecordType4U32VectorFailure(
+                    "truncated_entries",
+                    expectedBytes,
+                    body.Length,
+                    bankId,
+                    ordinal,
+                    objectId,
+                    structure);
+                structure.Type4U32VectorFailedBodyBytes = checked(
+                    structure.Type4U32VectorFailedBodyBytes + (uint)body.Length);
+                return;
+            }
+
+            structure.Type4U32VectorPrefixBytes = checked(
+                structure.Type4U32VectorPrefixBytes + (uint)expectedBytes);
+            structure.Type4U32VectorEntryCount = checked(
+                structure.Type4U32VectorEntryCount + entryCount);
+            if (expectedBytes == body.Length)
+            {
+                structure.Type4U32VectorExactCount = checked(
+                    structure.Type4U32VectorExactCount + 1);
+                structure.Type4U32VectorExactCursorBytes = checked(
+                    structure.Type4U32VectorExactCursorBytes + (uint)body.Length);
+                return;
+            }
+
+            structure.Type4U32VectorUnsupportedCount = checked(
+                structure.Type4U32VectorUnsupportedCount + 1);
+            const string unsupportedCategory = "opaque_tail_after_candidate_vector";
+            structure.Type4U32VectorUnsupportedCategories.TryGetValue(unsupportedCategory, out var unsupportedCount);
+            structure.Type4U32VectorUnsupportedCategories[unsupportedCategory] = checked(unsupportedCount + 1);
+            structure.Type4U32VectorUnsupportedPrefixBytes = checked(
+                structure.Type4U32VectorUnsupportedPrefixBytes + (uint)expectedBytes);
+            structure.Type4U32VectorOpaqueTailBytes = checked(
+                structure.Type4U32VectorOpaqueTailBytes + (uint)(body.Length - expectedBytes));
+            if (structure.Type4U32VectorFailureExamples.Count < 8)
+            {
+                structure.Type4U32VectorFailureExamples.Add(new EndfieldHircType4VectorFrameExample
+                {
+                    BankId = bankId,
+                    Ordinal = ordinal,
+                    ObjectId = objectId,
+                    Status = "unsupported",
+                    Category = "opaque_tail_after_candidate_vector",
+                    ExpectedBytes = expectedBytes,
+                    ActualBytes = body.Length,
+                    OpaqueTailBytes = body.Length - expectedBytes,
+                });
+            }
+        }
+
+        private static void RecordType4U32VectorFailure(
+            string category,
+            int expectedBytes,
+            int actualBytes,
+            ulong bankId,
+            uint ordinal,
+            uint objectId,
+            EndfieldBnkStructure structure)
+        {
+            structure.Type4U32VectorFailedCount = checked(
+                structure.Type4U32VectorFailedCount + 1);
+            structure.Type4U32VectorFailureCounts.TryGetValue(category, out var failureCount);
+            structure.Type4U32VectorFailureCounts[category] = checked(failureCount + 1);
+            if (structure.Type4U32VectorFailureExamples.Count < 8)
+            {
+                structure.Type4U32VectorFailureExamples.Add(new EndfieldHircType4VectorFrameExample
+                {
+                    BankId = bankId,
+                    Ordinal = ordinal,
+                    ObjectId = objectId,
+                    Status = "failed",
+                    Category = category,
+                    ExpectedBytes = expectedBytes,
+                    ActualBytes = actualBytes,
+                    OpaqueTailBytes = 0,
+                });
+            }
+        }
+
         private static byte[] ReadBytesWithin(BinaryReader reader, int count, long end, string field)
         {
             if (count < 0 || reader.BaseStream.Position > end || end - reader.BaseStream.Position < count)
@@ -1000,6 +1608,57 @@ namespace AnimeStudio.Endfield
         public Dictionary<ushort, uint> Type3ActionOperationCounts { get; } = new();
         public Dictionary<string, uint> Type3ActionFailureCounts { get; } = new(StringComparer.Ordinal);
         public List<EndfieldHircActionFrameFailure> Type3ActionFailureExamples { get; } = new();
+        public uint Type4U32VectorFrameCount { get; set; }
+        public uint Type4U32VectorExactCount { get; set; }
+        public uint Type4U32VectorUnsupportedCount { get; set; }
+        public uint Type4U32VectorFailedCount { get; set; }
+        public uint Type4U32VectorBodyBytes { get; set; }
+        public uint Type4U32VectorPrefixBytes { get; set; }
+        public uint Type4U32VectorUnsupportedPrefixBytes { get; set; }
+        public uint Type4U32VectorExactCursorBytes { get; set; }
+        public uint Type4U32VectorOpaqueTailBytes { get; set; }
+        public uint Type4U32VectorFailedBodyBytes { get; set; }
+        public uint Type4U32VectorEntryCount { get; set; }
+        public Dictionary<string, uint> Type4U32VectorFailureCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type4U32VectorUnsupportedCategories { get; } = new(StringComparer.Ordinal);
+        public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
+        public uint Type2BodyFrameCount { get; set; }
+        public uint Type2BodyExactCount { get; set; }
+        public uint Type2BodyUnsupportedCount { get; set; }
+        public uint Type2BodyFailedCount { get; set; }
+        public uint Type2BodyBytes { get; set; }
+        public uint Type2BodyExactCursorBytes { get; set; }
+        public uint Type2BodyMinExactBytes { get; set; }
+        public uint Type2BodyMaxExactBytes { get; set; }
+        public uint Type2BodyNonExactBytes { get; set; }
+        public Dictionary<string, uint> Type2BodyGroupCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type2BodySelectorCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type2BodyFailureCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Type2BodyUnsupportedCategories { get; } = new(StringComparer.Ordinal);
+        public List<EndfieldHircType2BodyFrameExample> Type2BodyFailureExamples { get; } = new();
+    }
+
+    public sealed class EndfieldHircType2BodyFrameExample
+    {
+        public ulong BankId { get; init; }
+        public uint Ordinal { get; init; }
+        public uint ObjectId { get; init; }
+        public string Status { get; init; } = "";
+        public string Category { get; init; } = "";
+        public int CursorOffset { get; init; }
+        public long ExpectedBytes { get; init; }
+        public long ActualBytes { get; init; }
+    }
+
+    public sealed class EndfieldHircType2BodyFrameResult
+    {
+        public string Status { get; init; } = "";
+        public string Category { get; init; } = "";
+        public int CursorOffset { get; init; }
+        public long ExpectedBytes { get; init; }
+        public long ActualBytes { get; init; }
+        public Dictionary<string, uint> GroupCounts { get; init; }
+        public Dictionary<string, uint> SelectorCounts { get; init; }
     }
 
     public sealed class EndfieldHircActionFrameResult
@@ -1023,6 +1682,18 @@ namespace AnimeStudio.Endfield
         public int CursorOffset { get; init; }
         public long? ExpectedBytes { get; init; }
         public long? ActualBytes { get; init; }
+    }
+
+    public sealed class EndfieldHircType4VectorFrameExample
+    {
+        public ulong BankId { get; init; }
+        public uint Ordinal { get; init; }
+        public uint ObjectId { get; init; }
+        public string Status { get; init; } = "";
+        public string Category { get; init; } = "";
+        public int ExpectedBytes { get; init; }
+        public int ActualBytes { get; init; }
+        public int OpaqueTailBytes { get; init; }
     }
 
     public sealed class EndfieldBnkObjectTypeStats

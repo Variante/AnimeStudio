@@ -167,6 +167,8 @@ namespace AnimeStudio.CLI
                                         .ToDictionary(x => $"0x{x.Key:X}", x => x.Sum(y => (long)y.Value)),
                             },
                             ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(package.BnkStructures),
+                            ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(package.BnkStructures),
+                            ["hircType02BodyFrame"] = BuildType2BodyFrameSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -214,6 +216,8 @@ namespace AnimeStudio.CLI
                                         .ToDictionary(pair => $"0x{pair.Key:X}", pair => pair.Value),
                                 },
                                 ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(new[] { x }),
+                                ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(new[] { x }),
+                                ["hircType02BodyFrame"] = BuildType2BodyFrameSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -538,6 +542,128 @@ namespace AnimeStudio.CLI
                         group => group.Sum(pair => (long)pair.Value),
                         StringComparer.Ordinal),
                 ["nonExactExamples"] = failureExamples,
+            };
+        }
+
+        private static Dictionary<string, object?> BuildType2BodyFrameSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var rows = structures.ToArray();
+            var examples = rows
+                .SelectMany(row => row.Type2BodyFailureExamples)
+                .Take(16)
+                .Select(example => new Dictionary<string, object?>
+                {
+                    ["bankId"] = example.BankId,
+                    ["ordinal"] = example.Ordinal,
+                    ["objectId"] = example.ObjectId,
+                    ["status"] = example.Status,
+                    ["category"] = example.Category,
+                    ["cursorOffset"] = example.CursorOffset,
+                    ["expectedBytes"] = example.ExpectedBytes,
+                    ["actualBytes"] = example.ActualBytes,
+                })
+                .ToArray();
+            return new Dictionary<string, object?>
+            {
+                ["count"] = rows.Sum(row => (long)row.Type2BodyFrameCount),
+                ["exact"] = rows.Sum(row => (long)row.Type2BodyExactCount),
+                ["unsupported"] = rows.Sum(row => (long)row.Type2BodyUnsupportedCount),
+                ["failed"] = rows.Sum(row => (long)row.Type2BodyFailedCount),
+                ["ambiguous"] = 0,
+                ["bodyBytes"] = rows.Sum(row => (long)row.Type2BodyBytes),
+                ["exactCursorBytes"] = rows.Sum(row => (long)row.Type2BodyExactCursorBytes),
+                ["nonExactBodyBytes"] = rows.Sum(row => (long)row.Type2BodyNonExactBytes),
+                ["minExactBodyBytes"] = rows.Where(row => row.Type2BodyExactCount > 0)
+                    .Select(row => row.Type2BodyMinExactBytes).DefaultIfEmpty(0u).Min(),
+                ["maxExactBodyBytes"] = rows.Select(row => row.Type2BodyMaxExactBytes)
+                    .DefaultIfEmpty(0u).Max(),
+                ["groupCounts"] = rows
+                    .SelectMany(row => row.Type2BodyGroupCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["selectorCounts"] = rows
+                    .SelectMany(row => row.Type2BodySelectorCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["failureCategories"] = rows
+                    .SelectMany(row => row.Type2BodyFailureCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["unsupportedCategories"] = rows
+                    .SelectMany(row => row.Type2BodyUnsupportedCategories)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["nonExactExamples"] = examples,
+            };
+        }
+
+        private static Dictionary<string, object?> BuildType4U32VectorFrameSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var rows = structures.ToArray();
+            var examples = rows
+                .SelectMany(row => row.Type4U32VectorFailureExamples)
+                .Take(16)
+                .Select(example => new Dictionary<string, object?>
+                {
+                    ["bankId"] = example.BankId,
+                    ["ordinal"] = example.Ordinal,
+                    ["objectId"] = example.ObjectId,
+                    ["status"] = example.Status,
+                    ["category"] = example.Category,
+                    ["expectedBytes"] = example.ExpectedBytes,
+                    ["actualBytes"] = example.ActualBytes,
+                    ["opaqueTailBytes"] = example.OpaqueTailBytes,
+                })
+                .ToArray();
+            return new Dictionary<string, object?>
+            {
+                ["count"] = rows.Sum(row => (long)row.Type4U32VectorFrameCount),
+                ["exact"] = rows.Sum(row => (long)row.Type4U32VectorExactCount),
+                ["unsupported"] = rows.Sum(row => (long)row.Type4U32VectorUnsupportedCount),
+                ["failed"] = rows.Sum(row => (long)row.Type4U32VectorFailedCount),
+                ["ambiguous"] = 0,
+                ["bodyBytes"] = rows.Sum(row => (long)row.Type4U32VectorBodyBytes),
+                ["candidatePrefixBytes"] = rows.Sum(row => (long)row.Type4U32VectorPrefixBytes),
+                ["unsupportedCandidatePrefixBytes"] = rows.Sum(row => (long)row.Type4U32VectorUnsupportedPrefixBytes),
+                ["exactCursorBytes"] = rows.Sum(row => (long)row.Type4U32VectorExactCursorBytes),
+                ["opaqueTailBytes"] = rows.Sum(row => (long)row.Type4U32VectorOpaqueTailBytes),
+                ["failedBodyBytes"] = rows.Sum(row => (long)row.Type4U32VectorFailedBodyBytes),
+                ["candidateEntryCount"] = rows.Sum(row => (long)row.Type4U32VectorEntryCount),
+                ["failureCategories"] = rows
+                    .SelectMany(row => row.Type4U32VectorFailureCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["unsupportedCategories"] = rows
+                    .SelectMany(row => row.Type4U32VectorUnsupportedCategories)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["nonExactExamples"] = examples,
             };
         }
 
