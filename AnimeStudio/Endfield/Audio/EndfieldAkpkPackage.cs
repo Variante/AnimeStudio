@@ -467,6 +467,47 @@ namespace AnimeStudio.Endfield
             }
             var cursor = checked(bodyStart + 4);
             structure.HircObjectCount = checked(structure.HircObjectCount + objectCount);
+
+            // First pass: the bank's object identities, so the anonymous reference
+            // vectors framed below can be resolved against them. This walks headers
+            // only and repeats the same bounds the framing pass enforces.
+            var bankObjectTypes = new Dictionary<uint, byte>();
+            var duplicateObjectIds = new HashSet<uint>();
+            var scan = cursor;
+            for (var ordinal = 0U; ordinal < objectCount; ordinal++)
+            {
+                if (bodyEnd - scan < 9)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object header truncated: id={bankId}, ordinal={ordinal}, offset={scan}, expected=9, actual={bodyEnd - scan}");
+                }
+                var scanType = payload[scan];
+                var scanSize = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(checked(scan + 1), 4));
+                var scanId = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(checked(scan + 5), 4));
+                if (scanSize < 4)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object size too small: id={bankId}, ordinal={ordinal}, object={scanId}, type={scanType}, size={scanSize}, expectedMin=4");
+                }
+                var scanEnd = checked((long)scan + 5L + scanSize);
+                if (scanEnd > bodyEnd)
+                {
+                    throw new InvalidDataException(
+                        $"AKPK HIRC object range out of HIRC: id={bankId}, ordinal={ordinal}, object={scanId}, type={scanType}, offset={scan}, size={scanSize}, hircEnd={bodyEnd}");
+                }
+                // Cross-type duplicate ids are retained numerically elsewhere; a duplicate
+                // here would make resolution ambiguous, so record it rather than collapse it.
+                if (!bankObjectTypes.TryAdd(scanId, scanType))
+                {
+                    structure.ReferenceCensus.DuplicateObjectIds =
+                        checked(structure.ReferenceCensus.DuplicateObjectIds + 1);
+                    duplicateObjectIds.Add(scanId);
+                }
+                scan = checked((int)scanEnd);
+            }
+
+            var referrerCounts = new Dictionary<uint, uint>();
+            var referrerOf = new Dictionary<uint, uint>();
             for (var ordinal = 0U; ordinal < objectCount; ordinal++)
             {
                 if (bodyEnd - cursor < 9)
@@ -550,6 +591,15 @@ namespace AnimeStudio.Endfield
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
                     RecordHircBodyFrame(census, frame, bodySpan, bankId, ordinal, objectId);
+                    ResolveHircReferences(
+                        structure.ReferenceCensus,
+                        frame,
+                        objectType,
+                        objectId,
+                        bankObjectTypes,
+                        duplicateObjectIds,
+                        referrerCounts,
+                        referrerOf);
                 }
                 if (objectType == 4)
                 {
@@ -558,10 +608,24 @@ namespace AnimeStudio.Endfield
                         bankId,
                         ordinal,
                         objectId,
-                        structure);
+                        structure,
+                        bankObjectTypes,
+                        duplicateObjectIds,
+                        referrerCounts,
+                        referrerOf);
                 }
                 cursor = checked((int)objectEnd);
             }
+
+            foreach (var pair in bankObjectTypes)
+            {
+                var typeKey = $"type{pair.Value:X2}";
+                structure.ReferenceCensus.ObjectCountsByType.TryGetValue(typeKey, out var typeCount);
+                structure.ReferenceCensus.ObjectCountsByType[typeKey] = checked(typeCount + 1);
+            }
+            structure.ReferenceCensus.DistinctDuplicateObjectIds = checked(
+                structure.ReferenceCensus.DistinctDuplicateObjectIds + (uint)duplicateObjectIds.Count);
+            MeasureHircReferenceShape(structure.ReferenceCensus, referrerOf);
 
             if (cursor != bodyEnd)
             {
@@ -941,6 +1005,118 @@ namespace AnimeStudio.Endfield
             structure.Type2MaxOpaqueTailBytes = Math.Max(structure.Type2MaxOpaqueTailBytes, (uint)opaqueLength);
         }
 
+        // Depth and acyclicity of the reference relation inside one bank. In-degree at
+        // most one does not by itself exclude a cycle, so walk it.
+        private static void MeasureHircReferenceShape(
+            EndfieldHircReferenceCensus census,
+            Dictionary<uint, uint> referrerOf)
+        {
+            var depth = new Dictionary<uint, uint>();
+            foreach (var start in referrerOf.Keys)
+            {
+                if (depth.ContainsKey(start))
+                {
+                    continue;
+                }
+                var path = new List<uint>();
+                var onPath = new HashSet<uint>();
+                var node = start;
+                uint baseDepth = 0;
+                while (true)
+                {
+                    if (depth.TryGetValue(node, out var known))
+                    {
+                        baseDepth = known;
+                        break;
+                    }
+                    // A node with no referrer is a root and sits at depth zero, so depth
+                    // counts references traversed rather than nodes visited.
+                    if (!referrerOf.TryGetValue(node, out var parent))
+                    {
+                        break;
+                    }
+                    if (!onPath.Add(node))
+                    {
+                        // Every node still on the walk belongs to a cycle or feeds one.
+                        census.ReferenceCycleOrFeedingNodes =
+                            checked(census.ReferenceCycleOrFeedingNodes + (uint)path.Count);
+                        foreach (var member in path)
+                        {
+                            depth[member] = 0;
+                        }
+                        path.Clear();
+                        break;
+                    }
+                    path.Add(node);
+                    node = parent;
+                }
+                for (var i = path.Count - 1; i >= 0; i--)
+                {
+                    baseDepth = checked(baseDepth + 1);
+                    depth[path[i]] = baseDepth;
+                    if (baseDepth > census.MaximumReferenceDepth)
+                    {
+                        census.MaximumReferenceDepth = baseDepth;
+                    }
+                }
+            }
+        }
+
+        // Join each anonymous reference to the bank's object identities. Resolution is
+        // an identity fact; it says nothing about direction, containment or meaning.
+        private static void ResolveHircReferences(
+            EndfieldHircReferenceCensus census,
+            EndfieldHircBodyFrameResult frame,
+            byte sourceType,
+            uint sourceId,
+            Dictionary<uint, byte> bankObjectTypes,
+            HashSet<uint> duplicateObjectIds,
+            Dictionary<uint, uint> referrerCounts,
+            Dictionary<uint, uint> referrerOf)
+        {
+            if (frame.Status != "exact" || frame.References == null)
+            {
+                return;
+            }
+            foreach (var reference in frame.References)
+            {
+                census.References = checked(census.References + 1);
+                if (reference == sourceId)
+                {
+                    census.SelfReferences = checked(census.SelfReferences + 1);
+                }
+                referrerCounts.TryGetValue(reference, out var referrers);
+                referrerCounts[reference] = checked(referrers + 1);
+                if (referrers == 0)
+                {
+                    referrerOf[reference] = sourceId;
+                }
+                if (referrers == 1)
+                {
+                    census.TargetsWithMultipleReferrers =
+                        checked(census.TargetsWithMultipleReferrers + 1);
+                }
+                // A reference into a duplicated id cannot name one object, so count it
+                // rather than let first-wins lookup hide the ambiguity.
+                if (duplicateObjectIds.Contains(reference))
+                {
+                    census.ReferencesToDuplicateIds =
+                        checked(census.ReferencesToDuplicateIds + 1);
+                }
+                if (bankObjectTypes.TryGetValue(reference, out var targetType))
+                {
+                    census.ResolvedSameBank = checked(census.ResolvedSameBank + 1);
+                    var edge = $"type{sourceType:X2}_to_type{targetType:X2}";
+                    census.EdgeCounts.TryGetValue(edge, out var edgeCount);
+                    census.EdgeCounts[edge] = checked(edgeCount + 1);
+                }
+                else
+                {
+                    census.UnresolvedInBank = checked(census.UnresolvedInBank + 1);
+                }
+            }
+        }
+
         private static void RecordHircBodyFrame(
             EndfieldHircBodyCensus census,
             EndfieldHircBodyFrameResult result,
@@ -1157,7 +1333,8 @@ namespace AnimeStudio.Endfield
             int cursor,
             int length,
             Dictionary<string, uint> groups,
-            Dictionary<string, uint> selectors) => new()
+            Dictionary<string, uint> selectors,
+            List<uint> references = null) => new()
             {
                 Status = "exact",
                 Category = "",
@@ -1166,6 +1343,7 @@ namespace AnimeStudio.Endfield
                 ActualBytes = cursor,
                 GroupCounts = groups,
                 SelectorCounts = selectors,
+                References = references ?? new List<uint>(),
             };
 
         // Numeric HIRC type 0x05 opens with the shared node groups, then a fixed opaque
@@ -1200,7 +1378,12 @@ namespace AnimeStudio.Endfield
                 return HircFrameOutcome(
                     "failed", "range_referenceEntries", cursor - 4, (body.Length - cursor) / 4, referenceCount);
             }
-            cursor = checked(cursor + (int)referenceCount * 4);
+            var references = new List<uint>(checked((int)referenceCount));
+            for (var i = 0U; i < referenceCount; i++)
+            {
+                references.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                cursor = checked(cursor + 4);
+            }
             HircBump(groups, "referenceEntries", referenceCount);
             if (!HircReadUInt16(body, ref cursor, out var recordCount, out failure, "recordCount"))
             {
@@ -1221,7 +1404,7 @@ namespace AnimeStudio.Endfield
             {
                 return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
             }
-            return HircFrameExact(cursor, body.Length, groups, selectors);
+            return HircFrameExact(cursor, body.Length, groups, selectors, references);
         }
 
         // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
@@ -1251,14 +1434,19 @@ namespace AnimeStudio.Endfield
                 return HircFrameOutcome(
                     "failed", "range_childEntries", cursor - 4, (body.Length - cursor) / 4, childCount);
             }
-            cursor = checked(cursor + (int)childCount * 4);
+            var references = new List<uint>(checked((int)childCount));
+            for (var i = 0U; i < childCount; i++)
+            {
+                references.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                cursor = checked(cursor + 4);
+            }
             HircBump(groups, "childEntries", childCount);
 
             if (cursor != body.Length)
             {
                 return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
             }
-            return HircFrameExact(cursor, body.Length, groups, selectors);
+            return HircFrameExact(cursor, body.Length, groups, selectors, references);
         }
 
         private static bool FrameHircGroupE(
@@ -1645,7 +1833,11 @@ namespace AnimeStudio.Endfield
             ulong bankId,
             uint ordinal,
             uint objectId,
-            EndfieldBnkStructure structure)
+            EndfieldBnkStructure structure,
+            Dictionary<uint, byte> bankObjectTypes,
+            HashSet<uint> duplicateObjectIds,
+            Dictionary<uint, uint> referrerCounts,
+            Dictionary<uint, uint> referrerOf)
         {
             structure.Type4U32VectorFrameCount = checked(structure.Type4U32VectorFrameCount + 1);
             structure.Type4U32VectorBodyBytes = checked(
@@ -1693,6 +1885,25 @@ namespace AnimeStudio.Endfield
                     structure.Type4U32VectorExactCount + 1);
                 structure.Type4U32VectorExactCursorBytes = checked(
                     structure.Type4U32VectorExactCursorBytes + (uint)body.Length);
+                // Only an exact body's entries reach the reference census, so publish
+                // that subset rather than the total the gate would otherwise tie against.
+                structure.Type4U32VectorExactEntryCount = checked(
+                    structure.Type4U32VectorExactEntryCount + entryCount);
+                var references = new List<uint>(entryCount);
+                for (var entry = 0; entry < entryCount; entry++)
+                {
+                    references.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.Slice(checked(1 + entry * 4), 4)));
+                }
+                ResolveHircReferences(
+                    structure.ReferenceCensus,
+                    HircFrameExact(body.Length, body.Length, new Dictionary<string, uint>(StringComparer.Ordinal), new Dictionary<string, uint>(StringComparer.Ordinal), references),
+                    4,
+                    objectId,
+                    bankObjectTypes,
+                    duplicateObjectIds,
+                    referrerCounts,
+                    referrerOf);
                 return;
             }
 
@@ -1853,9 +2064,11 @@ namespace AnimeStudio.Endfield
         public uint Type4U32VectorOpaqueTailBytes { get; set; }
         public uint Type4U32VectorFailedBodyBytes { get; set; }
         public uint Type4U32VectorEntryCount { get; set; }
+        public uint Type4U32VectorExactEntryCount { get; set; }
         public Dictionary<string, uint> Type4U32VectorFailureCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> Type4U32VectorUnsupportedCategories { get; } = new(StringComparer.Ordinal);
         public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
+        public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type7Body { get; } = new();
@@ -1881,6 +2094,26 @@ namespace AnimeStudio.Endfield
         public List<EndfieldHircBodyFrameExample> FailureExamples { get; } = new();
     }
 
+    // Where each anonymous reference lands. This is an identity join, not a claim
+    // about what the relation means.
+    public sealed class EndfieldHircReferenceCensus
+    {
+        public uint References { get; set; }
+        public uint ResolvedSameBank { get; set; }
+        public uint UnresolvedInBank { get; set; }
+        public uint SelfReferences { get; set; }
+        public uint TargetsWithMultipleReferrers { get; set; }
+        public uint DuplicateObjectIds { get; set; }
+        public uint ReferencesToDuplicateIds { get; set; }
+        // Nodes on a cycle plus any tail feeding it: the walk stops at the repeat and
+        // cannot separate the two, so the name must not promise cycle membership.
+        public uint ReferenceCycleOrFeedingNodes { get; set; }
+        public uint DistinctDuplicateObjectIds { get; set; }
+        public Dictionary<string, uint> ObjectCountsByType { get; } = new(StringComparer.Ordinal);
+        public uint MaximumReferenceDepth { get; set; }
+        public Dictionary<string, uint> EdgeCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircBodyFrameExample
     {
         public ulong BankId { get; init; }
@@ -1902,6 +2135,7 @@ namespace AnimeStudio.Endfield
         public long ActualBytes { get; init; }
         public Dictionary<string, uint> GroupCounts { get; init; }
         public Dictionary<string, uint> SelectorCounts { get; init; }
+        public List<uint> References { get; init; }
     }
 
     public sealed class EndfieldHircActionFrameResult

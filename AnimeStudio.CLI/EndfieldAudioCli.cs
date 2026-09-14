@@ -170,6 +170,7 @@ namespace AnimeStudio.CLI
                             ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(package.BnkStructures),
                             ["hircType02BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type2Body),
                             ["hircType05BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type5Body),
+                            ["hircReferenceCensus"] = BuildReferenceCensusSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
@@ -221,6 +222,7 @@ namespace AnimeStudio.CLI
                                 ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(new[] { x }),
                                 ["hircType02BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type2Body),
                                 ["hircType05BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type5Body),
+                                ["hircReferenceCensus"] = BuildReferenceCensusSummary(new[] { x }),
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
@@ -549,6 +551,41 @@ namespace AnimeStudio.CLI
             };
         }
 
+        private static Dictionary<string, object?> BuildReferenceCensusSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var rows = structures.Select(row => row.ReferenceCensus).ToArray();
+            return new Dictionary<string, object?>
+            {
+                ["references"] = rows.Sum(row => (long)row.References),
+                ["resolvedSameBank"] = rows.Sum(row => (long)row.ResolvedSameBank),
+                ["unresolvedInBank"] = rows.Sum(row => (long)row.UnresolvedInBank),
+                ["selfReferences"] = rows.Sum(row => (long)row.SelfReferences),
+                ["targetsWithMultipleReferrers"] = rows.Sum(row => (long)row.TargetsWithMultipleReferrers),
+                ["duplicateObjectIds"] = rows.Sum(row => (long)row.DuplicateObjectIds),
+                ["referencesToDuplicateIds"] = rows.Sum(row => (long)row.ReferencesToDuplicateIds),
+                ["referenceCycleOrFeedingNodes"] = rows.Sum(row => (long)row.ReferenceCycleOrFeedingNodes),
+                ["distinctDuplicateObjectIds"] = rows.Sum(row => (long)row.DistinctDuplicateObjectIds),
+                ["objectCountsByType"] = rows
+                    .SelectMany(row => row.ObjectCountsByType)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["maximumReferenceDepth"] = rows.Select(row => row.MaximumReferenceDepth).DefaultIfEmpty(0u).Max(),
+                ["edgeCounts"] = rows
+                    .SelectMany(row => row.EdgeCounts)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+            };
+        }
+
         private static Dictionary<string, object?> BuildBodyFrameSummary(
             IEnumerable<EndfieldBnkStructure> structures,
             Func<EndfieldBnkStructure, EndfieldHircBodyCensus> select)
@@ -634,6 +671,7 @@ namespace AnimeStudio.CLI
                 ["opaqueTailBytes"] = rows.Sum(row => (long)row.Type4U32VectorOpaqueTailBytes),
                 ["failedBodyBytes"] = rows.Sum(row => (long)row.Type4U32VectorFailedBodyBytes),
                 ["candidateEntryCount"] = rows.Sum(row => (long)row.Type4U32VectorEntryCount),
+                ["exactEntryCount"] = rows.Sum(row => (long)row.Type4U32VectorExactEntryCount),
                 ["failureCategories"] = rows
                     .SelectMany(row => row.Type4U32VectorFailureCounts)
                     .GroupBy(pair => pair.Key, StringComparer.Ordinal)
