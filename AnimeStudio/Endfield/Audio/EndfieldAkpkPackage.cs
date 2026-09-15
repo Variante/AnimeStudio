@@ -403,7 +403,7 @@ namespace AnimeStudio.Endfield
             foreach (var structure in BnkStructures)
             {
                 foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
-                              leadBad, padBad, values) in structure.Type0AHeadPredictions)
+                              leadBad, padBad, values, tailBytes) in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -442,6 +442,15 @@ namespace AnimeStudio.Endfield
                             HircBump(Type0AElements.ValueCounts, $"value_{value}", 1);
                         }
                     }
+                    // The reference is an optional four-byte field: bodies that carry it
+                    // have exactly four more bytes after the head than bodies that do
+                    // not. Counting the tail length by outcome is what shows that.
+                    HircBump(
+                        Type0AHead.TailBytesByOutcome,
+                        (everything.Contains(predicted)
+                            && typeOf.TryGetValue(predicted, out var placed)
+                            && placed == 11 ? "withReference_" : "withoutReference_") + tailBytes,
+                        1);
                     Score("predicted", predicted);
                     Score("fixedOffset", fixedWord);
                     Score("predictedPlusFour", plus);
@@ -2690,7 +2699,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2751,7 +2760,8 @@ namespace AnimeStudio.Endfield
                 Read(body, Type0AHeadWordOffset),
                 leadBad,
                 padBad,
-                values.ToArray()));
+                values.ToArray(),
+                body.Length - at));
         }
 
         /// <summary>
@@ -4187,7 +4197,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4389,6 +4399,7 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> NamesTheSourceType { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> NamesTheSourceTypeWhereTheRuleApplies { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> HeadWordTargets { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TailBytesByOutcome { get; } = new(StringComparer.Ordinal);
     }
 
     // Which words in a music body name objects the package ships, and what they name.
