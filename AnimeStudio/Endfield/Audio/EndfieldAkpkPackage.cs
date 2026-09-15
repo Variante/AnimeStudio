@@ -31,6 +31,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMediaJoinCensus MediaJoin { get; } = new();
         public EndfieldHircType03TargetCensus Type03Targets { get; } = new();
         public EndfieldHircType08TailWordCensus Type08TailWords { get; } = new();
+        public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -213,6 +214,14 @@ namespace AnimeStudio.Endfield
         /// </remarks>
         private void ClassifyType08TailWords()
         {
+            ClassifyTailWords(Type08TailWords, x => x.Type08TailWords);
+            ClassifyTailWords(Type12TailWords, x => x.Type12TailWords);
+        }
+
+        private void ClassifyTailWords(
+            EndfieldHircType08TailWordCensus census,
+            Func<EndfieldBnkStructure, List<(uint First, uint Second)>> select)
+        {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
             var everything = new HashSet<uint>();
             var typeOf = new Dictionary<uint, byte>();
@@ -225,40 +234,40 @@ namespace AnimeStudio.Endfield
                     typeOf[pair.Key] = pair.Value;
                 }
             }
-            Type08TailWords.PackagePopulation = checked((uint)everything.Count);
+            census.PackagePopulation = checked((uint)everything.Count);
             foreach (var structure in BnkStructures)
             {
                 var own = perBank[structure.BankId];
-                foreach (var (first, second) in structure.Type08TailWords)
+                foreach (var (first, second) in select(structure))
                 {
-                    Type08TailWords.Heads = checked(Type08TailWords.Heads + 1);
+                    census.Heads = checked(census.Heads + 1);
                     if (own.Contains(first))
                     {
-                        Type08TailWords.FirstWordSameBank =
-                            checked(Type08TailWords.FirstWordSameBank + 1);
+                        census.FirstWordSameBank =
+                            checked(census.FirstWordSameBank + 1);
                     }
                     else if (everything.Contains(first))
                     {
-                        Type08TailWords.FirstWordOtherBankInPackage =
-                            checked(Type08TailWords.FirstWordOtherBankInPackage + 1);
+                        census.FirstWordOtherBankInPackage =
+                            checked(census.FirstWordOtherBankInPackage + 1);
                     }
                     else
                     {
-                        Type08TailWords.FirstWordOutsidePackage =
-                            checked(Type08TailWords.FirstWordOutsidePackage + 1);
+                        census.FirstWordOutsidePackage =
+                            checked(census.FirstWordOutsidePackage + 1);
                     }
                     if (everything.Contains(first) && typeOf.TryGetValue(first, out var targetType))
                     {
-                        HircBump(Type08TailWords.FirstWordTargetTypeCounts, $"type{targetType:X2}", 1);
+                        HircBump(census.FirstWordTargetTypeCounts, $"type{targetType:X2}", 1);
                     }
                     if (everything.Contains(second))
                     {
-                        Type08TailWords.SecondWordResolves =
-                            checked(Type08TailWords.SecondWordResolves + 1);
+                        census.SecondWordResolves =
+                            checked(census.SecondWordResolves + 1);
                         if (typeOf.TryGetValue(second, out var controlType))
                         {
                             HircBump(
-                                Type08TailWords.SecondWordTargetTypeCounts, $"type{controlType:X2}", 1);
+                                census.SecondWordTargetTypeCounts, $"type{controlType:X2}", 1);
                         }
                     }
                 }
@@ -872,6 +881,15 @@ namespace AnimeStudio.Endfield
                         duplicateObjectIds,
                         referrerCounts,
                         referrerOf);
+                }
+                if (objectType == 18)
+                {
+                    // Numeric type 0x12's fenced bodies carry the same tail numeric
+                    // type 0x08's do, so they are censused by the same code rather than
+                    // by a second reading of the same bytes.
+                    var body12 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    CensusType08Tail(
+                        structure.Type12Tail, structure.Type12TailWords, body12, requireSignature: false);
                 }
                 if (objectType is 19 or 20 or 21)
                 {
@@ -2524,7 +2542,10 @@ namespace AnimeStudio.Endfield
         /// Shared with <see cref="FrameType8Body"/> so the tail census and the framer
         /// can never disagree about where the body's framed part ends.
         /// </remarks>
-        private static bool TryWalkType08ToTail(ReadOnlySpan<byte> body, out int cursor)
+        private static bool TryWalkToTail(
+            ReadOnlySpan<byte> body,
+            bool requireSignature,
+            out int cursor)
         {
             cursor = 0;
             if (body.Length < 5)
@@ -2539,7 +2560,10 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             cursor = checked(cursor + propertyCount * 5);
-            if (body.Length - cursor < 2 || body[cursor] != 1)
+            // Numeric type 0x08's second list always declares one entry; numeric type
+            // 0x12's declares three when its key is 0x0A. The count is therefore only
+            // constrained for the type whose own corpus constrains it.
+            if (body.Length - cursor < 2 || (requireSignature && body[cursor] != 1))
             {
                 return false;
             }
@@ -2547,6 +2571,7 @@ namespace AnimeStudio.Endfield
             {
                 Type08SecondListShortKey => Type08SecondListShortBytes,
                 Type08SecondListLongKey => Type08SecondListLongBytes,
+                Type12SecondListKeyA when !requireSignature => Type12SecondListKeyABytes,
                 _ => -1,
             };
             if (secondWidth < 0)
@@ -2554,8 +2579,15 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             cursor = checked(cursor + 2 + secondWidth);
-            if (body.Length - cursor < Type08Signature.Length
-                || !body.Slice(cursor, Type08Signature.Length).SequenceEqual(Type08Signature))
+            if (body.Length - cursor < Type08Signature.Length)
+            {
+                return false;
+            }
+            // Numeric type 0x08 carries the same nine bytes in every body, so matching
+            // them is a cheap extra guard there. Numeric type 0x12 carries different
+            // ones, so for that type the block is only skipped.
+            if (requireSignature
+                && !body.Slice(cursor, Type08Signature.Length).SequenceEqual(Type08Signature))
             {
                 return false;
             }
@@ -2602,10 +2634,11 @@ namespace AnimeStudio.Endfield
         private static void CensusType08Tail(
             EndfieldHircType08TailCensus census,
             List<(uint First, uint Second)> candidates,
-            ReadOnlySpan<byte> body)
+            ReadOnlySpan<byte> body,
+            bool requireSignature = true)
         {
             census.Bodies = checked(census.Bodies + 1);
-            if (!TryWalkType08ToTail(body, out var cursor))
+            if (!TryWalkToTail(body, requireSignature, out var cursor))
             {
                 census.NotWalkable = checked(census.NotWalkable + 1);
                 return;
@@ -3679,9 +3712,11 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType08TailCensus Type08Tail { get; } = new();
+        public EndfieldHircType08TailCensus Type12Tail { get; } = new();
         // (firstWord, secondWord) from each located tail head, classified once the
         // package's whole object set is known.
         public List<(uint First, uint Second)> Type08TailWords { get; } = new();
+        public List<(uint First, uint Second)> Type12TailWords { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();

@@ -191,6 +191,7 @@ namespace AnimeStudio.CLI
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
                             ["hircType12BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type12Body),
                             ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
+                            ["hircType12Tail"] = BuildType08TailSummary(package.BnkStructures, x => x.Type12Tail),
                             ["hircType08TailWords"] = new Dictionary<string, object?>
                             {
                                 ["heads"] = package.Type08TailWords.Heads,
@@ -201,6 +202,17 @@ namespace AnimeStudio.CLI
                                 ["secondWordResolves"] = package.Type08TailWords.SecondWordResolves,
                                 ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
+                            ["hircType12TailWords"] = new Dictionary<string, object?>
+                            {
+                                ["heads"] = package.Type12TailWords.Heads,
+                                ["packagePopulation"] = package.Type12TailWords.PackagePopulation,
+                                ["firstWordSameBank"] = package.Type12TailWords.FirstWordSameBank,
+                                ["firstWordOtherBankInPackage"] = package.Type12TailWords.FirstWordOtherBankInPackage,
+                                ["firstWordOutsidePackage"] = package.Type12TailWords.FirstWordOutsidePackage,
+                                ["secondWordResolves"] = package.Type12TailWords.SecondWordResolves,
+                                ["firstWordTargetTypeCounts"] = package.Type12TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["secondWordTargetTypeCounts"] = package.Type12TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
@@ -867,8 +879,10 @@ namespace AnimeStudio.CLI
         }
 
         private static Dictionary<string, object?> BuildType08TailSummary(
-            IEnumerable<EndfieldBnkStructure> structures)
+            IEnumerable<EndfieldBnkStructure> structures,
+            Func<EndfieldBnkStructure, EndfieldHircType08TailCensus>? select = null)
         {
+            select ??= x => x.Type08Tail;
             var bodies = 0U; var notWalkable = 0U; var framed = 0U; var tails = 0U;
             var noZero = 0U; var noCount = 0U; var ambiguous = 0U; var unique = 0U;
             var records = 0U; var headBytes = 0U;
@@ -877,7 +891,7 @@ namespace AnimeStudio.CLI
             var codes = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var structure in structures)
             {
-                var census = structure.Type08Tail;
+                var census = select(structure);
                 bodies = checked(bodies + census.Bodies);
                 notWalkable = checked(notWalkable + census.NotWalkable);
                 framed = checked(framed + census.FramedByTheReader);
