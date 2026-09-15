@@ -622,6 +622,14 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                if (objectType == 17)
+                {
+                    var census17 = structure.Type17;
+                    var body17 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    census17.Bodies = checked(census17.Bodies + 1);
+                    census17.BodyBytes = checked(census17.BodyBytes + (uint)body17.Length);
+                    RecordType17(census17, body17);
+                }
                 // Numeric type 0x08's leading word: null, or one same-bank object.
                 if (objectType == 8)
                 {
@@ -1970,6 +1978,80 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
+        private const int Type17RunElementBytes = 6;
+
+        private static void RecordType17(EndfieldHircType17Census census, ReadOnlySpan<byte> body)
+        {
+            void Fail(string category)
+            {
+                census.Failed = checked(census.Failed + 1);
+                HircBump(census.FailureCounts, category, 1);
+            }
+
+            if (body.Length < 8)
+            {
+                Fail("short_header");
+                return;
+            }
+            var size = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(4, 4));
+            if (size > (uint)(body.Length - 8))
+            {
+                Fail("range_section");
+                return;
+            }
+            var cursor = checked(8 + (int)size);
+            if (cursor + 1 > body.Length)
+            {
+                Fail("truncated_anonymousByte");
+                return;
+            }
+            cursor = checked(cursor + 1);
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out var failure))
+            {
+                Fail(failure.Category ?? "groupI");
+                return;
+            }
+            if (cursor + 2 > body.Length)
+            {
+                Fail("truncated_optionalBlockFlag");
+                return;
+            }
+            var flag = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
+            cursor = checked(cursor + 2);
+            if (flag != 0)
+            {
+                // Two block widths fit every flagged body and nothing distinguishes
+                // them, so this body is not framed rather than framed by guess.
+                census.TiedOptionalBlock = checked(census.TiedOptionalBlock + 1);
+                return;
+            }
+            if (cursor + 2 > body.Length)
+            {
+                Fail("truncated_runCount");
+                return;
+            }
+            var runCount = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
+            cursor = checked(cursor + 2);
+            if (runCount > (body.Length - cursor) / Type17RunElementBytes)
+            {
+                Fail("range_run");
+                return;
+            }
+            cursor = checked(cursor + runCount * Type17RunElementBytes);
+            if (cursor != body.Length)
+            {
+                Fail("trailing_bytes");
+                return;
+            }
+            census.Exact = checked(census.Exact + 1);
+            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
+            census.RunElements = checked(census.RunElements + runCount);
+            groups.TryGetValue("groupIEntries", out var entries);
+            census.GroupIEntries = checked(census.GroupIEntries + entries);
+        }
+
         private static bool FrameHircGroupE(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -2597,6 +2679,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
+        public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2662,6 +2745,29 @@ namespace AnimeStudio.Endfield
     // null or the identity of an object in the same bank -- never a non-null value
     // that names nothing. Null is a real outcome here, not a failure, so it is
     // counted separately instead of being folded into either side.
+    // Numeric type 0x11: an eight-byte header whose second word sizes an opaque
+    // section, one byte, the node frame's group I structure, a flag, and a counted
+    // run of six-byte elements.
+    //
+    // The flag gates an optional block whose width this corpus cannot determine.
+    // Two widths, 21 and 27, consume every flagged body exactly -- they are the same
+    // bytes read two ways, with 27 swallowing the run's single element and reading a
+    // zero count. The flag is never greater than 1 anywhere, so no body can separate
+    // them, and a flagged body is therefore fenced as unsupported rather than framed
+    // on a coin flip.
+    public sealed class EndfieldHircType17Census
+    {
+        public uint Bodies { get; set; }
+        public uint Exact { get; set; }
+        public uint TiedOptionalBlock { get; set; }
+        public uint Failed { get; set; }
+        public uint ExactBytes { get; set; }
+        public uint BodyBytes { get; set; }
+        public uint RunElements { get; set; }
+        public uint GroupIEntries { get; set; }
+        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircType08HeadCensus
     {
         public uint Bodies { get; set; }

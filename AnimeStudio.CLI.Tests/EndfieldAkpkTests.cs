@@ -25,6 +25,7 @@ internal static class EndfieldAkpkTests
         TestType11SourceRecordsAreCounted();
         TestType22BodyFramesReuseGroupI();
         TestType08HeadWordIsNullOrResolved();
+        TestType17FramesOrFencesTheTiedWidth();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -586,6 +587,66 @@ internal static class EndfieldAkpkTests
 
 
 
+
+
+    private static void TestType17FramesOrFencesTheTiedWidth()
+    {
+        static byte[] Build(ushort flag, ushort runCount, int sectionBytes)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write((ushort)3);
+            writer.Write((ushort)0x69);
+            writer.Write((uint)sectionBytes);
+            writer.Write(new byte[sectionBytes]);
+            writer.Write((byte)0);
+            writer.Write((ushort)0);          // group I: no entries
+            writer.Write(flag);
+            if (flag == 0)
+            {
+                writer.Write(runCount);
+                writer.Write(new byte[runCount * 6]);
+            }
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        var exact = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+            ((byte)0x11, 0x7701U, Build(0, 2, 8))))).BnkStructures[0];
+        if (exact.Type17.Exact != 1 || exact.Type17.RunElements != 2
+            || exact.Type17.Failed != 0 || exact.Type17.TiedOptionalBlock != 0)
+        {
+            throw new InvalidOperationException("type 0x11 did not frame a clear body");
+        }
+
+        // A set flag means two block widths fit and nothing separates them, so the
+        // body must be fenced rather than framed on a guess -- and fencing is not a
+        // failure, which the counters have to keep distinct.
+        var tied = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+            ((byte)0x11, 0x7702U, Build(1, 0, 8))))).BnkStructures[0];
+        if (tied.Type17.TiedOptionalBlock != 1 || tied.Type17.Exact != 0
+            || tied.Type17.Failed != 0)
+        {
+            throw new InvalidOperationException("type 0x11 mishandled the tied width");
+        }
+
+        var overrun = Build(0, 1, 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(overrun.AsSpan(4, 4), 9999);
+        var bad = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+            ((byte)0x11, 0x7703U, overrun)))).BnkStructures[0];
+        if (!bad.Type17.FailureCounts.ContainsKey("range_section"))
+        {
+            throw new InvalidOperationException("type 0x11 accepted an impossible section size");
+        }
+
+        var trailing = Build(0, 1, 8).Concat(new byte[] { 0x00 }).ToArray();
+        if (!EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+                ((byte)0x11, 0x7704U, trailing)))).BnkStructures[0]
+                .Type17.FailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("type 0x11 accepted trailing bytes");
+        }
+    }
 
     private static void TestType08HeadWordIsNullOrResolved()
     {

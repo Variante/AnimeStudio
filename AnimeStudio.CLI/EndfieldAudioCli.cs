@@ -192,6 +192,7 @@ namespace AnimeStudio.CLI
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
                             ["hircType08Head"] = BuildType08HeadSummary(package.BnkStructures),
+                            ["hircType17"] = BuildType17Summary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -253,6 +254,7 @@ namespace AnimeStudio.CLI
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
                                 ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
                                 ["hircType08Head"] = BuildType08HeadSummary(new[] { x }),
+                                ["hircType17"] = BuildType17Summary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -650,6 +652,44 @@ namespace AnimeStudio.CLI
 
 
 
+
+
+        private static Dictionary<string, object?> BuildType17Summary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var bodies = 0U; var exact = 0U; var tied = 0U; var failed = 0U;
+            var exactBytes = 0U; var bodyBytes = 0U; var run = 0U; var entries = 0U;
+            var failures = new Dictionary<string, uint>(StringComparer.Ordinal);
+            foreach (var structure in structures)
+            {
+                var census = structure.Type17;
+                bodies = checked(bodies + census.Bodies);
+                exact = checked(exact + census.Exact);
+                tied = checked(tied + census.TiedOptionalBlock);
+                failed = checked(failed + census.Failed);
+                exactBytes = checked(exactBytes + census.ExactBytes);
+                bodyBytes = checked(bodyBytes + census.BodyBytes);
+                run = checked(run + census.RunElements);
+                entries = checked(entries + census.GroupIEntries);
+                foreach (var pair in census.FailureCounts)
+                {
+                    failures.TryGetValue(pair.Key, out var existing);
+                    failures[pair.Key] = checked(existing + pair.Value);
+                }
+            }
+            return new Dictionary<string, object?>
+            {
+                ["bodies"] = bodies,
+                ["exact"] = exact,
+                ["tiedOptionalBlock"] = tied,
+                ["failed"] = failed,
+                ["exactBytes"] = exactBytes,
+                ["bodyBytes"] = bodyBytes,
+                ["runElements"] = run,
+                ["groupIEntries"] = entries,
+                ["failureCounts"] = failures.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+            };
+        }
 
         private static Dictionary<string, object?> BuildType08HeadSummary(
             IEnumerable<EndfieldBnkStructure> structures)
