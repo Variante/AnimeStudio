@@ -957,37 +957,60 @@ internal static class EndfieldAkpkTests
         // block is refused under the tail block's own reason, not the trailer's: which
         // part of the layout failed has to stay visible.
         var badTrailer = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailer: 9));
-        if (badTrailer.FailureCounts["tail_block_too_short"] != 1)
+        if (badTrailer.FailureCounts["range_tail_block_units"] != 1)
         {
             throw new InvalidOperationException("type 0x08 framed a body with the wrong trailer");
         }
 
-        // The tail block itself: a fifteen-byte head, a record count, one byte, that
-        // many twelve-byte records, and a zero sixteen-bit word.
-        var tailBlock = new byte[15 + 2 + 12 + 2];
-        tailBlock[1] = 1;
-        tailBlock[8] = 0x02;
-        tailBlock[14] = 0x02;
-        tailBlock[15] = 1;
-        var framedTail = Frame(Build(
-            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: tailBlock));
-        if (framedTail.ExactCount != 1
-            || framedTail.GroupCounts["tailBlockRecords"] != 1
-            || framedTail.SelectorCounts["tailBlockSelector_020002"] != 1)
+        // The tail block: a zero byte, a unit count, a zero byte, then that many units
+        // of twelve head bytes plus their own counted twelve-byte records, then a zero
+        // sixteen-bit word. A block with several units is what shows the count is a
+        // count -- a single-unit block is indistinguishable from a fixed head.
+        static byte[] TailBlock(int units, int recordsPerUnit)
         {
-            throw new InvalidOperationException("type 0x08 did not frame its tail block");
+            var bytes = new byte[3 + units * (12 + 2 + recordsPerUnit * 12) + 2];
+            bytes[1] = (byte)units;
+            for (var i = 0; i < units; i++)
+            {
+                var at = 3 + i * (12 + 2 + recordsPerUnit * 12);
+                bytes[at + 5] = 0x02;
+                bytes[at + 6] = (byte)i;
+                bytes[at + 11] = 0x02;
+                bytes[at + 12] = (byte)recordsPerUnit;
+            }
+            return bytes;
         }
 
-        // The four head bytes that are constant across both types are checked; a body
-        // that breaks one is refused rather than framed with a head that does not
-        // apply to it.
-        var brokenHead = (byte[])tailBlock.Clone();
-        brokenHead[1] = 9;
-        var refusedHead = Frame(Build(
-            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: brokenHead));
-        if (refusedHead.FailureCounts["tail_block_head_is_not_the_observed_shape"] != 1)
+        var oneUnit = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailBlock(1, 1)));
+        var threeUnits = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailBlock(3, 2)));
+        if (oneUnit.ExactCount != 1
+            || oneUnit.GroupCounts["tailBlockUnits"] != 1
+            || oneUnit.GroupCounts["tailBlockRecords"] != 1
+            || threeUnits.ExactCount != 1
+            || threeUnits.GroupCounts["tailBlockUnits"] != 3
+            || threeUnits.GroupCounts["tailBlockRecords"] != 6
+            || threeUnits.SelectorCounts["tailBlockUnitSelector_020202"] != 1)
         {
-            throw new InvalidOperationException("type 0x08 framed an unobserved tail-block head");
+            throw new InvalidOperationException("type 0x08 did not frame its tail block units");
+        }
+
+        // The bytes that are zero in every body of both types are checked; a body that
+        // breaks one is refused rather than framed with a shape that does not apply.
+        var brokenPrefix = TailBlock(1, 1);
+        brokenPrefix[0] = 9;
+        var refusedPrefix = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: brokenPrefix));
+        if (refusedPrefix.FailureCounts["tail_block_prefix_is_not_the_observed_shape"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed an unobserved tail-block prefix");
+        }
+        var brokenUnit = TailBlock(1, 1);
+        brokenUnit[3 + 4] = 9;
+        var refusedUnit = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: brokenUnit));
+        if (refusedUnit.FailureCounts["tail_block_unit_is_not_the_observed_shape"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed an unobserved tail-block unit");
         }
         // The second list's count is published, not constrained. Numeric type 0x08's
         // bodies all declare one and numeric type 0x12's declare three with key 0x0A,
