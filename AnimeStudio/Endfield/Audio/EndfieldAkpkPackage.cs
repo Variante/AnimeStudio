@@ -37,6 +37,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
         public EndfieldHircType0AEndAnchorCensus Type0AEndAnchor { get; } = new();
         public EndfieldHircType0ACountedArrayCensus Type0ACountedArray { get; } = new();
+        public EndfieldHircMusicReachCensus MusicReach { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -126,6 +127,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType0AHeadPredictions();
             package.ClassifyType0AEndAnchor();
             package.ClassifyType0ACountedArray();
+            package.WalkMusicFromActions();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
             package.ClassifyMusicMutuality();
@@ -1199,7 +1201,7 @@ namespace AnimeStudio.Endfield
             }
             foreach (var structure in BnkStructures)
             {
-                foreach (var body in structure.Type0ABodies)
+                foreach (var (owner, body) in structure.Type0ABodies)
                 {
                     Type0ACountedArray.Bodies = checked(Type0ACountedArray.Bodies + 1);
                     var first = -1;
@@ -1236,6 +1238,16 @@ namespace AnimeStudio.Endfield
                     Type0ACountedArray.Checkable = checked(Type0ACountedArray.Checkable + 1);
                     if (declared == (uint)run)
                     {
+                        if (!structure.MusicEdges.TryGetValue(owner, out var owned))
+                        {
+                            owned = new List<uint>();
+                            structure.MusicEdges[owner] = owned;
+                        }
+                        for (var step = 0; step < run; step++)
+                        {
+                            owned.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                                body.AsSpan(first + 4 * step, 4)));
+                        }
                         Type0ACountedArray.CountMatchesTheRun =
                             checked(Type0ACountedArray.CountMatchesTheRun + 1);
                         HircBump(Type0ACountedArray.RunLengths, $"references_{Math.Min(run, 8)}", 1);
@@ -1273,7 +1285,9 @@ namespace AnimeStudio.Endfield
         private static void CensusType0CArray(
             EndfieldHircType0CArrayCensus census,
             ReadOnlySpan<byte> body,
-            Dictionary<uint, byte> bankObjectTypes)
+            Dictionary<uint, byte> bankObjectTypes,
+            Dictionary<uint, List<uint>> musicEdges,
+            uint owner)
         {
             census.Bodies = checked(census.Bodies + 1);
             if (body.Length <= Type0CArraySelectorOffset)
@@ -1318,6 +1332,12 @@ namespace AnimeStudio.Endfield
                     break;
                 }
                 HircBump(census.TargetTypes, $"type{target:X2}", 1);
+                if (!musicEdges.TryGetValue(owner, out var owned))
+                {
+                    owned = new List<uint>();
+                    musicEdges[owner] = owned;
+                }
+                owned.Add(id);
             }
             if (resolved)
             {
@@ -1401,6 +1421,129 @@ namespace AnimeStudio.Endfield
                         checked(census.RivalArraysFullyResolving + 1);
                 }
             }
+        }
+
+
+        /// <summary>
+        /// Walk the music family downward from the only edges that enter it from outside.
+        /// </summary>
+        /// <remarks>
+        /// The music types are their own component. Across the whole corpus the main
+        /// reference graph's 230,247 edges carry no music type at either end, and the
+        /// parent field's 199,445 carry none either. The only edges from outside are
+        /// action target words: of 23,455 that resolve to an object, **8** land on
+        /// numeric type 0x0C and none at all on 0x0A, 0x0B or 0x0D.
+        ///
+        /// So this walk starts at those 8 and follows only downward music edges that
+        /// are already gated -- numeric type 0x0C's counted array at `32 + 5 * body[14]`
+        /// and numeric type 0x0A's counted array of 0x0B references. It reports what
+        /// fraction of the family, and of the media the family owns, those 8 reach.
+        ///
+        /// What it does not establish: that firing those actions plays anything, or
+        /// that the music family has no other entry point. It establishes that no
+        /// OTHER entry point exists among the relations this reader has resolved,
+        /// which is a smaller claim and the only one the bytes support.
+        /// </remarks>
+        private void WalkMusicFromActions()
+        {
+            var musicTypes = new HashSet<byte> { 0x0A, 0x0B, 0x0C, 0x0D };
+            foreach (var structure in BnkStructures)
+            {
+                var types = structure.WalkObjectTypes;
+                foreach (var pair in types)
+                {
+                    if (musicTypes.Contains(pair.Value))
+                    {
+                        MusicReach.MusicObjects = checked(MusicReach.MusicObjects + 1);
+                    }
+                }
+                // The walk's own edges, censused so that "reached nothing" can be told
+                // apart from "had nothing to follow".
+                var incoming = new HashSet<uint>();
+                foreach (var edge in structure.MusicEdges)
+                {
+                    MusicReach.EdgeSources = checked(MusicReach.EdgeSources + 1);
+                    MusicReach.Edges = checked(MusicReach.Edges + (uint)edge.Value.Count);
+                    foreach (var child in edge.Value)
+                    {
+                        incoming.Add(child);
+                    }
+                }
+                foreach (var pair in types)
+                {
+                    if (musicTypes.Contains(pair.Value) && !incoming.Contains(pair.Key))
+                    {
+                        MusicReach.RootsWithNoIncomingEdge =
+                            checked(MusicReach.RootsWithNoIncomingEdge + 1);
+                        HircBump(MusicReach.RootTypes, $"type{pair.Value:X2}", 1);
+                    }
+                }
+                var entries = new List<uint>();
+                foreach (var (action, target) in structure.Type03Targets)
+                {
+                    if (target != 0 && types.TryGetValue(target, out var targetType)
+                        && musicTypes.Contains(targetType))
+                    {
+                        MusicReach.EntryEdges = checked(MusicReach.EntryEdges + 1);
+                        HircBump(
+                            MusicReach.EntryKinds,
+                            $"action_{action:X2}_to_type{targetType:X2}",
+                            1);
+                        entries.Add(target);
+                        if (structure.MusicEdges.ContainsKey(target))
+                        {
+                            MusicReach.EntriesWithOutgoingEdges =
+                                checked(MusicReach.EntriesWithOutgoingEdges + 1);
+                        }
+                        if (!incoming.Contains(target))
+                        {
+                            MusicReach.EntriesThatAreRoots =
+                                checked(MusicReach.EntriesThatAreRoots + 1);
+                        }
+                    }
+                }
+                if (entries.Count == 0)
+                {
+                    continue;
+                }
+                MusicReach.BanksWithAnEntry = checked(MusicReach.BanksWithAnEntry + 1);
+                var seen = new HashSet<uint>();
+                var queue = new Queue<uint>(entries);
+                foreach (var entry in entries)
+                {
+                    seen.Add(entry);
+                }
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (types.TryGetValue(current, out var currentType))
+                    {
+                        HircBump(MusicReach.ReachedTypes, $"type{currentType:X2}", 1);
+                    }
+                    if (structure.WalkSourceIds.TryGetValue(current, out var owned))
+                    {
+                        foreach (var sourceId in owned)
+                        {
+                            MusicReach.ReachedSourceIds.Add(sourceId);
+                        }
+                    }
+                    if (!structure.MusicEdges.TryGetValue(current, out var next))
+                    {
+                        continue;
+                    }
+                    foreach (var child in next)
+                    {
+                        if (seen.Add(child))
+                        {
+                            queue.Enqueue(child);
+                        }
+                    }
+                }
+                MusicReach.ReachedObjects =
+                    checked(MusicReach.ReachedObjects + (uint)seen.Count);
+            }
+            MusicReach.ReachedSourceIdCount =
+                checked((uint)MusicReach.ReachedSourceIds.Count);
         }
 
 
@@ -2234,8 +2377,9 @@ namespace AnimeStudio.Endfield
                     head.Bodies = checked(head.Bodies + 1);
                     if (objectType == 10)
                     {
-                        structure.Type0ABodies.Add(
-                            payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)).ToArray());
+                        structure.Type0ABodies.Add((
+                            objectId,
+                            payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)).ToArray()));
                         CollectType0AEndAnchor(
                             structure.Type0AEndAnchors,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
@@ -2252,7 +2396,9 @@ namespace AnimeStudio.Endfield
                         var parentBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                         if (objectType == 12)
                         {
-                            CensusType0CArray(structure.Type0CArray, parentBody, bankObjectTypes);
+                            CensusType0CArray(
+                                structure.Type0CArray, parentBody, bankObjectTypes,
+                                structure.MusicEdges, objectId);
                         }
                         structure.Type0CParents[objectId] = (
                             objectType,
@@ -6788,6 +6934,10 @@ namespace AnimeStudio.Endfield
         public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
         public Dictionary<uint, (byte Type, uint Parent)> Type0CParents { get; } = new();
         public EndfieldHircType0CArrayCensus Type0CArray { get; } = new();
+        // Downward music edges: numeric type 0x0C's counted array and numeric type
+        // 0x0A's counted array of 0x0B references. Kept per bank like every other
+        // relation here, because object ids repeat across banks.
+        public Dictionary<uint, List<uint>> MusicEdges { get; } = new();
         // objectId -> the object its parent field names, for every type that has one.
         public Dictionary<uint, uint> ParentFields { get; } = new();
         public EndfieldHircParentFieldCensus ParentField { get; } = new();
@@ -6801,7 +6951,9 @@ namespace AnimeStudio.Endfield
         // controls. Classified once the package's object set is known.
         // Per numeric type 0x0A body: the words at the end anchor and its neighbours.
         public List<uint[]> Type0AEndAnchors { get; } = new();
-        public List<byte[]> Type0ABodies { get; } = new();
+        // The owner id travels with the body: without it the counted array it
+        // carries cannot become an edge, only a count.
+        public List<(uint Id, byte[] Body)> Type0ABodies { get; } = new();
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
@@ -7196,6 +7348,25 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> FrameClosesWithRuns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RunsPerElement { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
+    }
+
+    // How much of the music family the only edges entering it can reach.
+    public sealed class EndfieldHircMusicReachCensus
+    {
+        public uint MusicObjects { get; set; }
+        public uint EntryEdges { get; set; }
+        public uint BanksWithAnEntry { get; set; }
+        public uint ReachedObjects { get; set; }
+        public uint ReachedSourceIdCount { get; set; }
+        public uint Edges { get; set; }
+        public uint EdgeSources { get; set; }
+        public uint RootsWithNoIncomingEdge { get; set; }
+        public uint EntriesWithOutgoingEdges { get; set; }
+        public uint EntriesThatAreRoots { get; set; }
+        public Dictionary<string, uint> RootTypes { get; } = new(StringComparer.Ordinal);
+        public HashSet<uint> ReachedSourceIds { get; } = new();
+        public Dictionary<string, uint> EntryKinds { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ReachedTypes { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0A's reference to 0x0B, read as a counted array.
