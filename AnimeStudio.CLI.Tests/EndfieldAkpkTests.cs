@@ -900,6 +900,15 @@ internal static class EndfieldAkpkTests
             bytes.AddRange(BitConverter.GetBytes((uint)entries));
             for (var entry = 0; entry < entries; entry++)
             {
+                if (entry > 0)
+                {
+                    // Every entry after the first begins four bytes before the previous
+                    // entry's elements finish, so the builder gives back four bytes
+                    // here. Without this the synthetic body is not the shape the corpus
+                    // has -- and this test failing when the reader learned the
+                    // step-back is the test doing its job.
+                    bytes.RemoveRange(bytes.Count - 4, 4);
+                }
                 var header = new byte[48];
                 BitConverter.GetBytes((uint)elementsPerEntry).CopyTo(header, 44);
                 bytes.AddRange(header);

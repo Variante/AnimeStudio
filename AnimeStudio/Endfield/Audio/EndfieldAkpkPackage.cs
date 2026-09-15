@@ -4343,6 +4343,26 @@ namespace AnimeStudio.Endfield
         {
             (2, 22), (5, 8), (6, 8), (7, 8), (9, 8),
         };
+        // Every entry after the first begins FOUR BYTES BEFORE the previous entry's
+        // elements finish. Located by content, not by closure.
+        //
+        // Two checks identify a first entry header and both hold in 100% of them: its
+        // word at +4 is a source id the same body declares, and its word at +32 is a
+        // plausible float. At the place this reader used to put the second header,
+        // NEITHER holds -- 0 of 216 two-entry bodies. Scanning every offset from -32
+        // to +32 from the end of entry 1, exactly one passes either check: **-4**, in
+        // 168 of 216. No other offset passes even once.
+        //
+        // Scored over the whole corpus the step-back closes 4,115 bodies against 3,937
+        // without it, and every rival step -- 2, 6, 8, 12, 16 -- lands at 3,861 to
+        // 3,863, BELOW the baseline.
+        //
+        // Which side owns the four bytes is NOT determined. The element walk
+        // over-consumes by four in the last element of a non-final entry, or the entry
+        // header is four bytes longer than 48 and overlaps what the element walk read.
+        // The reader compensates where the evidence is, and says so rather than
+        // inventing a field.
+        internal const int Type11EntryStepBackBytes = 4;
         internal const int Type11EntryGainOffset = 32;
         internal const int Type11EntryGainControlOffset = 28;
         internal const int Type11EntryGainSecondControlOffset = 36;
@@ -6109,20 +6129,12 @@ namespace AnimeStudio.Endfield
         // The step of 5 is shared with the plain trailer, not independently
         // established: only k = 0 and k = 1 are observed, which is two points, so
         // anything above 1 is refused.
-        // A trailing section after the entry list, in multi-entry bodies only: one
-        // byte, then the same 12-byte block and the same trailer an element ends
-        // with. The prefix is discriminated -- a width of 1 closes 76 multi-entry
-        // bodies and every other width from 0 to 9 closes at most 10 -- and the
-        // section costs nothing, because the bodies that framed without it still
-        // frame: it is only attempted when the entry walk has already fallen short.
-        //
-        // It is claimed only where the section's own bytes agree with the trailer
-        // rule established on single-entry bodies. A control that accepts any of the
-        // four observed trailer lengths, ignoring the flag, closes 100 rather than
-        // 76; the extra 24 have a residue of the right total length but a block
-        // opening byte of 0xAF, 0x55 or 0x59 and a scattered selector, which is a
-        // length coincidence and not a section. Those 24 stay fenced.
-        internal const int Type11TrailingSectionPrefixBytes = 1;
+        // RETIRED: a "trailing section" of one byte plus a block and a trailer used to
+        // close 76 multi-entry bodies here. It was patching the four-byte entry
+        // step-back, and once that is applied the section never fires -- 0 bodies of
+        // 4,325. It is removed rather than left as dead code, because a reading that
+        // compensates for a misplaced field is worse than no reading: it makes the
+        // misplacement look closed.
         internal const int Type11ElementTrailingBlockOpenOffset = 0;
         internal const byte Type11ExtendedTrailerOpenValue = 1;
         internal const int Type11ExtendedTrailerBaseBytes = 14;
@@ -6262,6 +6274,17 @@ namespace AnimeStudio.Endfield
             entryShape = entries;
             for (var entry = 0U; entry < entries; entry++)
             {
+                if (entry > 0)
+                {
+                    if (cursor < Type11EntryStepBackBytes)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_entry_step_back",
+                            cursor, Type11EntryStepBackBytes, cursor);
+                    }
+                    cursor = checked(cursor - Type11EntryStepBackBytes);
+                    HircBump(groups, "entryStepBacks", 1);
+                }
                 if (end - cursor < Type11EntryHeaderBytes)
                 {
                     return HircFrameOutcome(
@@ -6354,28 +6377,6 @@ namespace AnimeStudio.Endfield
                         body.Slice(checked(cursor + trailer - Type11TrailerCloseBytes),
                                    Type11TrailerCloseBytes).ToArray());
                     cursor = checked(cursor + trailer);
-                }
-            }
-            if (cursor != end)
-            {
-                // The trailing section, attempted only now. Because it runs after the
-                // entry walk has already fallen short, it can add bodies but never
-                // take one that framed without it.
-                var sectionBlock = checked(cursor + Type11TrailingSectionPrefixBytes);
-                if (sectionBlock < end
-                    && TryReadType11TrailerLength(
-                        body, sectionBlock, end, out var sectionTrailer,
-                        out var sectionOpens, out var sectionFlag, out _)
-                    && checked(sectionBlock + Type11ElementTrailingBlockBytes
-                               + sectionTrailer) == end)
-                {
-                    HircBump(groups, "trailingSections", 1);
-                    HircBump(selectors, $"trailingSectionOpens_{sectionOpens}", 1);
-                    HircBump(selectors, $"trailingSectionFlag_{sectionFlag}", 1);
-                    closeBlocks.Add(
-                        body.Slice(end - Type11TrailerCloseBytes,
-                                   Type11TrailerCloseBytes).ToArray());
-                    cursor = end;
                 }
             }
             if (cursor != end)
