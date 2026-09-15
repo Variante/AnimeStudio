@@ -4343,6 +4343,11 @@ namespace AnimeStudio.Endfield
         {
             (2, 22), (5, 8), (6, 8), (7, 8), (9, 8),
         };
+        internal const int Type11EntryGainOffset = 32;
+        internal const int Type11EntryGainControlOffset = 28;
+        internal const int Type11EntryGainSecondControlOffset = 36;
+        internal const int Type11EntryPairFirstOffset = 12;
+        internal const int Type11EntryPairSecondOffset = 20;
         internal const int Type11EntryHeaderBytes = 48;
         // The entry header's word at 4 is the source id, and it joins to the body's
         // own 14-byte source records at record offset 5 -- an UNALIGNED offset, which
@@ -6466,9 +6471,10 @@ namespace AnimeStudio.Endfield
                 }
             }
             var headersNamingASource = 0;
-            foreach (var header in headers)
+            for (var index = 0; index < headers.Count; index++)
             {
-                CensusType11EntryHeader(structureEntryHeaders, header);
+                var header = headers[index];
+                CensusType11EntryHeader(structureEntryHeaders, header, index == 0);
                 if (structureEntryHeaders is not null && header.Length >= 8)
                 {
                     // The join that confirms the entry header's word at 4 is the
@@ -6537,7 +6543,8 @@ namespace AnimeStudio.Endfield
         /// </remarks>
         private static void CensusType11EntryHeader(
             EndfieldHircType11EntryHeaderCensus? census,
-            ReadOnlySpan<byte> header)
+            ReadOnlySpan<byte> header,
+            bool isFirstEntry)
         {
             if (census is null || header.Length < Type11EntryHeaderBytes)
             {
@@ -6624,6 +6631,91 @@ namespace AnimeStudio.Endfield
                     if (inBand)
                     {
                         census.BoundedFloatsInBand = checked(census.BoundedFloatsInBand + 1);
+                    }
+                }
+            }
+            // The word at +32, which nine id populations failed to explain: object
+            // references same-bank and corpus-wide, source ids, media ids, bank ids,
+            // STMG's ids, fixed-point fractions and the 24,231 identifier literal
+            // hashes. It is a float.
+            //
+            // 2,189 of its 2,189 nonzero values are plausible ones -- 865 exactly
+            // NEGATIVE zero, and the other 1,324 in -9.83 to 7.81 with 1,220 of them
+            // negative. Every other offset from 28 to 39 scores between 0 and 17.7%,
+            // the aligned neighbours at 28 and 36 included.
+            //
+            // The -0.0 is the part that took so long. A band test that asks for
+            // `abs(v) > 1e-4` throws away 0x80000000 as "not a float", which is 40% of
+            // the field. *A field whose unset marker is negative zero looks unlike a
+            // float to any test that treats zero as uninteresting.*
+            foreach (var (offset, isControl) in new[]
+            {
+                (Type11EntryGainOffset, false),
+                (Type11EntryGainControlOffset, true),
+                (Type11EntryGainSecondControlOffset, true),
+            })
+            {
+                var raw = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
+                if (raw == 0)
+                {
+                    continue;
+                }
+                var value = BinaryPrimitives.ReadSingleLittleEndian(header.Slice(offset, 4));
+                var plausible = !float.IsNaN(value) && !float.IsInfinity(value)
+                    && (value == 0.0f
+                        || (Math.Abs(value) > 1e-4f && Math.Abs(value) < 1e4f));
+                if (isControl)
+                {
+                    census.GainControlsTested = checked(census.GainControlsTested + 1);
+                    if (plausible)
+                    {
+                        census.GainControlsPlausible =
+                            checked(census.GainControlsPlausible + 1);
+                    }
+                }
+                else if (isFirstEntry)
+                {
+                    census.GainsTested = checked(census.GainsTested + 1);
+                    if (plausible)
+                    {
+                        census.GainsPlausible = checked(census.GainsPlausible + 1);
+                    }
+                    if (raw == 0x80000000u)
+                    {
+                        census.GainsThatAreNegativeZero =
+                            checked(census.GainsThatAreNegativeZero + 1);
+                    }
+                }
+                else
+                {
+                    // The same offset in a LATER entry, and the sharpest control this
+                    // field has: 2 of 26 plausible, the rate of a shifted read. The
+                    // word at +32 is a float in the first entry header and is not one
+                    // after it -- independent evidence that a later entry is not the
+                    // same 48-byte layout as the first.
+                    census.LaterEntryGainsTested =
+                        checked(census.LaterEntryGainsTested + 1);
+                    if (plausible)
+                    {
+                        census.LaterEntryGainsPlausible =
+                            checked(census.LaterEntryGainsPlausible + 1);
+                    }
+                }
+            }
+            // The words at +12 and +20 are the same field twice: equal in 1,102 of the
+            // bodies where both are nonzero. Censused, not claimed -- what the pair is
+            // remains unknown, and nine populations have failed to say.
+            {
+                var first = BinaryPrimitives.ReadUInt32LittleEndian(
+                    header.Slice(Type11EntryPairFirstOffset, 4));
+                var second = BinaryPrimitives.ReadUInt32LittleEndian(
+                    header.Slice(Type11EntryPairSecondOffset, 4));
+                if (first != 0 && second != 0)
+                {
+                    census.PairsTested = checked(census.PairsTested + 1);
+                    if (first == second)
+                    {
+                        census.PairsEqual = checked(census.PairsEqual + 1);
                     }
                 }
             }
@@ -8000,6 +8092,16 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> CurveCodes { get; } = new(StringComparer.Ordinal);
         public uint BoundedFloatsTested { get; set; }
         public uint BoundedFloatsInBand { get; set; }
+        // The word at +32, and the pair at +12 and +20.
+        public uint GainsTested { get; set; }
+        public uint GainsPlausible { get; set; }
+        public uint GainsThatAreNegativeZero { get; set; }
+        public uint GainControlsTested { get; set; }
+        public uint GainControlsPlausible { get; set; }
+        public uint LaterEntryGainsTested { get; set; }
+        public uint LaterEntryGainsPlausible { get; set; }
+        public uint PairsTested { get; set; }
+        public uint PairsEqual { get; set; }
         public uint FloatControlsTested { get; set; }
         public uint FloatControlsInBand { get; set; }
         public uint SourceJoinTested { get; set; }
