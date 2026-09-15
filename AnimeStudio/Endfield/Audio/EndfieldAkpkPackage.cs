@@ -3354,6 +3354,10 @@ namespace AnimeStudio.Endfield
             (2, 22), (5, 8), (6, 8), (7, 8), (9, 8),
         };
         internal const int Type11EntryHeaderBytes = 48;
+        // The entry header's word at 4 is the source id, and it joins to the body's
+        // own 14-byte source records at record offset 5 -- an UNALIGNED offset, which
+        // is why testing the record's aligned words found no match at all.
+        internal const int Type11SourceRecordIdOffset = 5;
         internal const int Type11EntryElementCountOffset = 44;
         // An element ends with a trailer whose FIRST byte selects its own length: zero
         // means nineteen bytes, one means twenty-four. What is left is a 17-byte head
@@ -5095,6 +5099,7 @@ namespace AnimeStudio.Endfield
             var headers = new List<byte[]>();
             var curves = new List<byte[]>();
             var entryShape = 0u;
+            var sourceIds = new HashSet<uint>();
             var cursor = 0;
             if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
             {
@@ -5115,6 +5120,15 @@ namespace AnimeStudio.Endfield
             {
                 return HircFrameOutcome(
                     "failed", "range_sources", cursor - 4, body.Length - cursor, sourceSpan);
+            }
+            for (var record = 0U; record < sources; record++)
+            {
+                var recordAt = checked(cursor + (int)record * Type11SourceRecordBytes);
+                if (recordAt + Type11SourceRecordIdOffset + 4 <= body.Length)
+                {
+                    sourceIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.Slice(recordAt + Type11SourceRecordIdOffset, 4)));
+                }
             }
             cursor = checked(cursor + sourceSpan);
             HircBump(groups, "sourceRecords", sources);
@@ -5263,6 +5277,19 @@ namespace AnimeStudio.Endfield
             foreach (var header in headers)
             {
                 CensusType11EntryHeader(structureEntryHeaders, header);
+                if (structureEntryHeaders is not null && header.Length >= 8)
+                {
+                    // The join that confirms the entry header's word at 4 is the
+                    // source id: it must be one of the ids this very body declares.
+                    structureEntryHeaders.SourceJoinTested =
+                        checked(structureEntryHeaders.SourceJoinTested + 1);
+                    if (sourceIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(
+                            header.AsSpan(4, 4))))
+                    {
+                        structureEntryHeaders.SourceJoinMatched =
+                            checked(structureEntryHeaders.SourceJoinMatched + 1);
+                    }
+                }
             }
             foreach (var region in curves)
             {
@@ -6721,6 +6748,8 @@ namespace AnimeStudio.Endfield
         public uint BoundedFloatsInBand { get; set; }
         public uint FloatControlsTested { get; set; }
         public uint FloatControlsInBand { get; set; }
+        public uint SourceJoinTested { get; set; }
+        public uint SourceJoinMatched { get; set; }
     }
 
     // Numeric type 0x0B's entry elements: how they end, and what that leaves.

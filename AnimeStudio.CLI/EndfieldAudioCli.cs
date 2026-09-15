@@ -228,6 +228,8 @@ namespace AnimeStudio.CLI
                                 ["boundedFloatsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.BoundedFloatsInBand),
                                 ["floatControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsTested),
                                 ["floatControlsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsInBand),
+                                ["sourceJoinTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinTested),
+                                ["sourceJoinMatched"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinMatched),
                             },
                             ["hircType11Elements"] = new Dictionary<string, object?>
                             {
