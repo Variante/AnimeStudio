@@ -23,6 +23,7 @@ internal static class EndfieldAkpkTests
         TestType14BodyFramesFailClosed();
         TestMusicHeadReferencesFollowTheDiscriminantByte();
         TestType11SourceRecordsAreCounted();
+        TestType22BodyFramesReuseGroupI();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -582,6 +583,84 @@ internal static class EndfieldAkpkTests
         return body;
     }
 
+
+
+    private static void TestType22BodyFramesReuseGroupI()
+    {
+        static byte[] Build(byte[] keys, uint[] values, ushort groupIEntries, ushort points)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write((byte)keys.Length);
+            writer.Write(keys);
+            foreach (var value in values)
+            {
+                writer.Write(value);
+            }
+            writer.Write((byte)0);
+            writer.Write(groupIEntries);
+            for (var i = 0; i < groupIEntries; i++)
+            {
+                writer.Write(new byte[6]);
+                writer.Write((byte)0x13);
+                writer.Write(new byte[5]);
+                writer.Write(points);
+                writer.Write(new byte[points * 12]);
+            }
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        // Keys and values are parallel runs, so one key and one value is nine bytes:
+        // count, key, value, the anonymous byte, and an empty group I count.
+        var empty = FrameType22Fixture(Build(new byte[] { 0x11 }, new uint[] { 1 }, 0, 0));
+        if (empty.Type22Body.ExactCount != 1
+            || empty.Type22Body.ExactCursorBytes != 9
+            || empty.Type22Body.GroupCounts["propertyEntries"] != 1
+            || empty.Type22Body.SelectorCounts["propertyKey_11"] != 1)
+        {
+            throw new InvalidOperationException("type 0x16 empty body did not frame exactly");
+        }
+
+        var withGroupI = FrameType22Fixture(
+            Build(new byte[] { 0x00, 0x11 }, new uint[] { 1, 2 }, 1, 1));
+        if (withGroupI.Type22Body.ExactCount != 1
+            || withGroupI.Type22Body.GroupCounts["groupIEntries"] != 1
+            || withGroupI.Type22Body.GroupCounts["groupIPoints"] != 1
+            || withGroupI.Type22Body.SelectorCounts["groupIKeyWidth_1"] != 1)
+        {
+            throw new InvalidOperationException("type 0x16 did not reuse group I");
+        }
+
+        // A property count that cannot fit both runs must be rejected on its own
+        // terms rather than consuming whatever bytes remain.
+        var overrun = Build(new byte[] { 0x00 }, new uint[] { 1 }, 0, 0);
+        overrun[0] = 0xFF;
+        if (!FrameType22Fixture(overrun).Type22Body.FailureCounts.ContainsKey("range_properties"))
+        {
+            throw new InvalidOperationException("type 0x16 accepted an impossible property count");
+        }
+
+        var trailing = Build(new byte[] { 0x00 }, new uint[] { 1 }, 0, 0)
+            .Concat(new byte[] { 0x00 }).ToArray();
+        if (!FrameType22Fixture(trailing).Type22Body.FailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("type 0x16 accepted trailing bytes");
+        }
+
+        var truncated = Build(new byte[] { 0x00 }, new uint[] { 1 }, 0, 0);
+        if (FrameType22Fixture(truncated[..^1]).Type22Body.ExactCount != 0)
+        {
+            throw new InvalidOperationException("type 0x16 accepted a truncated body");
+        }
+    }
+
+    private static EndfieldBnkStructure FrameType22Fixture(byte[] body)
+    {
+        return EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7500, BuildBnk((0x16, 0x7501U, body))))
+            .BnkStructures[0];
+    }
 
     private static void TestType11SourceRecordsAreCounted()
     {

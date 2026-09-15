@@ -188,6 +188,7 @@ namespace AnimeStudio.CLI
                             ["hircNamedReachCensus"] = BuildNamedReachSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
+                            ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
@@ -247,6 +248,7 @@ namespace AnimeStudio.CLI
                                 ["hircReferenceCensus"] = BuildReferenceCensusSummary(new[] { x }),
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
+                                ["hircType22BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type22Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
                                 ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats

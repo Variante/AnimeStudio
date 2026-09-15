@@ -574,7 +574,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7 or 14)
+                if (objectType is 2 or 5 or 6 or 7 or 14 or 22)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -587,6 +587,7 @@ namespace AnimeStudio.Endfield
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
                         14 => structure.Type14Body,
+                        22 => structure.Type22Body,
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body census is not defined for type {objectType}"),
                     };
@@ -597,6 +598,7 @@ namespace AnimeStudio.Endfield
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
+                        22 => FrameType22Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
@@ -1890,6 +1892,56 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
+        // Numeric type 0x16 does not use the whole node frame, but it ends with the
+        // node frame's group I structure verbatim. That is why this framer is short:
+        // the only new part is the counted key/value block in front of it, and group I
+        // is reused rather than re-guessed.
+        internal static EndfieldHircBodyFrameResult FrameType22Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircReadByte(body, ref cursor, out var propertyCount, out var failure, "propertyCount"))
+            {
+                return failure;
+            }
+            // Keys and values are two parallel runs, not interleaved pairs: a key is one
+            // byte and a value is four, and the keys all precede the values.
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_properties", cursor - 1, (body.Length - cursor) / 5, propertyCount);
+            }
+            for (var i = 0; i < propertyCount; i++)
+            {
+                HircBump(selectors, $"propertyKey_{body[cursor + i]:X2}", 1);
+            }
+            cursor = checked(cursor + propertyCount);
+            cursor = checked(cursor + propertyCount * 4);
+            HircBump(groups, "propertyEntries", propertyCount);
+
+            if (!HircTake(body, ref cursor, 1, out failure, "anonymousByte"))
+            {
+                return failure;
+            }
+            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
         private static bool FrameHircGroupE(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -2513,6 +2565,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
+        public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
