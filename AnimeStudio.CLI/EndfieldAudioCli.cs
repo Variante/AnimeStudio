@@ -215,6 +215,7 @@ namespace AnimeStudio.CLI
                                 ["distinctTargets"] = package.MusicReferences.DistinctTargets.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["targetsReachedTwice"] = package.MusicReferences.TargetsReachedTwice.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["targetPopulation"] = package.MusicReferences.TargetPopulation.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["edgeDistanceFromEnd"] = package.MusicReferences.EdgeDistanceFromEnd.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircType12TailWords"] = new Dictionary<string, object?>
                             {

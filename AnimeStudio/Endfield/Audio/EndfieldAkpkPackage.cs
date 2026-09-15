@@ -317,13 +317,14 @@ namespace AnimeStudio.Endfield
             }
             foreach (var structure in BnkStructures)
             {
-                foreach (var (objectType, words) in structure.MusicBodyWords)
+                foreach (var (objectType, words, distances) in structure.MusicBodyWords)
                 {
                     MusicReferences.Bodies = checked(MusicReferences.Bodies + 1);
                     MusicReferences.WordsOffered = checked(MusicReferences.WordsOffered + (uint)words.Length);
                     var hits = 0U;
-                    foreach (var word in words)
+                    for (var w = 0; w < words.Length; w++)
                     {
+                        var word = words[w];
                         if (!everything.Contains(word))
                         {
                             continue;
@@ -333,6 +334,10 @@ namespace AnimeStudio.Endfield
                         {
                             var edge = $"type{objectType:X2}_to_type{targetType:X2}";
                             HircBump(MusicReferences.EdgeCounts, edge, 1);
+                            HircBump(
+                                MusicReferences.EdgeDistanceFromEnd,
+                                $"{edge}_at{distances[w]}",
+                                1);
                             if (!reached.TryGetValue(edge, out var seen))
                             {
                                 seen = new Dictionary<uint, uint>();
@@ -2579,7 +2584,7 @@ namespace AnimeStudio.Endfield
         /// buys every reference the body actually carries.
         /// </remarks>
         private static void CollectMusicBodyWords(
-            List<(byte Type, uint[] Words)> sink,
+            List<(byte Type, uint[] Words, int[] DistancesFromEnd)> sink,
             byte objectType,
             ReadOnlySpan<byte> body)
         {
@@ -2587,18 +2592,28 @@ namespace AnimeStudio.Endfield
             {
                 return;
             }
-            var words = new HashSet<uint>();
+            // Keep where each word sat, measured from the *end*: these types' heads are
+            // variable, so a distance from the front is not comparable across bodies.
+            // The first occurrence wins; a word appearing twice is one candidate.
+            var seen = new Dictionary<uint, int>();
             for (var at = 0; at + 4 <= body.Length; at++)
             {
                 var word = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4));
-                if (word != 0)
+                if (word != 0 && !seen.ContainsKey(word))
                 {
-                    words.Add(word);
+                    seen[word] = at - body.Length;
                 }
             }
-            var flat = new uint[words.Count];
-            words.CopyTo(flat);
-            sink.Add((objectType, flat));
+            var flat = new uint[seen.Count];
+            var distances = new int[seen.Count];
+            var index = 0;
+            foreach (var pair in seen)
+            {
+                flat[index] = pair.Key;
+                distances[index] = pair.Value;
+                index++;
+            }
+            sink.Add((objectType, flat, distances));
         }
 
         // Distances from the end of a music body at which a 32-bit word carries a name
@@ -3989,7 +4004,7 @@ namespace AnimeStudio.Endfield
         // whole object set is known. The music types are not framed, so a reference
         // cannot be read from a known offset; every word is offered instead and the
         // sparseness of the id space decides which are real.
-        public List<(byte Type, uint[] Words)> MusicBodyWords { get; } = new();
+        public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4191,6 +4206,9 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> DistinctTargets { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> TargetsReachedTwice { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> TargetPopulation { get; } = new(StringComparer.Ordinal);
+        // Where each reference sat, measured from the end of its body. The music heads
+        // are variable, so this is the only comparable coordinate they have.
+        public Dictionary<string, uint> EdgeDistanceFromEnd { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the words in numeric type 0x08's tail head name package objects. The
