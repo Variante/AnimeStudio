@@ -404,7 +404,7 @@ namespace AnimeStudio.Endfield
             {
                 foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
                               leadBad, padBad, values, tailBytes, tailFloat, neighbourFloat,
-                              fraction, fractionControl, decibel, decibelControl)
+                              fraction, fractionControl, decibel, decibelControl, headWordFive)
                          in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
@@ -491,6 +491,16 @@ namespace AnimeStudio.Endfield
                                 checked(Type0AHead.DecibelControlsInRange + 1);
                         }
                         Type0AHead.DecibelBodies = checked(Type0AHead.DecibelBodies + 1);
+                        if (headWordFive != 0)
+                        {
+                            Type0AHead.WordFiveNonZero = checked(Type0AHead.WordFiveNonZero + 1);
+                            HircBump(Type0AHead.WordFiveValues, $"word_{headWordFive:X8}", 1);
+                            if (everything.Contains(headWordFive))
+                            {
+                                Type0AHead.WordFiveInPackage =
+                                    checked(Type0AHead.WordFiveInPackage + 1);
+                            }
+                        }
                         if (fraction != 0)
                         {
                             Type0AHead.FractionCandidates =
@@ -2778,6 +2788,11 @@ namespace AnimeStudio.Endfield
         // values are whole numbers. -96 is the same floor the numeric type 0x08 and
         // 0x12 middle block carries. The control two bytes earlier overlaps it and
         // must behave differently.
+        // Five bytes in: a word that is zero in almost every body and, where it is
+        // not, names an object -- but never one this package ships. It is the first
+        // cross-package reference found in these types, so it is counted rather than
+        // resolved here, and the join is done over the whole corpus elsewhere.
+        internal const int Type0AHeadWordFiveOffset = 5;
         internal const int Type0AHeadDecibelOffset = 16;
         internal const int Type0AHeadDecibelControlOffset = 14;
         internal const float Type0AHeadDecibelFloor = -96f;
@@ -2821,7 +2836,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2915,7 +2930,11 @@ namespace AnimeStudio.Endfield
                 Type0AHeadDecibelControlOffset + 4 <= body.Length
                     ? BinaryPrimitives.ReadSingleLittleEndian(
                         body.Slice(Type0AHeadDecibelControlOffset, 4))
-                    : float.NaN));
+                    : float.NaN,
+                Type0AHeadWordFiveOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.Slice(Type0AHeadWordFiveOffset, 4))
+                    : 0U));
         }
 
         /// <summary>
@@ -4351,7 +4370,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4567,6 +4586,9 @@ namespace AnimeStudio.Endfield
         public uint DecibelsInRange { get; set; }
         public uint DecibelsWhole { get; set; }
         public uint DecibelControlsInRange { get; set; }
+        public uint WordFiveNonZero { get; set; }
+        public uint WordFiveInPackage { get; set; }
+        public Dictionary<string, uint> WordFiveValues { get; } = new(StringComparer.Ordinal);
     }
 
     // Which words in a music body name objects the package ships, and what they name.
