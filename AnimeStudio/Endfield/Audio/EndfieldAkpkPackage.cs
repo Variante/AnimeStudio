@@ -750,7 +750,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7 or 14 or 22)
+                if (objectType is 2 or 5 or 6 or 7 or 8 or 14 or 22)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -762,6 +762,7 @@ namespace AnimeStudio.Endfield
                         5 => structure.Type5Body,
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
+                        8 => structure.Type08Body,
                         14 => structure.Type14Body,
                         22 => structure.Type22Body,
                         _ => throw new InvalidDataException(
@@ -773,6 +774,7 @@ namespace AnimeStudio.Endfield
                         5 => FrameType5Body(bodySpan, structure.Version),
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
+                        8 => FrameType8Body(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
                         22 => FrameType22Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
@@ -2298,6 +2300,146 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
+        // Numeric type 0x08's tail is anchored by a nine-byte constant that every body
+        // carries. It is treated as a landmark, not as data: a body whose bytes do not
+        // match it here is refused rather than framed with an offset that fits.
+        private static ReadOnlySpan<byte> Type08Signature =>
+            new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 };
+        // The one-entry list after the property block: its key decides the value width,
+        // and the two observed keys are exactly sixteen bytes apart.
+        private const byte Type08SecondListShortKey = 0x15;
+        private const int Type08SecondListShortBytes = 11;
+        private const byte Type08SecondListLongKey = 0x1D;
+        private const int Type08SecondListLongBytes = 27;
+        private const int Type08EntryBytes = 6;
+        private const int Type08TrailerBytes = 5;
+
+        /// <summary>
+        /// Frame numeric HIRC type 0x08.
+        /// </summary>
+        /// <remarks>
+        /// Layout: a 32-bit reference, the counted key/value block numeric type 0x16
+        /// uses, a one-entry list whose key sizes its value, the nine-byte signature, a
+        /// zero word, a counted run of six-byte entries, and five zero bytes.
+        ///
+        /// Two details are worth stating because they are what make the framing
+        /// testable rather than fitted. The one-entry list's key *predicts* its value
+        /// width, so a body carrying an unobserved key is refused instead of being
+        /// walked with a guessed width. And the entry run carries one extra byte when
+        /// its count is nonzero and nothing at all when the count is zero, which is
+        /// fixed by bodies that declare no entries rather than assumed.
+        ///
+        /// The reference is read but not published as a frame reference: numeric type
+        /// 0x08's leading word already has its own census, and counting it twice would
+        /// inflate the reference graph.
+        /// </remarks>
+        internal static EndfieldHircBodyFrameResult FrameType8Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircTake(body, ref cursor, 4, out var failure, "reference"))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var propertyCount, out failure, "propertyCount"))
+            {
+                return failure;
+            }
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_properties", cursor - 1, (body.Length - cursor) / 5, propertyCount);
+            }
+            for (var i = 0; i < propertyCount; i++)
+            {
+                HircBump(selectors, $"propertyKey_{body[cursor + i]:X2}", 1);
+            }
+            cursor = checked(cursor + propertyCount * 5);
+            HircBump(groups, "propertyEntries", propertyCount);
+
+            if (!HircReadByte(body, ref cursor, out var secondCount, out failure, "secondListCount"))
+            {
+                return failure;
+            }
+            if (secondCount != 1)
+            {
+                return HircFrameOutcome("failed", "second_list_is_not_one_entry", cursor - 1, 1, secondCount);
+            }
+            if (!HircReadByte(body, ref cursor, out var secondKey, out failure, "secondListKey"))
+            {
+                return failure;
+            }
+            var secondWidth = secondKey switch
+            {
+                Type08SecondListShortKey => Type08SecondListShortBytes,
+                Type08SecondListLongKey => Type08SecondListLongBytes,
+                _ => -1,
+            };
+            if (secondWidth < 0)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_second_list_key", cursor - 1, 0, secondKey);
+            }
+            HircBump(selectors, $"secondListKey_{secondKey:X2}", 1);
+            if (!HircTake(body, ref cursor, secondWidth, out failure, "secondListValue"))
+            {
+                return failure;
+            }
+
+            if (body.Length - cursor < Type08Signature.Length
+                || !body.Slice(cursor, Type08Signature.Length).SequenceEqual(Type08Signature))
+            {
+                return HircFrameOutcome("failed", "signature_not_where_expected", cursor, 0, 0);
+            }
+            cursor = checked(cursor + Type08Signature.Length);
+
+            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterSignature"))
+            {
+                return failure;
+            }
+            var word = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
+            if (word != 0)
+            {
+                return HircFrameOutcome("failed", "word_after_signature_is_not_zero", cursor - 4, 0, 0);
+            }
+
+            if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "entryCount"))
+            {
+                return failure;
+            }
+            var span = entryCount == 0
+                ? 0
+                : checked(entryCount * Type08EntryBytes + 1);
+            if (span > body.Length - cursor)
+            {
+                return HircFrameOutcome("failed", "range_entries", cursor - 1, body.Length - cursor, span);
+            }
+            cursor = checked(cursor + span);
+            HircBump(groups, "entryRunElements", entryCount);
+
+            if (body.Length - cursor != Type08TrailerBytes)
+            {
+                return HircFrameOutcome(
+                    "failed", "trailer_is_not_five_bytes", cursor, Type08TrailerBytes, body.Length - cursor);
+            }
+            for (var i = cursor; i < body.Length; i++)
+            {
+                if (body[i] != 0)
+                {
+                    return HircFrameOutcome("failed", "trailer_is_not_zero", i, 0, body[i]);
+                }
+            }
+            cursor = body.Length;
+            return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
         private const int Type17RunElementBytes = 6;
 
         // A counted block: one byte of count, that many one-byte keys, then that many
@@ -3171,6 +3313,7 @@ namespace AnimeStudio.Endfield
         public List<EndfieldHircType4VectorFrameExample> Type4U32VectorFailureExamples { get; } = new();
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
+        public EndfieldHircBodyCensus Type08Body { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();

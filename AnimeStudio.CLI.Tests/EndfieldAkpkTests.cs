@@ -25,6 +25,7 @@ internal static class EndfieldAkpkTests
         TestType11SourceRecordsAreCounted();
         TestType11TailEntriesAreCounted();
         TestType22BodyFramesReuseGroupI();
+        TestType08BodiesFrameOrAreNamed();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
         TestSmallTypesFrameExactly();
@@ -862,6 +863,93 @@ internal static class EndfieldAkpkTests
         if (FrameType22Fixture(truncated[..^1]).Type22Body.ExactCount != 0)
         {
             throw new InvalidOperationException("type 0x16 accepted a truncated body");
+        }
+    }
+
+    private static void TestType08BodiesFrameOrAreNamed()
+    {
+        // A reference, the counted key/value block, a one-entry list whose key sizes
+        // its value, the nine-byte signature, a zero word, a counted entry run and
+        // five zero bytes.
+        static byte[] Build(byte[] keys, byte secondKey, int secondWidth, byte entries,
+                            byte secondCount = 1, uint afterSignature = 0,
+                            int trailer = 5, byte[]? signature = null)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(0x1234U);
+            writer.Write((byte)keys.Length);
+            writer.Write(keys);
+            for (var i = 0; i < keys.Length; i++)
+            {
+                writer.Write(0U);
+            }
+            writer.Write(secondCount);
+            writer.Write(secondKey);
+            writer.Write(new byte[secondWidth]);
+            writer.Write(signature ?? new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 });
+            writer.Write(afterSignature);
+            writer.Write(entries);
+            if (entries != 0)
+            {
+                writer.Write(new byte[entries * 6 + 1]);
+            }
+            writer.Write(new byte[trailer]);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        static EndfieldHircBodyCensus Frame(byte[] body) => EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7600, BuildBnk(((byte)0x08, 0x7601U, body))))
+            .BnkStructures[0].Type08Body;
+
+        var short08 = Frame(Build(new byte[] { 0x1B, 0x3F }, 0x15, 11, 0));
+        if (short08.ExactCount != 1
+            || short08.SelectorCounts["secondListKey_15"] != 1
+            || short08.GroupCounts["propertyEntries"] != 2
+            || short08.GroupCounts["entryRunElements"] != 0)
+        {
+            throw new InvalidOperationException("type 0x08 short body did not frame exactly");
+        }
+
+        // The other observed key is sixteen bytes wider, and the entry run carries one
+        // extra byte only when its count is nonzero. Both are layout, not tolerance.
+        var long08 = Frame(Build(new byte[] { 0x1B }, 0x1D, 27, 3));
+        if (long08.ExactCount != 1 || long08.GroupCounts["entryRunElements"] != 3)
+        {
+            throw new InvalidOperationException("type 0x08 long body did not frame exactly");
+        }
+
+        // A key whose width is not observed is held unsupported rather than walked
+        // with a guessed width, because guessing one would frame arbitrary bytes.
+        var unknownKey = Frame(Build(new byte[] { 0x1B }, 0x44, 11, 0));
+        if (unknownKey.ExactCount != 0
+            || unknownKey.UnsupportedCategories["unsupported_second_list_key"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 accepted an unobserved list key");
+        }
+
+        // Each of the remaining refusals must be reported under its own reason: a
+        // single pooled failure would hide which part of the layout the body broke.
+        var badSignature = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, signature: new byte[9]));
+        if (badSignature.FailureCounts["signature_not_where_expected"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed a body without the signature");
+        }
+        var badWord = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, afterSignature: 7));
+        if (badWord.FailureCounts["word_after_signature_is_not_zero"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed a nonzero word after the signature");
+        }
+        var badTrailer = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailer: 9));
+        if (badTrailer.FailureCounts["trailer_is_not_five_bytes"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed a body with the wrong trailer");
+        }
+        var badSecond = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, secondCount: 5));
+        if (badSecond.FailureCounts["second_list_is_not_one_entry"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed a multi-entry second list");
         }
     }
 
