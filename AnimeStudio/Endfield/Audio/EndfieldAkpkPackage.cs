@@ -1327,6 +1327,15 @@ namespace AnimeStudio.Endfield
                 census.ReachedSourceIdsByIdentity.TryGetValue(identity, out var existing);
                 census.ReachedSourceIdsByIdentity[identity] =
                     Math.Max(existing, (uint)sources.Count);
+                if (!census.ReachedSourceIdListByIdentity.TryGetValue(identity, out var reached))
+                {
+                    reached = new SortedSet<uint>();
+                    census.ReachedSourceIdListByIdentity[identity] = reached;
+                }
+                foreach (var sourceId in sources)
+                {
+                    reached.Add(sourceId);
+                }
             }
         }
 
@@ -3113,6 +3122,10 @@ namespace AnimeStudio.Endfield
         public uint WalkEdgesLeavingTheBank { get; set; }
         public Dictionary<string, uint> MatchesByObjectType { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ReachedSourceIdsByIdentity { get; } = new(StringComparer.Ordinal);
+        // The reached ids themselves, not just how many. There are few enough of them
+        // to carry, and a caller cannot join counts to a media table.
+        public Dictionary<string, SortedSet<uint>> ReachedSourceIdListByIdentity { get; } =
+            new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircBodyFrameExample

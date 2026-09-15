@@ -622,6 +622,14 @@ namespace AnimeStudio.CLI
                         group => group.Key,
                         group => group.Max(pair => (long)pair.Value),
                         StringComparer.Ordinal),
+                ["reachedSourceIdListByIdentity"] = rows
+                    .SelectMany(row => row.ReachedSourceIdListByIdentity)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.SelectMany(pair => pair.Value).Distinct().OrderBy(id => id).ToArray(),
+                        StringComparer.Ordinal),
             };
         }
 
