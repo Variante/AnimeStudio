@@ -404,7 +404,8 @@ namespace AnimeStudio.Endfield
             {
                 foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
                               leadBad, padBad, values, tailBytes, tailFloat, neighbourFloat,
-                              fraction, fractionControl) in structure.Type0AHeadPredictions)
+                              fraction, fractionControl, decibel, decibelControl)
+                         in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -467,6 +468,29 @@ namespace AnimeStudio.Endfield
                         {
                             Type0AHead.TailFloatsWhole = checked(Type0AHead.TailFloatsWhole + 1);
                         }
+                        if (float.IsFinite(decibel)
+                            && decibel >= Type0AHeadDecibelFloor
+                            && decibel <= Type0AHeadDecibelCeiling)
+                        {
+                            Type0AHead.DecibelsInRange = checked(Type0AHead.DecibelsInRange + 1);
+                            if (decibel == MathF.Round(decibel) && decibel != 0f)
+                            {
+                                Type0AHead.DecibelsWhole = checked(Type0AHead.DecibelsWhole + 1);
+                            }
+                        }
+                        // The control must be judged on the same two properties, not
+                        // just the range: a denormal near zero is trivially in range,
+                        // so range alone accepts anything and proves nothing.
+                        if (float.IsFinite(decibelControl)
+                            && decibelControl >= Type0AHeadDecibelFloor
+                            && decibelControl <= Type0AHeadDecibelCeiling
+                            && decibelControl == MathF.Round(decibelControl)
+                            && decibelControl != 0f)
+                        {
+                            Type0AHead.DecibelControlsInRange =
+                                checked(Type0AHead.DecibelControlsInRange + 1);
+                        }
+                        Type0AHead.DecibelBodies = checked(Type0AHead.DecibelBodies + 1);
                         if (fraction != 0)
                         {
                             Type0AHead.FractionCandidates =
@@ -2750,6 +2774,14 @@ namespace AnimeStudio.Endfield
         // Four bytes past the reference: a 32-bit fixed-point fraction of one, not an
         // integer and not a float. Its nonzero values land on simple rationals -- 1/3,
         // 2/3, 4/7, 10/11, 7/13 -- to within a few parts in 10^10.
+        // Inside the fixed head: a float whose range runs from -96 to 98 and whose
+        // values are whole numbers. -96 is the same floor the numeric type 0x08 and
+        // 0x12 middle block carries. The control two bytes earlier overlaps it and
+        // must behave differently.
+        internal const int Type0AHeadDecibelOffset = 16;
+        internal const int Type0AHeadDecibelControlOffset = 14;
+        internal const float Type0AHeadDecibelFloor = -96f;
+        internal const float Type0AHeadDecibelCeiling = 98f;
         internal const int Type0ATailFractionOffset = 4;
         internal const int Type0ATailFractionMaximumDenominator = 64;
         // A few parts in 10^9 of 2^32, which exact rationals clear by two orders.
@@ -2789,7 +2821,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2875,7 +2907,15 @@ namespace AnimeStudio.Endfield
                 at + Type0ATailNeighbourOffset + 4 <= body.Length
                     ? BinaryPrimitives.ReadUInt32LittleEndian(
                         body.Slice(at + Type0ATailNeighbourOffset, 4))
-                    : 0U));
+                    : 0U,
+                Type0AHeadDecibelOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadSingleLittleEndian(
+                        body.Slice(Type0AHeadDecibelOffset, 4))
+                    : float.NaN,
+                Type0AHeadDecibelControlOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadSingleLittleEndian(
+                        body.Slice(Type0AHeadDecibelControlOffset, 4))
+                    : float.NaN));
         }
 
         /// <summary>
@@ -4311,7 +4351,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4523,6 +4563,10 @@ namespace AnimeStudio.Endfield
         public uint FractionsWithASmallDenominator { get; set; }
         public uint FractionControls { get; set; }
         public uint FractionControlsWithASmallDenominator { get; set; }
+        public uint DecibelBodies { get; set; }
+        public uint DecibelsInRange { get; set; }
+        public uint DecibelsWhole { get; set; }
+        public uint DecibelControlsInRange { get; set; }
     }
 
     // Which words in a music body name objects the package ships, and what they name.
