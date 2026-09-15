@@ -2200,6 +2200,19 @@ namespace AnimeStudio.Endfield
                 {
                     census.GroupCounts.TryGetValue(pair.Key, out var groupTotal);
                     census.GroupCounts[pair.Key] = checked(groupTotal + pair.Value);
+                    if (pair.Value == 0)
+                    {
+                        continue;
+                    }
+                    // How many bodies exercise the group at all, and the most any one
+                    // body contributes. A total on its own cannot distinguish a group
+                    // seen in a hundred bodies from one seen in a single body that
+                    // happens to declare a hundred entries -- and the difference is
+                    // the difference between an established layout and an anecdote.
+                    census.GroupBodies.TryGetValue(pair.Key, out var bodies);
+                    census.GroupBodies[pair.Key] = checked(bodies + 1);
+                    census.GroupMaxInOneBody.TryGetValue(pair.Key, out var most);
+                    census.GroupMaxInOneBody[pair.Key] = Math.Max(most, pair.Value);
                 }
                 foreach (var pair in result.SelectorCounts)
                 {
@@ -4689,6 +4702,11 @@ namespace AnimeStudio.Endfield
         public uint MinExactBytes { get; set; }
         public uint MaxExactBytes { get; set; }
         public Dictionary<string, uint> GroupCounts { get; } = new(StringComparer.Ordinal);
+        // Per group: how many exact bodies exercise it at all, and the largest count
+        // any single body declares. Published beside the entry totals because a total
+        // says nothing about how broadly a group's layout has actually been seen.
+        public Dictionary<string, uint> GroupBodies { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> GroupMaxInOneBody { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> SelectorCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> UnsupportedCategories { get; } = new(StringComparer.Ordinal);

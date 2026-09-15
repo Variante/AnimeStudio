@@ -1202,6 +1202,16 @@ namespace AnimeStudio.CLI
                         group => group.Sum(pair => (long)pair.Value),
                         StringComparer.Ordinal);
 
+            // The largest a single body declared, which does not sum across banks.
+            static Dictionary<string, long> MergeMax(
+                IEnumerable<KeyValuePair<string, uint>> pairs) => pairs
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Max(pair => (long)pair.Value),
+                        StringComparer.Ordinal);
+
             return new Dictionary<string, object?>
             {
                 ["count"] = rows.Sum(row => (long)row.FrameCount),
@@ -1217,6 +1227,8 @@ namespace AnimeStudio.CLI
                 ["maxExactBodyBytes"] = rows.Select(row => row.MaxExactBytes)
                     .DefaultIfEmpty(0u).Max(),
                 ["groupCounts"] = Merge(rows.SelectMany(row => row.GroupCounts)),
+                ["groupBodies"] = Merge(rows.SelectMany(row => row.GroupBodies)),
+                ["groupMaxInOneBody"] = MergeMax(rows.SelectMany(row => row.GroupMaxInOneBody)),
                 ["selectorCounts"] = Merge(rows.SelectMany(row => row.SelectorCounts)),
                 ["failureCategories"] = Merge(rows.SelectMany(row => row.FailureCounts)),
                 ["unsupportedCategories"] = Merge(rows.SelectMany(row => row.UnsupportedCategories)),
