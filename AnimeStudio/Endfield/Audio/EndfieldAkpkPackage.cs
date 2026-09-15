@@ -2677,6 +2677,9 @@ namespace AnimeStudio.Endfield
         // The other reference every numeric type 0x0A body carries, inside its fixed
         // head. It resolves in every conditioned body and only ever to 0x0C or 0x0D.
         internal const int Type0AHeadWordOffset = 9;
+        // The second counted run, present only when the flag byte is nonzero.
+        internal const int Type0AHeadSecondCountOffset = 21;
+        internal const int Type0AHeadSecondRunFixedBytes = 7;
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2694,7 +2697,16 @@ namespace AnimeStudio.Endfield
             {
                 return;
             }
-            var at = checked(Type0AHeadFixedBytes + Type0AHeadElementBytes * body[Type0AHeadCountOffset]);
+            // Two counted runs, not one. Byte 17 is a flag, not a length: where it is
+            // nonzero a second run follows, seven bytes plus five per body[21]. In the
+            // bodies where byte 17 is zero, byte 21 is zero too, so the second term
+            // vanishes and the rule reduces to the single-run form.
+            var extra = body[Type0AHeadDiscriminantOffset] == 0
+                ? 0
+                : checked(Type0AHeadSecondRunFixedBytes
+                    + Type0AHeadElementBytes * body[Type0AHeadSecondCountOffset]);
+            var at = checked(
+                Type0AHeadFixedBytes + Type0AHeadElementBytes * body[Type0AHeadCountOffset] + extra);
             if (at + 4 > body.Length)
             {
                 return;
@@ -2732,6 +2744,9 @@ namespace AnimeStudio.Endfield
                 Read(body, Type0AHeadFixedBytes),
                 Read(body, at + 4),
                 Read(body, at - 4),
+                // The flag still marks the single-run family. The prediction above now
+                // covers both families, but the conditioned scores and the head-word
+                // census stay on the family they were measured over.
                 body.Length > Type0AHeadDiscriminantOffset && body[Type0AHeadDiscriminantOffset] == 0,
                 Read(body, Type0AHeadWordOffset),
                 leadBad,
