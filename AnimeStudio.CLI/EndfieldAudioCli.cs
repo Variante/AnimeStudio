@@ -160,6 +160,46 @@ namespace AnimeStudio.CLI
                             ["languageNames"] = package.Languages.Values.Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray(),
                             ["bnkPayloads"] = package.BnkStructures.Count,
                             ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
+                            ["stmg"] = new Dictionary<string, object?>
+                            {
+                                ["sections"] = (long)package.Stmg.Sections,
+                                ["sectionBytes"] = (long)package.Stmg.SectionBytes,
+                                ["sectionsTooShort"] = (long)package.Stmg.SectionsTooShort,
+                                ["countOutOfRange"] = (long)package.Stmg.CountOutOfRange,
+                                ["runPastTheEnd"] = (long)package.Stmg.RunPastTheEnd,
+                                ["sectionsFramed"] = (long)package.Stmg.SectionsFramed,
+                                ["declaredRecords"] = (long)package.Stmg.DeclaredRecords,
+                                ["distinctRecordIds"] = (long)package.Stmg.DistinctRecordIds,
+                                ["rivalStridesTested"] = (long)package.Stmg.RivalStridesTested,
+                                ["rivalStridesWithDistinctIds"] = (long)package.Stmg.RivalStridesWithDistinctIds,
+                                ["runsFollowedByAPlausibleCount"] = (long)package.Stmg.RunsFollowedByAPlausibleCount,
+                                ["bytesFramed"] = (long)package.Stmg.BytesFramed,
+                                ["bytesUnframed"] = (long)package.Stmg.BytesUnframed,
+                                ["recordValues"] = package.Stmg.RecordValues.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
+                            ["stmgWords"] = new Dictionary<string, object?>
+                            {
+                                ["sections"] = (long)package.StmgWords.Sections,
+                                ["sectionBytes"] = (long)package.StmgWords.SectionBytes,
+                                ["hircObjects"] = (long)package.StmgWords.HircObjects,
+                                ["wordsTested"] = (long)package.StmgWords.WordsTested,
+                                ["wordsNamingAnObject"] = (long)package.StmgWords.WordsNamingAnObject,
+                                ["typesNamed"] = package.StmgWords.TypesNamed.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["wordsTestedByTag"] = package.StmgWords.WordsTestedByTag.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["offsetsModTwelve"] = package.StmgWords.OffsetsModTwelve.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
+                            ["bnkSectionTags"] = package.BnkStructures
+                                .SelectMany(x => x.Sections)
+                                .GroupBy(x => x.Tag, StringComparer.Ordinal)
+                                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                                .ToDictionary(
+                                    x => x.Key,
+                                    x => (object?)new Dictionary<string, object?>
+                                    {
+                                        ["sections"] = (long)x.Count(),
+                                        ["bytes"] = x.Sum(y => (long)y.DeclaredSize),
+                                    },
+                                    StringComparer.Ordinal),
                             ["hircObjects"] = package.BnkStructures.Sum(x => checked((long)x.HircObjectCount)),
                             ["hircType02Prefix"] = new Dictionary<string, object?>
                             {

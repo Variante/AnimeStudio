@@ -38,6 +38,8 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType0AEndAnchorCensus Type0AEndAnchor { get; } = new();
         public EndfieldHircType0ACountedArrayCensus Type0ACountedArray { get; } = new();
         public EndfieldHircMusicReachCensus MusicReach { get; } = new();
+        public EndfieldHircStmgWordCensus StmgWords { get; } = new();
+        public EndfieldStmgCensus Stmg { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -128,6 +130,8 @@ namespace AnimeStudio.Endfield
             package.ClassifyType0AEndAnchor();
             package.ClassifyType0ACountedArray();
             package.WalkMusicFromActions();
+            package.FrameStmgSections();
+            package.ResolveStmgWords();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
             package.ClassifyMusicMutuality();
@@ -1547,6 +1551,188 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Does the STMG section name HIRC objects, and of which types?
+        /// </summary>
+        /// <remarks>
+        /// STMG appears exactly once in the whole corpus, 10,118 bytes, and nothing
+        /// reads it. It is the only section left that could carry the edges the object
+        /// graph does not have.
+        ///
+        /// The test slides a 32-bit window over every byte offset and asks which
+        /// values are HIRC object ids. That is deliberately indiscriminate: the point
+        /// is to find out whether STMG references objects at all before deciding what
+        /// its records are. The chance rate is computable rather than a matter of
+        /// taste -- 10,115 draws against 323,034 objects over a 32-bit space is 0.76
+        /// expected matches -- so a handful of hits is already a result, and hits
+        /// landing at a fixed stride are decisive.
+        ///
+        /// Unaligned offsets are included on purpose. The source id inside the
+        /// 14-byte source record sits at +5, which is not four-byte aligned, and
+        /// testing only aligned words is exactly how that field stayed unidentified.
+        /// </remarks>
+        // STMG's leading block. One instance in the whole corpus, so closure is not
+        // available as evidence and none is claimed from it.
+        internal const int StmgHeaderBytes = 14;
+        internal const int StmgCountOffset = 10;
+        internal const int StmgRecordBytes = 12;
+        internal const int StmgRecordValueOffset = 4;
+        internal const uint StmgMaximumRecords = 4096;
+        // The stride is discriminated by two checks that do not depend on the section
+        // closing. At 12 the 309 record ids are ALL distinct; every other stride from
+        // 8 to 20 collapses them to between 107 and 220. And at 12 the word directly
+        // after the run is 15 -- a small count that frames a further block -- where
+        // every other stride lands on zero or on an arbitrary large value.
+        internal static readonly int[] StmgRivalStrides =
+            { 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20 };
+
+        /// <summary>
+        /// Frame the STMG section's header and its first record run.
+        /// </summary>
+        /// <remarks>
+        /// STMG appears exactly once across the corpus at 10,118 bytes. Only the
+        /// leading block is framed: a 14-byte header whose last word is a count, then
+        /// that many 12-byte records of `u32 id, u16 value, 6 bytes`. The 309 records
+        /// carry 309 distinct ids and a value that is 1,000 in 306 of them, 500 in one
+        /// and 0 in one.
+        ///
+        /// The remaining 6,392 bytes begin with another count and are NOT framed. They
+        /// are reported as unframed rather than guessed at, because with one instance
+        /// there is nothing to check a guess against.
+        /// </remarks>
+        private void FrameStmgSections()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var section in structure.Sections)
+                {
+                    if (section.Body is null || section.Tag != "STMG")
+                    {
+                        continue;
+                    }
+                    Stmg.Sections = checked(Stmg.Sections + 1);
+                    var body = section.Body;
+                    Stmg.SectionBytes = checked(Stmg.SectionBytes + (uint)body.Length);
+                    if (body.Length < StmgHeaderBytes)
+                    {
+                        Stmg.SectionsTooShort = checked(Stmg.SectionsTooShort + 1);
+                        continue;
+                    }
+                    var declared = BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.AsSpan(StmgCountOffset, 4));
+                    if (declared == 0 || declared > StmgMaximumRecords)
+                    {
+                        Stmg.CountOutOfRange = checked(Stmg.CountOutOfRange + 1);
+                        continue;
+                    }
+                    var span = checked((int)declared * StmgRecordBytes);
+                    if (checked(StmgHeaderBytes + span) > body.Length)
+                    {
+                        Stmg.RunPastTheEnd = checked(Stmg.RunPastTheEnd + 1);
+                        continue;
+                    }
+                    Stmg.SectionsFramed = checked(Stmg.SectionsFramed + 1);
+                    Stmg.DeclaredRecords = checked(Stmg.DeclaredRecords + declared);
+                    var ids = new HashSet<uint>();
+                    for (var record = 0U; record < declared; record++)
+                    {
+                        var at = checked(StmgHeaderBytes + (int)record * StmgRecordBytes);
+                        ids.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at, 4)));
+                        HircBump(
+                            Stmg.RecordValues,
+                            $"value_{BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(at + StmgRecordValueOffset, 2))}",
+                            1);
+                    }
+                    Stmg.DistinctRecordIds = checked(Stmg.DistinctRecordIds + (uint)ids.Count);
+                    // Every rival stride scored the same way, so the width is
+                    // discriminated rather than asserted from a tidy-looking dump.
+                    foreach (var stride in StmgRivalStrides)
+                    {
+                        var rivalSpan = checked((int)declared * stride);
+                        if (checked(StmgHeaderBytes + rivalSpan) + 4 > body.Length)
+                        {
+                            continue;
+                        }
+                        Stmg.RivalStridesTested = checked(Stmg.RivalStridesTested + 1);
+                        var rivalIds = new HashSet<uint>();
+                        for (var record = 0U; record < declared; record++)
+                        {
+                            rivalIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                                body.AsSpan(checked(StmgHeaderBytes + (int)record * stride), 4)));
+                        }
+                        if (rivalIds.Count == declared)
+                        {
+                            Stmg.RivalStridesWithDistinctIds =
+                                checked(Stmg.RivalStridesWithDistinctIds + 1);
+                        }
+                    }
+                    var after = checked(StmgHeaderBytes + span);
+                    if (after + 4 <= body.Length)
+                    {
+                        var next = BinaryPrimitives.ReadUInt32LittleEndian(
+                            body.AsSpan(after, 4));
+                        if (next > 0 && next <= StmgMaximumRecords)
+                        {
+                            Stmg.RunsFollowedByAPlausibleCount =
+                                checked(Stmg.RunsFollowedByAPlausibleCount + 1);
+                        }
+                    }
+                    Stmg.BytesFramed = checked(Stmg.BytesFramed + (uint)after);
+                    Stmg.BytesUnframed =
+                        checked(Stmg.BytesUnframed + (uint)(body.Length - after));
+                }
+            }
+        }
+
+
+        private void ResolveStmgWords()
+        {
+            var typeOf = new Dictionary<uint, byte>();
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
+            }
+            StmgWords.HircObjects = checked((uint)typeOf.Count);
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var section in structure.Sections)
+                {
+                    if (section.Body is null)
+                    {
+                        continue;
+                    }
+                    // Every section nothing parses, not only STMG. Leaving the others
+                    // out would answer the question for one of four candidates.
+                    StmgWords.Sections = checked(StmgWords.Sections + 1);
+                    StmgWords.SectionBytes =
+                        checked(StmgWords.SectionBytes + (uint)section.Body.Length);
+                    var body = section.Body;
+                    for (var offset = 0; offset + 4 <= body.Length; offset++)
+                    {
+                        StmgWords.WordsTested = checked(StmgWords.WordsTested + 1);
+                        HircBump(StmgWords.WordsTestedByTag, section.Tag, 1);
+                        var value = BinaryPrimitives.ReadUInt32LittleEndian(
+                            body.AsSpan(offset, 4));
+                        if (!typeOf.TryGetValue(value, out var targetType))
+                        {
+                            continue;
+                        }
+                        StmgWords.WordsNamingAnObject =
+                            checked(StmgWords.WordsNamingAnObject + 1);
+                        HircBump(
+                            StmgWords.TypesNamed,
+                            $"{section.Tag}_type{targetType:X2}",
+                            1);
+                        HircBump(StmgWords.OffsetsModTwelve, $"mod12_{offset % 12}", 1);
+                    }
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1944,6 +2130,12 @@ namespace AnimeStudio.Endfield
                     Tag = tag,
                     Offset = pos,
                     DeclaredSize = sectionSize,
+                    // BKHD, HIRC, DIDX and DATA are parsed in place. The rest are kept
+                    // whole: STMG, INIT, ENVS and PLAT appear once each in the whole
+                    // corpus and nothing reads them yet.
+                    Body = tag is "BKHD" or "HIRC" or "DIDX" or "DATA"
+                        ? null
+                        : payload.AsSpan(bodyStart, checked((int)sectionSize)).ToArray(),
                 });
                 if (tag == "BKHD")
                 {
@@ -7350,6 +7542,38 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
     }
 
+    // The STMG section's header and first record run.
+    public sealed class EndfieldStmgCensus
+    {
+        public uint Sections { get; set; }
+        public uint SectionBytes { get; set; }
+        public uint SectionsTooShort { get; set; }
+        public uint CountOutOfRange { get; set; }
+        public uint RunPastTheEnd { get; set; }
+        public uint SectionsFramed { get; set; }
+        public uint DeclaredRecords { get; set; }
+        public uint DistinctRecordIds { get; set; }
+        public uint RivalStridesTested { get; set; }
+        public uint RivalStridesWithDistinctIds { get; set; }
+        public uint RunsFollowedByAPlausibleCount { get; set; }
+        public uint BytesFramed { get; set; }
+        public uint BytesUnframed { get; set; }
+        public Dictionary<string, uint> RecordValues { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Whether the STMG section names HIRC objects at all.
+    public sealed class EndfieldHircStmgWordCensus
+    {
+        public uint Sections { get; set; }
+        public uint SectionBytes { get; set; }
+        public uint HircObjects { get; set; }
+        public uint WordsTested { get; set; }
+        public uint WordsNamingAnObject { get; set; }
+        public Dictionary<string, uint> TypesNamed { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> WordsTestedByTag { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> OffsetsModTwelve { get; } = new(StringComparer.Ordinal);
+    }
+
     // How much of the music family the only edges entering it can reach.
     public sealed class EndfieldHircMusicReachCensus
     {
@@ -7639,5 +7863,8 @@ namespace AnimeStudio.Endfield
         public string Tag { get; set; }
         public int Offset { get; set; }
         public uint DeclaredSize { get; set; }
+        // Retained only for the sections nothing parses yet, so that framing them does
+        // not require a second pass over the package.
+        public byte[]? Body { get; set; }
     }
 }
