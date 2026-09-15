@@ -5023,13 +5023,43 @@ namespace AnimeStudio.Endfield
             return checked(cursor + trailing) == bodyBytes;
         }
 
-        // The element trailer's length is 19 + 5 * flag. Flags 0, 1 and 2 are each
-        // observed closing bodies exactly -- three points on the line, not two and an
-        // extrapolation -- and anything above the highest observed flag is refused
-        // rather than assumed to continue.
-        internal const int Type11TrailerBaseBytes = 19;
+        // The element trailer is a head of 7 + 5 * flag followed by a fixed 12-byte
+        // close. Flags 0, 1 and 2 are each observed closing bodies exactly -- three
+        // points on the line, not two and an extrapolation -- and anything above the
+        // highest observed flag is refused rather than assumed to continue.
+        //
+        // The split into head and close is not an independent fact for these bodies:
+        // the trailer is the last thing before the terminator, so "the trailer ends
+        // with the block" and "the body ends with the block" say the same thing here.
+        // It is written this way because the block is the same 12 bytes in 4,141 of
+        // the type's 4,325 bodies whether or not the body frames, which makes it a
+        // property of the format rather than of this walk.
+        internal const int Type11TrailerHeadBytes = 7;
+        internal const int Type11TrailerCloseBytes = 12;
+        internal const int Type11TrailerBaseBytes =
+            Type11TrailerHeadBytes + Type11TrailerCloseBytes;
         internal const int Type11TrailerStepBytes = 5;
         internal const byte Type11TrailerMaximumFlag = 2;
+        // A second trailer shape, opened by the first byte of the element's trailing
+        // block. When that byte is 1 the head is 14 + 5 * k, where k is the byte seven
+        // into the trailer -- the same five-byte step, one base higher.
+        //
+        // Each part is discriminated rather than asserted. Over the whole corpus the
+        // opening byte is decisive: position 0 reaches 3,861 bodies and the other
+        // eleven positions reach at most 3,719. The base is decisive: 14 reaches
+        // 3,861 and 10, 12, 13, 15, 16 and 19 reach 3,715, which is to say they add
+        // nothing at all. The selector is decisive: byte 7 reaches 3,861 where the
+        // bytes that happen to be zero in this group reach 3,813, closing the k = 0
+        // bodies and failing the k = 1 ones.
+        //
+        // The step of 5 is shared with the plain trailer, not independently
+        // established: only k = 0 and k = 1 are observed, which is two points, so
+        // anything above 1 is refused.
+        internal const int Type11ElementTrailingBlockOpenOffset = 0;
+        internal const byte Type11ExtendedTrailerOpenValue = 1;
+        internal const int Type11ExtendedTrailerBaseBytes = 14;
+        internal const int Type11ExtendedTrailerSelectorOffset = 7;
+        internal const byte Type11ExtendedTrailerMaximumFlag = 1;
         internal const uint Type11MaximumEntries = 64;
         internal const uint Type11MaximumElements = 64;
 
@@ -5098,6 +5128,7 @@ namespace AnimeStudio.Endfield
             var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
             var headers = new List<byte[]>();
             var curves = new List<byte[]>();
+            var closeBlocks = new List<byte[]>();
             var entryShape = 0u;
             var sourceIds = new HashSet<uint>();
             var cursor = 0;
@@ -5228,22 +5259,57 @@ namespace AnimeStudio.Endfield
                             "failed", "range_element_trailing_block",
                             cursor, Type11ElementTrailingBlockBytes + 1, end - cursor);
                     }
+                    var trailingBlockOpens = body[cursor + Type11ElementTrailingBlockOpenOffset];
                     cursor = checked(cursor + Type11ElementTrailingBlockBytes);
                     var flag = body[cursor];
-                    if (flag > Type11TrailerMaximumFlag)
+                    int trailer;
+                    if (trailingBlockOpens == Type11ExtendedTrailerOpenValue)
                     {
-                        return HircFrameOutcome(
-                            "failed", "range_element_trailer_flag",
-                            cursor, Type11TrailerMaximumFlag, flag);
+                        if (end - cursor <= Type11ExtendedTrailerSelectorOffset)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_extended_trailer_selector",
+                                cursor, Type11ExtendedTrailerSelectorOffset + 1, end - cursor);
+                        }
+                        var extended = body[cursor + Type11ExtendedTrailerSelectorOffset];
+                        if (extended > Type11ExtendedTrailerMaximumFlag)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_extended_trailer_flag",
+                                cursor + Type11ExtendedTrailerSelectorOffset,
+                                Type11ExtendedTrailerMaximumFlag, extended);
+                        }
+                        HircBump(selectors, $"extendedTrailerFlag_{extended}", 1);
+                        // Every element that takes this branch carries flag 0, all 148
+                        // of them. Recorded rather than required: it is an observation
+                        // about the corpus, and making it a rule would hide the day it
+                        // stops being true.
+                        HircBump(selectors, $"extendedTrailerPlainFlag_{flag}", 1);
+                        trailer = checked(
+                            Type11ExtendedTrailerBaseBytes
+                            + Type11TrailerStepBytes * extended
+                            + Type11TrailerCloseBytes);
                     }
-                    HircBump(selectors, $"elementTrailerFlag_{flag}", 1);
-                    var trailer = checked(
-                        Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
+                    else
+                    {
+                        if (flag > Type11TrailerMaximumFlag)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_element_trailer_flag",
+                                cursor, Type11TrailerMaximumFlag, flag);
+                        }
+                        HircBump(selectors, $"elementTrailerFlag_{flag}", 1);
+                        trailer = checked(
+                            Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
+                    }
                     if (trailer > end - cursor)
                     {
                         return HircFrameOutcome(
                             "failed", "range_element_trailer", cursor, end - cursor, trailer);
                     }
+                    closeBlocks.Add(
+                        body.Slice(checked(cursor + trailer - Type11TrailerCloseBytes),
+                                   Type11TrailerCloseBytes).ToArray());
                     cursor = checked(cursor + trailer);
                 }
             }
@@ -5274,6 +5340,49 @@ namespace AnimeStudio.Endfield
             cursor = body.Length;
             // Censused only now. An entry header from a body that later fails says
             // nothing, because the walk that reached it may have been desynchronised.
+            if (structureEntryHeaders is not null)
+            {
+                foreach (var close in closeBlocks)
+                {
+                    structureEntryHeaders.CloseBlocks =
+                        checked(structureEntryHeaders.CloseBlocks + 1);
+                    var zeroed = true;
+                    for (var at = 4; at < close.Length; at++)
+                    {
+                        if (close[at] != 0)
+                        {
+                            zeroed = false;
+                            break;
+                        }
+                    }
+                    if (zeroed)
+                    {
+                        structureEntryHeaders.CloseBlocksEndingInEightZeros =
+                            checked(structureEntryHeaders.CloseBlocksEndingInEightZeros + 1);
+                    }
+                    // The control that makes the count mean something: the same span
+                    // read four bytes earlier. If eight zeros were simply common here
+                    // the shifted window would score the same way.
+                    var shiftedZero = true;
+                    for (var at = 0; at < close.Length - 4; at++)
+                    {
+                        if (close[at] != 0)
+                        {
+                            shiftedZero = false;
+                            break;
+                        }
+                    }
+                    if (shiftedZero)
+                    {
+                        structureEntryHeaders.CloseBlockControlsEndingInEightZeros = checked(
+                            structureEntryHeaders.CloseBlockControlsEndingInEightZeros + 1);
+                    }
+                    HircBump(
+                        structureEntryHeaders.CloseBlockHeads,
+                        $"head_{BinaryPrimitives.ReadUInt32LittleEndian(close.AsSpan(0, 4)):X8}",
+                        1);
+                }
+            }
             foreach (var header in headers)
             {
                 CensusType11EntryHeader(structureEntryHeaders, header);
@@ -6738,6 +6847,12 @@ namespace AnimeStudio.Endfield
         // entry the frame closes, which is what makes the "count" reading untested.
         public Dictionary<string, uint> ElementCountValues { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> EntryCountValues { get; } = new(StringComparer.Ordinal);
+        // The 12 bytes every element trailer ends with. Four bytes that vary and
+        // eight that are zero, in every element of every body that frames.
+        public uint CloseBlocks { get; set; }
+        public uint CloseBlocksEndingInEightZeros { get; set; }
+        public uint CloseBlockControlsEndingInEightZeros { get; set; }
+        public Dictionary<string, uint> CloseBlockHeads { get; } = new(StringComparer.Ordinal);
         // The curve records the element runs carry, and their interpolation codes.
         public uint CurveRecords { get; set; }
         public uint CurveCodesInRange { get; set; }
