@@ -663,6 +663,14 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             var cursor = 4;
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(0, 4)) == 0)
+            {
+                if (body.Length < 9)
+                {
+                    return false;
+                }
+                cursor = 8;
+            }
             var propertyCount = body[cursor];
             cursor = checked(cursor + 1);
             if (propertyCount > (body.Length - cursor) / 5)
@@ -3266,6 +3274,23 @@ namespace AnimeStudio.Endfield
             {
                 return failure;
             }
+            // A null reference is followed by a second 32-bit word before the property
+            // count. Four bodies carry it, and the evidence is where the rest of the
+            // frame lands rather than the count being plausible: skipping the word puts
+            // the second list's key on 0x15 in every one of them, and not skipping it
+            // asks for 74, 205 or 167 properties in a body too short to hold them.
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(0, 4)) == 0)
+            {
+                if (!HircTake(body, ref cursor, 4, out failure, "nullReferenceExtra"))
+                {
+                    return failure;
+                }
+                HircBump(selectors, "leadingReference_null", 1);
+            }
+            else
+            {
+                HircBump(selectors, "leadingReference_set", 1);
+            }
             if (!HircReadByte(body, ref cursor, out var propertyCount, out failure, "propertyCount"))
             {
                 return failure;
@@ -3409,6 +3434,14 @@ namespace AnimeStudio.Endfield
                 return SharedFrameProbe.NoClose;
             }
             var cursor = 4;
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(0, 4)) == 0)
+            {
+                if (body.Length < 9)
+                {
+                    return SharedFrameProbe.NoClose;
+                }
+                cursor = 8;
+            }
             var propertyCount = body[cursor];
             cursor = checked(cursor + 1);
             if (propertyCount > (body.Length - cursor) / 5)
@@ -3506,6 +3539,17 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             cursor = 4;
+            // Same rule as the framer: a null leading reference carries a second word.
+            // Shared so the tail census and the framer can never disagree about where
+            // the body's framed part begins.
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(0, 4)) == 0)
+            {
+                if (body.Length < 9)
+                {
+                    return false;
+                }
+                cursor = 8;
+            }
             var propertyCount = body[cursor];
             cursor = checked(cursor + 1);
             if (propertyCount > (body.Length - cursor) / 5)
@@ -3668,6 +3712,24 @@ namespace AnimeStudio.Endfield
         // unit count, and it was 1 in every body that framed under the old reading --
         // which is exactly why that reading looked like a constant.
         internal const int TailBlockPrefixBytes = 3;
+        // The section that follows the units. Its entry widths are chosen by the high
+        // bit of the entry's first byte, the same trick the format uses elsewhere.
+        internal const int TailSectionEntryShortBytes = 3;
+        internal const int TailSectionEntryLongBytes = 4;
+        internal const byte TailSectionEntryWideFlag = 0x80;
+        // one byte, a 32-bit reference, a zero byte, a record count.
+        internal const int TailSectionHeadBytes = 7;
+        // A record: a 32-bit id, a value count, a zero byte, then that many 16-bit
+        // values followed by that many floats. The count is one in all but two
+        // records, which is why the record looked twelve bytes wide.
+        internal const int TailSectionRecordHeadBytes = 6;
+        internal const int TailSectionRecordValueBytes = 2;
+        internal const int TailSectionRecordFloatBytes = 4;
+        internal const byte TailSectionRecordMaximumValues = 8;
+        // When the section declares no entries it is absent, and one byte closes the
+        // body. That byte plus its count are the two bytes the previous reading took
+        // for a fixed closing word.
+        internal const int TailSectionAbsentBytes = 1;
         internal const int TailBlockUnitHeadBytes = 12;
         internal const int TailBlockRecordBytes = 12;
         // A bound so a corrupt count cannot make the reader walk the whole body.
@@ -3710,7 +3772,7 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             var units = body[cursor + 1];
-            if (units == 0 || units > TailBlockMaximumUnits)
+            if (units > TailBlockMaximumUnits)
             {
                 failure = HircFrameOutcome(
                     "failed", "range_tail_block_units", cursor + 1, TailBlockMaximumUnits, units);
@@ -3755,18 +3817,128 @@ namespace AnimeStudio.Endfield
                 cursor = checked(cursor + span);
                 HircBump(groups, "tailBlockRecords", records);
             }
-            if (body.Length - cursor != 2)
+            return FrameTailSection(body, ref cursor, groups, selectors, out failure);
+        }
+
+        /// <summary>
+        /// Frame the section that closes a tail block, which may be absent.
+        /// </summary>
+        /// <remarks>
+        /// This is the part the previous reading missed, and missing it cost eighteen
+        /// bodies. The section opens with an entry count; when that count is zero the
+        /// section is absent and a single byte closes the body -- and those two bytes
+        /// are exactly what the old code hardcoded as a fixed closing word, which is
+        /// why 64 bodies closed and the rest did not.
+        ///
+        /// When the count is nonzero the entries follow, each three bytes or four
+        /// depending on the high bit of its first byte, then a byte, a 32-bit
+        /// reference, a zero and a record count.
+        ///
+        /// Nothing here is a guess about meaning. The entries' first bytes run 0, 1,
+        /// 2, ... in the bodies that carry several, and the records end in floats, but
+        /// neither observation is claimed as semantics.
+        /// </remarks>
+        private static bool FrameTailSection(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "tailSectionEntryCount"))
+            {
+                return false;
+            }
+            HircBump(selectors, $"tailSectionEntries_{entryCount}", 1);
+            if (entryCount == 0)
+            {
+                if (body.Length - cursor != TailSectionAbsentBytes)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "tail_block_does_not_end_the_body",
+                        cursor, TailSectionAbsentBytes, body.Length - cursor);
+                    return false;
+                }
+                cursor = body.Length;
+                return true;
+            }
+            for (var entry = 0; entry < entryCount; entry++)
+            {
+                if (cursor >= body.Length)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "range_tail_section_entries", cursor, 1, 0);
+                    return false;
+                }
+                var wide = (body[cursor] & TailSectionEntryWideFlag) != 0;
+                var width = wide ? TailSectionEntryLongBytes : TailSectionEntryShortBytes;
+                if (!HircTake(body, ref cursor, width, out failure, "tailSectionEntry"))
+                {
+                    return false;
+                }
+                HircBump(groups, wide ? "tailSectionWideEntries" : "tailSectionEntries", 1);
+            }
+            if (body.Length - cursor < TailSectionHeadBytes)
             {
                 failure = HircFrameOutcome(
-                    "failed", "tail_block_does_not_end_the_body", cursor, 2, body.Length - cursor);
+                    "failed", "range_tail_section_head",
+                    cursor, TailSectionHeadBytes, body.Length - cursor);
                 return false;
             }
-            if (BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2)) != 0)
+            if (body[cursor + 5] != 0)
             {
-                failure = HircFrameOutcome("failed", "tail_block_closing_word_is_not_zero", cursor, 0, 0);
+                failure = HircFrameOutcome(
+                    "failed", "tail_section_head_is_not_the_observed_shape",
+                    cursor + 5, 0, body[cursor + 5]);
                 return false;
             }
-            cursor = body.Length;
+            HircBump(selectors, $"tailSectionLead_{body[cursor]:X2}", 1);
+            var records = body[cursor + 6];
+            cursor = checked(cursor + TailSectionHeadBytes);
+            HircBump(groups, "tailSectionRecords", records);
+            for (var record = 0; record < records; record++)
+            {
+                if (body.Length - cursor < TailSectionRecordHeadBytes)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "range_tail_section_records",
+                        cursor, TailSectionRecordHeadBytes, body.Length - cursor);
+                    return false;
+                }
+                var values = body[cursor + 4];
+                if (body[cursor + 5] != 0)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "tail_section_record_is_not_the_observed_shape",
+                        cursor + 5, 0, body[cursor + 5]);
+                    return false;
+                }
+                if (values == 0 || values > TailSectionRecordMaximumValues)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "range_tail_section_record_values",
+                        cursor + 4, TailSectionRecordMaximumValues, values);
+                    return false;
+                }
+                var span = checked(TailSectionRecordHeadBytes
+                    + values * (TailSectionRecordValueBytes + TailSectionRecordFloatBytes));
+                if (span > body.Length - cursor)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "range_tail_section_record_values",
+                        cursor + 4, body.Length - cursor, span);
+                    return false;
+                }
+                cursor = checked(cursor + span);
+                HircBump(groups, "tailSectionRecordValues", values);
+            }
+            if (cursor != body.Length)
+            {
+                failure = HircFrameOutcome(
+                    "failed", "tail_section_does_not_end_the_body",
+                    cursor, 0, body.Length - cursor);
+                return false;
+            }
             return true;
         }
 

@@ -971,9 +971,19 @@ internal static class EndfieldAkpkTests
         // block is refused under the tail block's own reason, not the trailer's: which
         // part of the layout failed has to stay visible.
         var badTrailer = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailer: 9));
-        if (badTrailer.FailureCounts["range_tail_block_units"] != 1)
+        if (badTrailer.FailureCounts["tail_block_does_not_end_the_body"] != 1)
         {
             throw new InvalidOperationException("type 0x08 framed a body with the wrong trailer");
+        }
+        // A unit count above the observed ceiling is still refused. Zero is not: a
+        // block with no units at all carries only its closing section, and ten bodies
+        // are shaped that way.
+        var wildUnits = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0,
+            trailerBytes: new byte[] { 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00 }));
+        if (wildUnits.FailureCounts["range_tail_block_units"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 accepted an impossible unit count");
         }
 
         // The tail block: a zero byte, a unit count, a zero byte, then that many units
@@ -993,6 +1003,74 @@ internal static class EndfieldAkpkTests
                 bytes[at + 12] = (byte)recordsPerUnit;
             }
             return bytes;
+        }
+
+        // The section that closes a tail block. When its entry count is zero the
+        // section is absent and one byte closes the body -- those two bytes are what
+        // the previous reading hardcoded as a fixed closing word, which is why it
+        // framed the 64 bodies whose section is absent and none of the 18 whose is
+        // not.
+        static byte[] TailSection(int entries, int wideEntries, int records, int valuesPerRecord)
+        {
+            var body = new List<byte> { 0x00, 0x00, 0x00, (byte)(entries + wideEntries) };
+            for (var i = 0; i < entries; i++)
+            {
+                body.AddRange(new byte[] { (byte)i, 0x02, 0x01 });
+            }
+            for (var i = 0; i < wideEntries; i++)
+            {
+                body.AddRange(new byte[] { 0x82, 0x30, 0x04, 0x00 });
+            }
+            body.AddRange(new byte[] { 0x01, 0x11, 0x22, 0x33, 0x44, 0x00, (byte)records });
+            for (var i = 0; i < records; i++)
+            {
+                body.AddRange(new byte[] { 0x01, 0x02, 0x03, 0x04, (byte)valuesPerRecord, 0x00 });
+                body.AddRange(new byte[valuesPerRecord * 2]);
+                body.AddRange(new byte[valuesPerRecord * 4]);
+            }
+            return body.ToArray();
+        }
+
+        var section = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailSection(5, 0, 4, 1)));
+        if (section.ExactCount != 1 || section.GroupCounts["tailSectionRecords"] != 4)
+        {
+            throw new InvalidOperationException("type 0x08 refused a tail section");
+        }
+        // The entry width is chosen by the high bit of the entry's first byte. A body
+        // mixing both widths is what shows the rule is a rule and not a constant.
+        var wideSection = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailSection(5, 2, 3, 1)));
+        if (wideSection.ExactCount != 1 || wideSection.GroupCounts["tailSectionWideEntries"] != 2)
+        {
+            throw new InvalidOperationException("type 0x08 refused a wide tail section entry");
+        }
+        // The record carries as many 16-bit values as it declares, then that many
+        // floats. Every record but two declares one, which is exactly why the record
+        // looked like a fixed twelve bytes.
+        var twoValues = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailSection(1, 0, 1, 2)));
+        if (twoValues.ExactCount != 1 || twoValues.GroupCounts["tailSectionRecordValues"] != 2)
+        {
+            throw new InvalidOperationException("type 0x08 refused a two-value tail record");
+        }
+        // A record declaring no values, or more than were ever observed, is refused
+        // rather than read as an empty or enormous run.
+        var zeroValues = TailSection(1, 0, 1, 1);
+        zeroValues[zeroValues.Length - 8] = 0x00;
+        if (Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: zeroValues))
+                .FailureCounts["range_tail_section_record_values"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 accepted a record with no values");
+        }
+        // A section whose records run past the body is refused, not truncated.
+        var truncated = TailSection(2, 0, 2, 1);
+        if (Frame(Build(
+                new byte[] { 0x1B }, 0x15, 11, 0,
+                trailerBytes: truncated[..(truncated.Length - 6)]))
+                .ExactCount != 0)
+        {
+            throw new InvalidOperationException("type 0x08 framed a truncated tail section");
         }
 
         var oneUnit = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailBlock(1, 1)));
