@@ -304,6 +304,17 @@ namespace AnimeStudio.Endfield
                 }
             }
             MusicReferences.PackagePopulation = checked((uint)everything.Count);
+            var reached = new Dictionary<string, Dictionary<uint, uint>>(StringComparer.Ordinal);
+            var population = new Dictionary<byte, HashSet<uint>>();
+            foreach (var pair in typeOf)
+            {
+                if (!population.TryGetValue(pair.Value, out var set))
+                {
+                    set = new HashSet<uint>();
+                    population[pair.Value] = set;
+                }
+                set.Add(pair.Key);
+            }
             foreach (var structure in BnkStructures)
             {
                 foreach (var (objectType, words) in structure.MusicBodyWords)
@@ -320,10 +331,15 @@ namespace AnimeStudio.Endfield
                         hits = checked(hits + 1);
                         if (typeOf.TryGetValue(word, out var targetType))
                         {
-                            HircBump(
-                                MusicReferences.EdgeCounts,
-                                $"type{objectType:X2}_to_type{targetType:X2}",
-                                1);
+                            var edge = $"type{objectType:X2}_to_type{targetType:X2}";
+                            HircBump(MusicReferences.EdgeCounts, edge, 1);
+                            if (!reached.TryGetValue(edge, out var seen))
+                            {
+                                seen = new Dictionary<uint, uint>();
+                                reached[edge] = seen;
+                            }
+                            seen.TryGetValue(word, out var times);
+                            seen[word] = checked(times + 1);
                         }
                     }
                     MusicReferences.References = checked(MusicReferences.References + hits);
@@ -334,6 +350,22 @@ namespace AnimeStudio.Endfield
                     }
                     HircBump(MusicReferences.ReferencesPerBody, $"refs_{Math.Min(hits, 8)}", 1);
                 }
+            }
+            foreach (var pair in reached)
+            {
+                var twice = 0U;
+                foreach (var target in pair.Value)
+                {
+                    if (target.Value > 1)
+                    {
+                        twice = checked(twice + 1);
+                    }
+                }
+                HircBump(MusicReferences.DistinctTargets, pair.Key, (uint)pair.Value.Count);
+                HircBump(MusicReferences.TargetsReachedTwice, pair.Key, twice);
+                var targetType = Convert.ToByte(pair.Key.Substring(pair.Key.Length - 2), 16);
+                var declared = population.TryGetValue(targetType, out var set) ? (uint)set.Count : 0U;
+                HircBump(MusicReferences.TargetPopulation, pair.Key, declared);
             }
         }
 
@@ -4152,6 +4184,13 @@ namespace AnimeStudio.Endfield
         public uint BodiesWithNoReference { get; set; }
         public Dictionary<string, uint> ReferencesPerBody { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> EdgeCounts { get; } = new(StringComparer.Ordinal);
+        // Per edge kind: how many distinct objects it reaches, how many of those it
+        // reaches more than once, and how many objects of that type the package
+        // declares. Together these say whether an edge partitions its targets --
+        // which an edge total on its own cannot, however suggestive the number.
+        public Dictionary<string, uint> DistinctTargets { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TargetsReachedTwice { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TargetPopulation { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the words in numeric type 0x08's tail head name package objects. The

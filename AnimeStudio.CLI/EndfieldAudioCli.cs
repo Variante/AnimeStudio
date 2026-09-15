@@ -212,6 +212,9 @@ namespace AnimeStudio.CLI
                                 ["bodiesWithNoReference"] = package.MusicReferences.BodiesWithNoReference,
                                 ["referencesPerBody"] = package.MusicReferences.ReferencesPerBody.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["edgeCounts"] = package.MusicReferences.EdgeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["distinctTargets"] = package.MusicReferences.DistinctTargets.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["targetsReachedTwice"] = package.MusicReferences.TargetsReachedTwice.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["targetPopulation"] = package.MusicReferences.TargetPopulation.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircType12TailWords"] = new Dictionary<string, object?>
                             {
