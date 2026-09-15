@@ -861,6 +861,16 @@ namespace AnimeStudio.Endfield
                     var sources = structure.Type11Sources;
                     sources.Bodies = checked(sources.Bodies + 1);
                     var sourceBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    if (sourceBody.Length >= 4)
+                    {
+                        var terminator = BinaryPrimitives.ReadUInt32LittleEndian(
+                            sourceBody.Slice(sourceBody.Length - 4, 4));
+                        HircBump(sources.TerminatorCounts, $"end_{terminator:X8}", 1);
+                        if (terminator == Type11TerminatorValue)
+                        {
+                            sources.EndsWithTerminator = checked(sources.EndsWithTerminator + 1);
+                        }
+                    }
                     if (sourceBody.Length < 5)
                     {
                         sources.TooShort = checked(sources.TooShort + 1);
@@ -880,6 +890,7 @@ namespace AnimeStudio.Endfield
                             {
                                 sources.BodiesWithRecords = checked(sources.BodiesWithRecords + 1);
                             }
+                            var declaredIds = new HashSet<uint>();
                             for (var record = 0U; record < recordCount; record++)
                             {
                                 var at = checked(5 + (int)record * Type11SourceRecordBytes);
@@ -888,7 +899,14 @@ namespace AnimeStudio.Endfield
                                 sources.Records = checked(sources.Records + 1);
                                 HircBump(sources.PluginIdCounts, $"plugin_{plugin:X8}", 1);
                                 HircBump(sources.StreamTypeCounts, $"streamType_{sourceBody[at + 4]:X2}", 1);
+                                declaredIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                                    sourceBody.Slice(at + 5, 4)));
                             }
+                            CensusType11TailEntries(
+                                sources,
+                                sourceBody,
+                                checked(5 + (int)recordCount * Type11SourceRecordBytes),
+                                declaredIds);
                         }
                     }
                 }
@@ -2014,6 +2032,87 @@ namespace AnimeStudio.Endfield
         internal const int Type11SourceRecordBytes = 14;
         // A bound so a corrupt count cannot make the reader walk the whole body.
         internal const uint Type11MaximumRecords = 64;
+        // The trailing 32-bit word every numeric type 0x0B body carries.
+        internal const uint Type11TerminatorValue = 100;
+        // Between the source run and that terminator sits a 32-bit entry count. The
+        // entries are variable-width and their interiors are not read; only the second
+        // word of each is, because it echoes one of the body's own declared source ids.
+        internal const uint Type11MaximumTailEntries = 64;
+        internal const int Type11TailEntrySourceOffset = 4;
+
+        /// <summary>
+        /// Census the counted run of tail entries that follows numeric type 0x0B's
+        /// source records.
+        /// </summary>
+        /// <remarks>
+        /// The entries are variable-width, so the run cannot be walked. What can be
+        /// checked is that the tail carries exactly as many echoes of the body's own
+        /// declared source ids as the count declares, on four-byte boundaries. Source
+        /// ids are sparse 32-bit values, so an echo is not something arbitrary bytes
+        /// produce: across the corpus no offset other than +4 into the first entry
+        /// echoes at all. Bodies declaring zero entries must carry zero echoes, which
+        /// is what stops the check from being satisfied by a body it cannot read.
+        /// </remarks>
+        private static void CensusType11TailEntries(
+            EndfieldHircType11SourceCensus sources,
+            ReadOnlySpan<byte> body,
+            int runEnd,
+            HashSet<uint> declaredIds)
+        {
+            var terminatorAt = body.Length - 4;
+            if (runEnd < 0 || terminatorAt < runEnd || checked(runEnd + 4) > terminatorAt)
+            {
+                sources.NoTailAfterTheRun = checked(sources.NoTailAfterTheRun + 1);
+                return;
+            }
+            var declared = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(runEnd, 4));
+            if (declared > Type11MaximumTailEntries)
+            {
+                sources.TailCountOutOfRange = checked(sources.TailCountOutOfRange + 1);
+                return;
+            }
+            sources.BodiesWithATail = checked(sources.BodiesWithATail + 1);
+            HircBump(sources.TailEntryCountCounts, $"tailEntries_{declared}", 1);
+            sources.TailEntriesDeclared = checked(sources.TailEntriesDeclared + declared);
+
+            var first = checked(runEnd + 4);
+            var echoes = 0U;
+            for (var at = first; at + 4 <= terminatorAt; at += 4)
+            {
+                if (declaredIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4))))
+                {
+                    echoes = checked(echoes + 1);
+                }
+            }
+            sources.TailEntriesEchoed = checked(sources.TailEntriesEchoed + Math.Min(echoes, declared));
+            if (echoes == declared)
+            {
+                sources.TailEchoesMatchTheCount = checked(sources.TailEchoesMatchTheCount + 1);
+            }
+            else if (echoes > declared)
+            {
+                sources.TailEchoesExceedTheCount = checked(sources.TailEchoesExceedTheCount + 1);
+            }
+            if (declared == 0)
+            {
+                return;
+            }
+            var sourceAt = checked(first + Type11TailEntrySourceOffset);
+            if (checked(sourceAt + 4) > terminatorAt)
+            {
+                sources.FirstTailEntryTooShort = checked(sources.FirstTailEntryTooShort + 1);
+                return;
+            }
+            HircBump(
+                sources.FirstTailEntryLeadingWordCounts,
+                $"lead_{BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(first, 4)):X8}",
+                1);
+            if (declaredIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(sourceAt, 4))))
+            {
+                sources.FirstTailEntryNamesADeclaredSource =
+                    checked(sources.FirstTailEntryNamesADeclaredSource + 1);
+            }
+        }
 
         internal static EndfieldHircBodyFrameResult FrameType7Body(
             ReadOnlySpan<byte> body,
@@ -3268,6 +3367,24 @@ namespace AnimeStudio.Endfield
         public uint Records { get; set; }
         public uint RecordsOutOfRange { get; set; }
         public uint TooShort { get; set; }
+        // Every body observed ends with the same four bytes. Counted rather than
+        // assumed, so a body without it is visible instead of silently framed.
+        public uint EndsWithTerminator { get; set; }
+        public Dictionary<string, uint> TerminatorCounts { get; } = new(StringComparer.Ordinal);
+        // The counted run of variable-width entries between the source run and the
+        // terminator. The entries are not walked; only their count and the source ids
+        // they echo are.
+        public uint BodiesWithATail { get; set; }
+        public uint NoTailAfterTheRun { get; set; }
+        public uint TailCountOutOfRange { get; set; }
+        public uint TailEntriesDeclared { get; set; }
+        public uint TailEntriesEchoed { get; set; }
+        public uint TailEchoesMatchTheCount { get; set; }
+        public uint TailEchoesExceedTheCount { get; set; }
+        public uint FirstTailEntryNamesADeclaredSource { get; set; }
+        public uint FirstTailEntryTooShort { get; set; }
+        public Dictionary<string, uint> TailEntryCountCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> FirstTailEntryLeadingWordCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> PluginIdCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> StreamTypeCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);

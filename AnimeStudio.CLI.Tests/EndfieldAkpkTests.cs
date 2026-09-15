@@ -23,6 +23,7 @@ internal static class EndfieldAkpkTests
         TestType14BodyFramesFailClosed();
         TestMusicHeadReferencesFollowTheDiscriminantByte();
         TestType11SourceRecordsAreCounted();
+        TestType11TailEntriesAreCounted();
         TestType22BodyFramesReuseGroupI();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
@@ -869,6 +870,93 @@ internal static class EndfieldAkpkTests
         return EndfieldAkpkPackage
             .Parse(BuildEncryptedBankPackage(0x7500, BuildBnk((0x16, 0x7501U, body))))
             .BnkStructures[0];
+    }
+
+    private static void TestType11TailEntriesAreCounted()
+    {
+        // A source run, a 32-bit tail-entry count, that many variable-width entries
+        // whose second word names one of the declared sources, then the terminator.
+        static byte[] Build(uint[] entrySourceIds, int[] entryWidths, uint declared, uint terminator)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write((byte)0);
+            writer.Write(1U);
+            writer.Write(0x00040001U);
+            writer.Write((byte)2);
+            writer.Write(0x1000U);
+            writer.Write(new byte[5]);
+            writer.Write(declared);
+            for (var i = 0; i < entrySourceIds.Length; i++)
+            {
+                writer.Write(0U);
+                writer.Write(entrySourceIds[i]);
+                writer.Write(new byte[entryWidths[i] - 8]);
+            }
+            writer.Write(terminator);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        var one = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7500, BuildBnk(
+            ((byte)0x0B, 0x7501U, Build(new[] { 0x1000U }, new[] { 84 }, 1, 100)))))
+            .BnkStructures[0].Type11Sources;
+        if (one.BodiesWithATail != 1
+            || one.TailEntriesDeclared != 1
+            || one.TailEntriesEchoed != 1
+            || one.TailEchoesMatchTheCount != 1
+            || one.TailEchoesExceedTheCount != 0
+            || one.FirstTailEntryNamesADeclaredSource != 1
+            || one.TailEntryCountCounts["tailEntries_1"] != 1
+            || one.FirstTailEntryLeadingWordCounts["lead_00000000"] != 1
+            || one.EndsWithTerminator != 1)
+        {
+            throw new InvalidOperationException("type 0x0B tail entries were not counted");
+        }
+
+        // A body declaring zero entries must carry no echoes; that is what stops the
+        // count from being confirmed by bodies the reader cannot see into.
+        var empty = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7500, BuildBnk(
+            ((byte)0x0B, 0x7502U, Build(Array.Empty<uint>(), Array.Empty<int>(), 0, 100)))))
+            .BnkStructures[0].Type11Sources;
+        if (empty.BodiesWithATail != 1
+            || empty.TailEntriesDeclared != 0
+            || empty.TailEntriesEchoed != 0
+            || empty.FirstTailEntryNamesADeclaredSource != 0
+            || empty.TailEntryCountCounts["tailEntries_0"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0B misread an empty tail");
+        }
+
+        // Two entries present but one declared: the surplus echo must be visible
+        // rather than truncated away, because a count that under-reports is not one.
+        var surplus = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7500, BuildBnk(
+            ((byte)0x0B, 0x7503U, Build(new[] { 0x1000U, 0x1000U }, new[] { 16, 16 }, 1, 100)))))
+            .BnkStructures[0].Type11Sources;
+        if (surplus.TailEchoesExceedTheCount != 1 || surplus.TailEntriesEchoed != 1)
+        {
+            throw new InvalidOperationException("type 0x0B hid a surplus tail echo");
+        }
+
+        // A count past its bound is refused outright instead of walked.
+        var wild = Build(new[] { 0x1000U }, new[] { 84 }, 1, 100);
+        BinaryPrimitives.WriteUInt32LittleEndian(wild.AsSpan(19, 4), 70000);
+        var refused = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7500, BuildBnk(
+            ((byte)0x0B, 0x7504U, wild)))).BnkStructures[0].Type11Sources;
+        if (refused.TailCountOutOfRange != 1 || refused.BodiesWithATail != 0)
+        {
+            throw new InvalidOperationException("type 0x0B accepted an impossible tail count");
+        }
+
+        // A terminator other than the observed one is counted under its own key, so a
+        // body that breaks the claim is visible instead of being folded into it.
+        var other = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7500, BuildBnk(
+            ((byte)0x0B, 0x7505U, Build(new[] { 0x1000U }, new[] { 84 }, 1, 7)))))
+            .BnkStructures[0].Type11Sources;
+        if (other.EndsWithTerminator != 0 || other.TerminatorCounts["end_00000007"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0B folded an unexpected terminator away");
+        }
     }
 
     private static void TestType11SourceRecordsAreCounted()

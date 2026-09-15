@@ -853,18 +853,49 @@ namespace AnimeStudio.CLI
             IEnumerable<EndfieldBnkStructure> structures)
         {
             var bodies = 0U; var withRecords = 0U; var records = 0U;
-            var outOfRange = 0U; var tooShort = 0U;
+            var outOfRange = 0U; var tooShort = 0U; var endsWith = 0U;
+            var terms = new Dictionary<string, uint>(StringComparer.Ordinal);
             var plugins = new Dictionary<string, uint>(StringComparer.Ordinal);
             var streams = new Dictionary<string, uint>(StringComparer.Ordinal);
             var counts = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var tailCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var leadWords = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var withTail = 0U; var noTail = 0U; var tailOutOfRange = 0U;
+            var tailDeclared = 0U; var tailEchoed = 0U; var tailMatches = 0U;
+            var tailExceeds = 0U; var firstNames = 0U; var firstShort = 0U;
             foreach (var structure in structures)
             {
                 var census = structure.Type11Sources;
+                withTail = checked(withTail + census.BodiesWithATail);
+                noTail = checked(noTail + census.NoTailAfterTheRun);
+                tailOutOfRange = checked(tailOutOfRange + census.TailCountOutOfRange);
+                tailDeclared = checked(tailDeclared + census.TailEntriesDeclared);
+                tailEchoed = checked(tailEchoed + census.TailEntriesEchoed);
+                tailMatches = checked(tailMatches + census.TailEchoesMatchTheCount);
+                tailExceeds = checked(tailExceeds + census.TailEchoesExceedTheCount);
+                firstNames = checked(firstNames + census.FirstTailEntryNamesADeclaredSource);
+                firstShort = checked(firstShort + census.FirstTailEntryTooShort);
+                foreach (var pair in census.TailEntryCountCounts)
+                {
+                    tailCounts.TryGetValue(pair.Key, out var existing);
+                    tailCounts[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in census.FirstTailEntryLeadingWordCounts)
+                {
+                    leadWords.TryGetValue(pair.Key, out var existing);
+                    leadWords[pair.Key] = checked(existing + pair.Value);
+                }
                 bodies = checked(bodies + census.Bodies);
                 withRecords = checked(withRecords + census.BodiesWithRecords);
                 records = checked(records + census.Records);
                 outOfRange = checked(outOfRange + census.RecordsOutOfRange);
                 tooShort = checked(tooShort + census.TooShort);
+                endsWith = checked(endsWith + census.EndsWithTerminator);
+                foreach (var pair in census.TerminatorCounts)
+                {
+                    terms.TryGetValue(pair.Key, out var existing);
+                    terms[pair.Key] = checked(existing + pair.Value);
+                }
                 foreach (var pair in census.PluginIdCounts)
                 {
                     plugins.TryGetValue(pair.Key, out var existing);
@@ -888,9 +919,22 @@ namespace AnimeStudio.CLI
                 ["records"] = records,
                 ["recordsOutOfRange"] = outOfRange,
                 ["tooShort"] = tooShort,
+                ["endsWithTerminator"] = endsWith,
+                ["terminatorCounts"] = terms.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["pluginIdCounts"] = plugins.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["streamTypeCounts"] = streams.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["bodiesWithATail"] = withTail,
+                ["noTailAfterTheRun"] = noTail,
+                ["tailCountOutOfRange"] = tailOutOfRange,
+                ["tailEntriesDeclared"] = tailDeclared,
+                ["tailEntriesEchoed"] = tailEchoed,
+                ["tailEchoesMatchTheCount"] = tailMatches,
+                ["tailEchoesExceedTheCount"] = tailExceeds,
+                ["firstTailEntryNamesADeclaredSource"] = firstNames,
+                ["firstTailEntryTooShort"] = firstShort,
+                ["tailEntryCountCounts"] = tailCounts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["firstTailEntryLeadingWordCounts"] = leadWords.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
         }
 
