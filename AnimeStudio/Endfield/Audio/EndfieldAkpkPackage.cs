@@ -1583,6 +1583,22 @@ namespace AnimeStudio.Endfield
         // 8 to 20 collapses them to between 107 and 220. And at 12 the word directly
         // after the run is 15 -- a small count that frames a further block -- where
         // every other stride lands on zero or on an arbitrary large value.
+        // STMG's trailing run, framed BACKWARD from the section end.
+        //
+        // It has to be backward. The block between the two runs is variable-length and
+        // is not framed, so the trailing run's start cannot be computed forward. What
+        // makes the backward walk evidence rather than a guess is that it ends on a
+        // count: step back in 21-byte records while the record shape holds, then read
+        // the word in front of the run and require it to equal the number of records
+        // stepped over. A walk that overshoots into the unframed block lands on a word
+        // that does not match, and is refused.
+        internal const int StmgTailRecordBytes = 21;
+        internal const int StmgTailZeroRunOffset = 9;
+        internal const int StmgTailZeroRunBytes = 3;
+        internal const int StmgTrailingBytes = 4;
+        internal const uint StmgMaximumTailRecords = 4096;
+        internal static readonly int[] StmgTailRivalStrides =
+            { 14, 15, 16, 17, 18, 19, 20, 22, 23, 24 };
         internal static readonly int[] StmgRivalStrides =
             { 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20 };
 
@@ -1677,11 +1693,161 @@ namespace AnimeStudio.Endfield
                                 checked(Stmg.RunsFollowedByAPlausibleCount + 1);
                         }
                     }
-                    Stmg.BytesFramed = checked(Stmg.BytesFramed + (uint)after);
-                    Stmg.BytesUnframed =
-                        checked(Stmg.BytesUnframed + (uint)(body.Length - after));
+                    var tailStart = FrameStmgTail(body, after);
+                    Stmg.BytesFramed = checked(
+                        Stmg.BytesFramed
+                        + (uint)after
+                        + (uint)(tailStart < 0 ? 0 : body.Length - tailStart + 4));
+                    Stmg.BytesUnframed = checked(
+                        Stmg.BytesUnframed
+                        + (uint)(tailStart < 0 ? body.Length - after : tailStart - 4 - after));
                 }
             }
+        }
+
+
+        /// <summary>
+        /// Frame STMG's trailing record run, backward from the section end.
+        /// </summary>
+        /// <remarks>
+        /// 269 records of 21 bytes: `u32 id, f32, u8 selector, 3 zero bytes, f32, f32,
+        /// u8`. All 269 ids are distinct and all 269 carry the three zero bytes, while
+        /// every rival stride from 14 to 24 gives between 108 and 133 distinct ids and
+        /// between 126 and 162 records with the zero run. The three floats are finite
+        /// and bounded, taking values like 0, -96, 1, 0.1, 10, 50 and 16000.
+        ///
+        /// Returns the offset the run starts at, or -1 if it could not be framed.
+        /// </remarks>
+        private int FrameStmgTail(byte[] body, int notBefore)
+        {
+            if (body.Length < StmgTrailingBytes)
+            {
+                return -1;
+            }
+            for (var at = body.Length - StmgTrailingBytes; at < body.Length; at++)
+            {
+                if (body[at] != 0)
+                {
+                    Stmg.TailTrailingBytesNotZero =
+                        checked(Stmg.TailTrailingBytesNotZero + 1);
+                    return -1;
+                }
+            }
+            var cursor = body.Length - StmgTrailingBytes;
+            var records = 0U;
+            while (checked(cursor - StmgTailRecordBytes) >= notBefore
+                && records < StmgMaximumTailRecords)
+            {
+                var candidate = cursor - StmgTailRecordBytes;
+                var zeroed = true;
+                for (var at = 0; at < StmgTailZeroRunBytes; at++)
+                {
+                    if (body[candidate + StmgTailZeroRunOffset + at] != 0)
+                    {
+                        zeroed = false;
+                        break;
+                    }
+                }
+                if (!zeroed)
+                {
+                    break;
+                }
+                cursor = candidate;
+                records = checked(records + 1);
+            }
+            if (records == 0 || cursor - 4 < notBefore)
+            {
+                Stmg.TailRunNotFound = checked(Stmg.TailRunNotFound + 1);
+                return -1;
+            }
+            // The zero-run walk BOUNDS the run; it does not locate it. Here it reaches
+            // 270 records where the true count is 269, because the three bytes it looks
+            // at happen to be zero one record early. So the boundary is settled by the
+            // count instead: the only length whose preceding word equals it.
+            //
+            // That is a real discrimination rather than a fit. Over every length from 1
+            // to 480 exactly ONE satisfies it, so the run is located to the byte and an
+            // ambiguous section is fenced rather than resolved by preference.
+            var matches = 0U;
+            var chosen = 0U;
+            for (var candidate = 1U; candidate <= records; candidate++)
+            {
+                var at = checked(body.Length - StmgTrailingBytes
+                                 - (int)candidate * StmgTailRecordBytes - 4);
+                if (at < notBefore)
+                {
+                    break;
+                }
+                if (BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at, 4)) == candidate)
+                {
+                    matches = checked(matches + 1);
+                    chosen = candidate;
+                }
+            }
+            Stmg.TailRunsCheckable = checked(Stmg.TailRunsCheckable + 1);
+            if (matches != 1)
+            {
+                Stmg.TailCountDoesNotMatchTheRun =
+                    checked(Stmg.TailCountDoesNotMatchTheRun + 1);
+                return -1;
+            }
+            records = chosen;
+            cursor = checked(body.Length - StmgTrailingBytes
+                             - (int)records * StmgTailRecordBytes);
+            Stmg.TailRunsFramed = checked(Stmg.TailRunsFramed + 1);
+            Stmg.TailRecords = checked(Stmg.TailRecords + records);
+            var ids = new HashSet<uint>();
+            for (var record = 0U; record < records; record++)
+            {
+                var at = checked(cursor + (int)record * StmgTailRecordBytes);
+                ids.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(at, 4)));
+                HircBump(Stmg.TailSelectors, $"selector_{body[at + 8]}", 1);
+                for (var field = 0; field < 3; field++)
+                {
+                    var value = BinaryPrimitives.ReadSingleLittleEndian(
+                        body.AsSpan(at + (field == 0 ? 4 : 8 + field * 4), 4));
+                    Stmg.TailFloatsTested = checked(Stmg.TailFloatsTested + 1);
+                    if (!float.IsNaN(value) && !float.IsInfinity(value)
+                        && Math.Abs(value) < 1e7f)
+                    {
+                        Stmg.TailFloatsBounded = checked(Stmg.TailFloatsBounded + 1);
+                    }
+                }
+            }
+            Stmg.TailDistinctIds = checked(Stmg.TailDistinctIds + (uint)ids.Count);
+            // Every rival stride scored the same two ways, over the same span.
+            foreach (var stride in StmgTailRivalStrides)
+            {
+                if (checked(cursor + (int)records * stride) > body.Length)
+                {
+                    continue;
+                }
+                Stmg.TailRivalStridesTested = checked(Stmg.TailRivalStridesTested + 1);
+                var rivalIds = new HashSet<uint>();
+                var rivalZeroed = 0U;
+                for (var record = 0U; record < records; record++)
+                {
+                    var at = checked(cursor + (int)record * stride);
+                    rivalIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.AsSpan(at, 4)));
+                    if (body.AsSpan(at + StmgTailZeroRunOffset, StmgTailZeroRunBytes)
+                            .IndexOfAnyExcept((byte)0) < 0)
+                    {
+                        rivalZeroed = checked(rivalZeroed + 1);
+                    }
+                }
+                if (rivalIds.Count == records)
+                {
+                    Stmg.TailRivalStridesWithDistinctIds =
+                        checked(Stmg.TailRivalStridesWithDistinctIds + 1);
+                }
+                if (rivalZeroed == records)
+                {
+                    Stmg.TailRivalStridesWithTheZeroRun =
+                        checked(Stmg.TailRivalStridesWithTheZeroRun + 1);
+                }
+            }
+            return cursor;
         }
 
 
@@ -7559,6 +7725,20 @@ namespace AnimeStudio.Endfield
         public uint BytesFramed { get; set; }
         public uint BytesUnframed { get; set; }
         public Dictionary<string, uint> RecordValues { get; } = new(StringComparer.Ordinal);
+        // The trailing run, framed backward from the section end.
+        public uint TailTrailingBytesNotZero { get; set; }
+        public uint TailRunNotFound { get; set; }
+        public uint TailRunsCheckable { get; set; }
+        public uint TailCountDoesNotMatchTheRun { get; set; }
+        public uint TailRunsFramed { get; set; }
+        public uint TailRecords { get; set; }
+        public uint TailDistinctIds { get; set; }
+        public uint TailFloatsTested { get; set; }
+        public uint TailFloatsBounded { get; set; }
+        public uint TailRivalStridesTested { get; set; }
+        public uint TailRivalStridesWithDistinctIds { get; set; }
+        public uint TailRivalStridesWithTheZeroRun { get; set; }
+        public Dictionary<string, uint> TailSelectors { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the STMG section names HIRC objects at all.
