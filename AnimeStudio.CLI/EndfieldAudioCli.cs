@@ -210,6 +210,10 @@ namespace AnimeStudio.CLI
                                 ["namesTheSourceType"] = package.Type0AHead.NamesTheSourceType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["namesTheSourceTypeWhereTheRuleApplies"] = package.Type0AHead.NamesTheSourceTypeWhereTheRuleApplies.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["headWordTargets"] = package.Type0AHead.HeadWordTargets.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["elementTotal"] = (long)package.Type0AElements.Total,
+                                ["elementLeadingByteNotZero"] = (long)package.Type0AElements.LeadingByteNotZero,
+                                ["elementPadNotZero"] = (long)package.Type0AElements.PadNotZero,
+                                ["elementValueCounts"] = package.Type0AElements.ValueCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => (long)z.Value),
                             },
                             ["hircMusicReferences"] = new Dictionary<string, object?>
                             {

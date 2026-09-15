@@ -34,6 +34,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
+        public EndfieldHircType0AElementCensus Type0AElements { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -401,8 +402,8 @@ namespace AnimeStudio.Endfield
             }
             foreach (var structure in BnkStructures)
             {
-                foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord)
-                         in structure.Type0AHeadPredictions)
+                foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
+                              leadBad, padBad, values) in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -421,6 +422,24 @@ namespace AnimeStudio.Endfield
                             {
                                 HircBump(Type0AHead.NamesTheSourceTypeWhereTheRuleApplies, label, 1);
                             }
+                        }
+                    }
+                    // The elements only mean anything where the rule is confirmed: a
+                    // body whose reference is not where the rule says has no element
+                    // boundary to speak of, so counting its bytes as elements would be
+                    // reading arbitrary offsets.
+                    if (discriminant
+                        && everything.Contains(predicted)
+                        && typeOf.TryGetValue(predicted, out var confirmed)
+                        && confirmed == 11)
+                    {
+                        Type0AElements.Total = checked(Type0AElements.Total + (uint)values.Length);
+                        Type0AElements.LeadingByteNotZero =
+                            checked(Type0AElements.LeadingByteNotZero + leadBad);
+                        Type0AElements.PadNotZero = checked(Type0AElements.PadNotZero + padBad);
+                        foreach (var value in values)
+                        {
+                            HircBump(Type0AElements.ValueCounts, $"value_{value}", 1);
                         }
                     }
                     Score("predicted", predicted);
@@ -2668,7 +2687,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2684,13 +2703,40 @@ namespace AnimeStudio.Endfield
                 offset >= 0 && offset + 4 <= span.Length
                     ? BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4))
                     : 0U;
+            // Read the counted five-byte elements while the body is here, but do not
+            // aggregate them yet: they are only meaningful for bodies whose reference
+            // turns out to be where the rule says, and that needs the package's object
+            // set. The per-body summary travels with the prediction instead.
+            var leadBad = 0U;
+            var padBad = 0U;
+            var values = new List<ushort>();
+            for (var e = 0; e < body[Type0AHeadCountOffset]; e++)
+            {
+                var element = Type0AHeadFixedBytes + e * Type0AHeadElementBytes;
+                if (element + Type0AHeadElementBytes > body.Length)
+                {
+                    break;
+                }
+                if (body[element] != 0)
+                {
+                    leadBad = checked(leadBad + 1);
+                }
+                if (BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(element + 3, 2)) != 0)
+                {
+                    padBad = checked(padBad + 1);
+                }
+                values.Add(BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(element + 1, 2)));
+            }
             sink.Add((
                 Read(body, at),
                 Read(body, Type0AHeadFixedBytes),
                 Read(body, at + 4),
                 Read(body, at - 4),
                 body.Length > Type0AHeadDiscriminantOffset && body[Type0AHeadDiscriminantOffset] == 0,
-                Read(body, Type0AHeadWordOffset)));
+                Read(body, Type0AHeadWordOffset),
+                leadBad,
+                padBad,
+                values.ToArray()));
         }
 
         /// <summary>
@@ -4126,7 +4172,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4309,6 +4355,15 @@ namespace AnimeStudio.Endfield
         public uint Null { get; set; }
         public uint Unresolved { get; set; }
         public uint TooShort { get; set; }
+    }
+
+    // The counted five-byte elements inside numeric type 0x0A's head.
+    public sealed class EndfieldHircType0AElementCensus
+    {
+        public uint Total { get; set; }
+        public uint LeadingByteNotZero { get; set; }
+        public uint PadNotZero { get; set; }
+        public Dictionary<string, uint> ValueCounts { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether numeric type 0x0A's head-length rule puts the reference where it says.
