@@ -1013,6 +1013,10 @@ namespace AnimeStudio.Endfield
                 {
                     var head = structure.MusicHeadReferences;
                     head.Bodies = checked(head.Bodies + 1);
+                    CensusMusicTailWords(
+                        head,
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
+                        namedIdentityHashes);
                     HircBump(head.BodiesByType, $"type{objectType:X2}", 1);
                     var musicBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     if (musicBody.Length < 3)
@@ -2466,6 +2470,50 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x08's tail is anchored by a nine-byte constant that every body
         // carries. It is treated as a landmark, not as data: a body whose bytes do not
         // match it here is refused rather than framed with an offset that fits.
+        // Distances from the end of a music body at which a 32-bit word carries a name
+        // hash. Counted from the end because these types' heads are variable-length:
+        // across the corpus only three byte positions from the front take a single
+        // value, so nothing can be located from there.
+        internal static ReadOnlySpan<int> MusicTailWordOffsets => new[] { 12, 24 };
+
+        /// <summary>
+        /// Census the two tail words of a music body against the known name hashes.
+        /// </summary>
+        /// <remarks>
+        /// This frames nothing. It reads two words at fixed distances from the end and
+        /// asks whether they are hashes of strings the game ships. Name hashes are
+        /// sparse against the 32-bit range -- under fifty thousand of them -- so chance
+        /// matches across the whole corpus are expected far below one, and the offsets
+        /// are counted separately so a rate can be read per offset rather than pooled.
+        /// </remarks>
+        private static void CensusMusicTailWords(
+            EndfieldHircMusicHeadReferenceCensus census,
+            ReadOnlySpan<byte> body,
+            HashSet<uint>? names)
+        {
+            if (names == null || names.Count == 0)
+            {
+                return;
+            }
+            foreach (var back in MusicTailWordOffsets)
+            {
+                if (body.Length < back)
+                {
+                    census.BodiesTooShortForTailWords =
+                        checked(census.BodiesTooShortForTailWords + 1);
+                    continue;
+                }
+                var word = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(body.Length - back, 4));
+                census.TailWordsTested = checked(census.TailWordsTested + 1);
+                HircBump(census.TailWordTestedByOffset, $"minus{back}", 1);
+                if (names.Contains(word))
+                {
+                    census.TailWordsNamed = checked(census.TailWordsNamed + 1);
+                    HircBump(census.TailWordNamedByOffset, $"minus{back}", 1);
+                }
+            }
+        }
+
         private static ReadOnlySpan<byte> Type08Signature =>
             new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 };
         // The one-entry list after the property block: its key decides the value width,
@@ -4076,6 +4124,14 @@ namespace AnimeStudio.Endfield
         public uint UnknownHeadShape { get; set; }
         public uint TooShort { get; set; }
         public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
+        // Two 32-bit words at fixed distances from the *end* of a music body. The head
+        // of these types is variable, so nothing can be counted from the front; the
+        // tail is not, and these two words carry name hashes.
+        public uint TailWordsTested { get; set; }
+        public uint TailWordsNamed { get; set; }
+        public uint BodiesTooShortForTailWords { get; set; }
+        public Dictionary<string, uint> TailWordNamedByOffset { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TailWordTestedByOffset { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> OffsetCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> DiscriminantCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> HeadShapeCounts { get; } = new(StringComparer.Ordinal);

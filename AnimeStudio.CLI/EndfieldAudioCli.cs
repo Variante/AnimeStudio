@@ -1048,6 +1048,9 @@ namespace AnimeStudio.CLI
             IEnumerable<EndfieldBnkStructure> structures)
         {
             var bodies = 0U; var resolved = 0U; var unresolved = 0U; var zero = 0U;
+            var tailTested = 0U; var tailNamed = 0U; var tailShort = 0U;
+            var tailNamedBy = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var tailTestedBy = new Dictionary<string, uint>(StringComparer.Ordinal);
             var unknown = 0U; var tooShort = 0U; var unknownHead = 0U;
             var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
             var offsets = new Dictionary<string, uint>(StringComparer.Ordinal);
@@ -1057,6 +1060,19 @@ namespace AnimeStudio.CLI
             {
                 var head = structure.MusicHeadReferences;
                 bodies = checked(bodies + head.Bodies);
+                tailTested = checked(tailTested + head.TailWordsTested);
+                tailNamed = checked(tailNamed + head.TailWordsNamed);
+                tailShort = checked(tailShort + head.BodiesTooShortForTailWords);
+                foreach (var pair in head.TailWordNamedByOffset)
+                {
+                    tailNamedBy.TryGetValue(pair.Key, out var a1);
+                    tailNamedBy[pair.Key] = checked(a1 + pair.Value);
+                }
+                foreach (var pair in head.TailWordTestedByOffset)
+                {
+                    tailTestedBy.TryGetValue(pair.Key, out var a2);
+                    tailTestedBy[pair.Key] = checked(a2 + pair.Value);
+                }
                 resolved = checked(resolved + head.Resolved);
                 unresolved = checked(unresolved + head.Unresolved);
                 zero = checked(zero + head.Zero);
@@ -1094,6 +1110,11 @@ namespace AnimeStudio.CLI
                 ["unknownHeadShape"] = unknownHead,
                 ["tooShort"] = tooShort,
                 ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["tailWordsTested"] = tailTested,
+                ["tailWordsNamed"] = tailNamed,
+                ["bodiesTooShortForTailWords"] = tailShort,
+                ["tailWordNamedByOffset"] = tailNamedBy.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["tailWordTestedByOffset"] = tailTestedBy.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["offsetCounts"] = offsets.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["discriminantCounts"] = discriminants.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["headShapeCounts"] = headShapes.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
