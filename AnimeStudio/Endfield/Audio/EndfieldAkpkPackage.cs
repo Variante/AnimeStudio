@@ -403,8 +403,8 @@ namespace AnimeStudio.Endfield
             foreach (var structure in BnkStructures)
             {
                 foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
-                              leadBad, padBad, values, tailBytes, tailFloat, neighbourFloat)
-                         in structure.Type0AHeadPredictions)
+                              leadBad, padBad, values, tailBytes, tailFloat, neighbourFloat,
+                              fraction, fractionControl) in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -466,6 +466,26 @@ namespace AnimeStudio.Endfield
                         if (tailFloat == MathF.Round(tailFloat))
                         {
                             Type0AHead.TailFloatsWhole = checked(Type0AHead.TailFloatsWhole + 1);
+                        }
+                        if (fraction != 0)
+                        {
+                            Type0AHead.FractionCandidates =
+                                checked(Type0AHead.FractionCandidates + 1);
+                            if (IsSmallFraction(fraction))
+                            {
+                                Type0AHead.FractionsWithASmallDenominator =
+                                    checked(Type0AHead.FractionsWithASmallDenominator + 1);
+                            }
+                        }
+                        if (fractionControl != 0)
+                        {
+                            Type0AHead.FractionControls =
+                                checked(Type0AHead.FractionControls + 1);
+                            if (IsSmallFraction(fractionControl))
+                            {
+                                Type0AHead.FractionControlsWithASmallDenominator =
+                                    checked(Type0AHead.FractionControlsWithASmallDenominator + 1);
+                            }
                         }
                         if (float.IsFinite(neighbourFloat))
                         {
@@ -2727,6 +2747,38 @@ namespace AnimeStudio.Endfield
         // Its neighbour twelve bytes earlier is the opposite kind of field: never a
         // whole number in any body. Censused so the contrast is measured, not assumed.
         internal const int Type0ATailNeighbourOffset = 8;
+        // Four bytes past the reference: a 32-bit fixed-point fraction of one, not an
+        // integer and not a float. Its nonzero values land on simple rationals -- 1/3,
+        // 2/3, 4/7, 10/11, 7/13 -- to within a few parts in 10^10.
+        internal const int Type0ATailFractionOffset = 4;
+        internal const int Type0ATailFractionMaximumDenominator = 64;
+        // A few parts in 10^9 of 2^32, which exact rationals clear by two orders.
+        internal const long Type0ATailFractionTolerance = 16;
+
+        /// <summary>
+        /// Is a 32-bit value a fixed-point fraction with a small denominator?
+        /// </summary>
+        private static bool IsSmallFraction(uint value)
+        {
+            if (value == 0)
+            {
+                return false;
+            }
+            const long scale = 1L << 32;
+            for (var q = 2; q <= Type0ATailFractionMaximumDenominator; q++)
+            {
+                var p = (long)Math.Round((double)value * q / scale);
+                if (p <= 0 || p >= q)
+                {
+                    continue;
+                }
+                if (Math.Abs((long)value - p * scale / q) <= Type0ATailFractionTolerance)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2737,7 +2789,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2815,7 +2867,15 @@ namespace AnimeStudio.Endfield
                 at + Type0ATailNeighbourOffset + 4 <= body.Length
                     ? BinaryPrimitives.ReadSingleLittleEndian(
                         body.Slice(at + Type0ATailNeighbourOffset, 4))
-                    : float.NaN));
+                    : float.NaN,
+                at + Type0ATailFractionOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.Slice(at + Type0ATailFractionOffset, 4))
+                    : 0U,
+                at + Type0ATailNeighbourOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.Slice(at + Type0ATailNeighbourOffset, 4))
+                    : 0U));
         }
 
         /// <summary>
@@ -4251,7 +4311,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4459,6 +4519,10 @@ namespace AnimeStudio.Endfield
         public uint TailFloatsWhole { get; set; }
         public uint NeighbourFloats { get; set; }
         public uint NeighbourFloatsWhole { get; set; }
+        public uint FractionCandidates { get; set; }
+        public uint FractionsWithASmallDenominator { get; set; }
+        public uint FractionControls { get; set; }
+        public uint FractionControlsWithASmallDenominator { get; set; }
     }
 
     // Which words in a music body name objects the package ships, and what they name.
