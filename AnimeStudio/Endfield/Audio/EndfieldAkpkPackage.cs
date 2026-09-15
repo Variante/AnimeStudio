@@ -4372,8 +4372,27 @@ namespace AnimeStudio.Endfield
             }
             if (cursor != end)
             {
+                // Two different things land here and they deserve different names.
+                // 104 bodies leave a short run of zeros before the terminator and
+                // nothing else; 218 leave real content -- curve records, object ids,
+                // and the byte pattern an element trailer carries. Reporting both as
+                // one number would hide that the second group is unread structure and
+                // the first may be padding. Neither is framed into a result.
+                var rest = body[cursor..end];
+                var padding = true;
+                foreach (var value in rest)
+                {
+                    if (value != 0)
+                    {
+                        padding = false;
+                        break;
+                    }
+                }
                 return HircFrameOutcome(
-                    "failed", "entries_do_not_reach_the_terminator", cursor, 0, end - cursor);
+                    "failed",
+                    padding ? "trailing_zero_run_before_the_terminator"
+                            : "entries_do_not_reach_the_terminator",
+                    cursor, 0, end - cursor);
             }
             cursor = body.Length;
             return HircFrameExact(cursor, body.Length, groups, selectors, null);

@@ -951,13 +951,20 @@ internal static class EndfieldAkpkTests
         {
             throw new InvalidOperationException("type 0x0B framed a body with no terminator");
         }
-        // Trailing bytes between the last entry and the terminator are a failure,
-        // not something to absorb.
-        var trailing = Body(1, 1, 1, 1, 1, 0).ToList();
-        trailing.InsertRange(trailing.Count - 4, new byte[6]);
-        if (Frame(trailing.ToArray()).Category != "entries_do_not_reach_the_terminator")
+        // Trailing bytes between the last entry and the terminator are a failure, not
+        // something to absorb -- and the two kinds are named apart, because 104 bodies
+        // leave a short run of zeros there and 218 leave real content.
+        var trailingContent = Body(1, 1, 1, 1, 1, 0).ToList();
+        trailingContent.InsertRange(trailingContent.Count - 4, new byte[] { 1, 2, 3, 4, 5, 6 });
+        if (Frame(trailingContent.ToArray()).Category != "entries_do_not_reach_the_terminator")
         {
-            throw new InvalidOperationException("type 0x0B absorbed bytes before its terminator");
+            throw new InvalidOperationException("type 0x0B absorbed content before its terminator");
+        }
+        var trailingZeros = Body(1, 1, 1, 1, 1, 0).ToList();
+        trailingZeros.InsertRange(trailingZeros.Count - 4, new byte[6]);
+        if (Frame(trailingZeros.ToArray()).Category != "trailing_zero_run_before_the_terminator")
+        {
+            throw new InvalidOperationException("type 0x0B did not name a trailing zero run");
         }
         // A count that cannot fit is refused rather than clamped.
         var wildEntries = Body(1, 1, 1, 1, 1, 0);
