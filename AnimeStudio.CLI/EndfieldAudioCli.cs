@@ -257,6 +257,7 @@ namespace AnimeStudio.CLI
                                 ["parentsWithSeveralChildren"] = package.Type0CHierarchy.ParentsWithSeveralChildren,
                                 ["depths"] = package.Type0CHierarchy.Depths.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["childrenPerParent"] = package.Type0CHierarchy.ChildrenPerParent.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["edgeTypes"] = package.Type0CHierarchy.EdgeTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircMusicMutuality"] = new Dictionary<string, object?>
                             {

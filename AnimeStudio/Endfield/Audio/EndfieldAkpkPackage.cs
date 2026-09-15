@@ -974,7 +974,7 @@ namespace AnimeStudio.Endfield
 
 
         /// <summary>
-        /// Walk numeric type 0x0C's parent relation, the format's fourth located one.
+        /// Walk the music types' parent relation, read at a fixed front offset.
         /// </summary>
         /// <remarks>
         /// The same shape as the relation numeric types 0x08 and 0x12 declare, in an
@@ -1002,21 +1002,25 @@ namespace AnimeStudio.Endfield
                 var children = new Dictionary<uint, uint>();
                 foreach (var pair in objects)
                 {
-                    if (pair.Value != 0 && objects.ContainsKey(pair.Value))
+                    if (pair.Value.Parent != 0 && objects.ContainsKey(pair.Value.Parent))
                     {
-                        children.TryGetValue(pair.Value, out var seen);
-                        children[pair.Value] = checked(seen + 1);
+                        children.TryGetValue(pair.Value.Parent, out var seen);
+                        children[pair.Value.Parent] = checked(seen + 1);
                     }
                 }
                 foreach (var pair in objects)
                 {
                     Type0CHierarchy.Objects = checked(Type0CHierarchy.Objects + 1);
-                    if (pair.Value != 0 && objects.ContainsKey(pair.Value))
+                    if (pair.Value.Parent != 0 && objects.ContainsKey(pair.Value.Parent))
                     {
                         Type0CHierarchy.ObjectsNamingAParent =
                             checked(Type0CHierarchy.ObjectsNamingAParent + 1);
+                        HircBump(
+                            Type0CHierarchy.EdgeTypes,
+                            $"type{pair.Value.Type:X2}_to_type{objects[pair.Value.Parent].Type:X2}",
+                            1);
                     }
-                    else if (pair.Value == 0)
+                    else if (pair.Value.Parent == 0)
                     {
                         Type0CHierarchy.RootsWithNoParent =
                             checked(Type0CHierarchy.RootsWithNoParent + 1);
@@ -1032,18 +1036,18 @@ namespace AnimeStudio.Endfield
                     while (true)
                     {
                         if (!objects.TryGetValue(cursor, out var next)
-                            || next == 0
-                            || !objects.ContainsKey(next))
+                            || next.Parent == 0
+                            || !objects.ContainsKey(next.Parent))
                         {
                             break;
                         }
-                        if (!seenIds.Add(next))
+                        if (!seenIds.Add(next.Parent))
                         {
                             Type0CHierarchy.Cycles = checked(Type0CHierarchy.Cycles + 1);
                             depth = -1;
                             break;
                         }
-                        cursor = next;
+                        cursor = next.Parent;
                         depth = checked(depth + 1);
                     }
                     if (depth >= 0)
@@ -1831,16 +1835,19 @@ namespace AnimeStudio.Endfield
                             structure.Type0AHeadPredictions,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
                     }
-                    if (objectType == 12)
+                    if (objectType is 10 or 12 or 13)
                     {
-                        // Numeric type 0x0C names another 0x0C at a fixed offset of 9.
-                        // Kept per bank: object ids repeat across banks, so a relation
+                        // Every music type names another object at a fixed offset of 9,
+                        // and the targets chain: 0x0A -> 0x0D -> 0x0C -> 0x0C. Kept per
+                        // bank, because object ids repeat across banks and a relation
                         // resolved corpus-wide is a different relation.
                         var parentBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                        structure.Type0CParents[objectId] = parentBody.Length >= Type0CParentOffset + 4
-                            ? BinaryPrimitives.ReadUInt32LittleEndian(
-                                parentBody.Slice(Type0CParentOffset, 4))
-                            : 0u;
+                        structure.Type0CParents[objectId] = (
+                            objectType,
+                            parentBody.Length >= Type0CParentOffset + 4
+                                ? BinaryPrimitives.ReadUInt32LittleEndian(
+                                    parentBody.Slice(Type0CParentOffset, 4))
+                                : 0u);
                     }
                     if (objectType is 10 or 12 or 13)
                     {
@@ -2993,10 +3000,10 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x0B's entry area: a 32-bit entry count, then that many entries.
         // Each entry opens with 48 header bytes whose word at 44 counts the elements
         // that follow.
-        // Numeric type 0x0C's parent reference. Found by asking which front offsets
-        // its references use: 716 of its 742 bodies name another 0x0C object here, and
-        // every other reference the type carries is scattered across some 3,193
-        // distinct offsets.
+        // The music types' parent reference. Found by asking which FRONT offsets each
+        // type's references use -- the census measures distance from the end, and from
+        // the end these types look entirely unlocated. At offset 9: 0x0A names an
+        // object in 97% of its bodies, 0x0C in 96%, 0x0D in 95%.
         internal const int Type0CParentOffset = 9;
         internal const int Type11EntryHeaderBytes = 48;
         internal const int Type11EntryElementCountOffset = 44;
@@ -5952,7 +5959,7 @@ namespace AnimeStudio.Endfield
         // kept per bank so the relation can be resolved in the scope its endpoints
         // actually live in.
         public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
-        public Dictionary<uint, uint> Type0CParents { get; } = new();
+        public Dictionary<uint, (byte Type, uint Parent)> Type0CParents { get; } = new();
         // Numeric types 0x08 and 0x12's bodies, kept so the constants in the shared
         // framer can be scored against their alternatives rather than asserted. All
         // 412 of them together are about 32 KB.
@@ -6184,6 +6191,8 @@ namespace AnimeStudio.Endfield
         public uint ParentsWithSeveralChildren { get; set; }
         public Dictionary<string, uint> Depths { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ChildrenPerParent { get; } = new(StringComparer.Ordinal);
+        // Which type names which. The chain is 0x0A -> 0x0D -> 0x0C -> 0x0C.
+        public Dictionary<string, uint> EdgeTypes { get; } = new(StringComparer.Ordinal);
     }
 
     // The parent relation numeric types 0x08 and 0x12 declare, measured per bank.
