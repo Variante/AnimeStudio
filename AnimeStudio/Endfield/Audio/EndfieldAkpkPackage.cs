@@ -34,6 +34,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
+        public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircType0AElementCensus Type0AElements { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
@@ -117,6 +118,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType08TailWords();
             package.ClassifyMusicReferences();
             package.ClassifyType0AHeadPredictions();
+            package.ClassifySharedFrameConstants();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -546,6 +548,166 @@ namespace AnimeStudio.Endfield
                     }
                 }
             }
+        }
+
+
+        /// <summary>
+        /// Score each constant in the shared framer against every rival value.
+        /// </summary>
+        /// <remarks>
+        /// A constant that merely lets the bodies close is not established, and three
+        /// of these four are not: several entry widths close every body that carries
+        /// an entry run, three element widths close every body that carries a middle
+        /// run, and every trailer length "closes" because a remainder that does not
+        /// match simply routes the body to the tail block. What separates them is the
+        /// zero trailer -- landing exactly on five bytes that are all zero.
+        ///
+        /// Two things make this a fair test rather than a flattering one.
+        ///
+        /// Each constant is scored only over the bodies that **exercise** it: the
+        /// element width over bodies whose middle run is nonempty, the entry width
+        /// over bodies whose entry run is nonempty. Scoring a width over bodies that
+        /// declare a count of zero buries the margin under hundreds of bodies to which
+        /// every candidate value is identical -- the same dilution that made a
+        /// flat-tile corpus look like evidence for the terrain codec.
+        ///
+        /// And the per-candidate scores are published rather than reduced here, so the
+        /// corpus gate can sum them across packages before comparing. A per-package
+        /// maximum of the best rival is not the corpus-wide best rival.
+        /// </remarks>
+        private void ClassifySharedFrameConstants()
+        {
+            var bodies = new List<byte[]>();
+            foreach (var structure in BnkStructures)
+            {
+                bodies.AddRange(structure.SharedBodies);
+            }
+            SharedConstants.Bodies = checked((uint)bodies.Count);
+            foreach (var (name, chosen, first, last) in SharedFrameConstants)
+            {
+                HircBump(SharedConstants.Chosen, name, checked((uint)chosen));
+                var exercising = new List<byte[]>();
+                foreach (var body in bodies)
+                {
+                    if (ExercisesSharedConstant(body, name))
+                    {
+                        exercising.Add(body);
+                    }
+                }
+                HircBump(SharedConstants.BodiesExercising, name, checked((uint)exercising.Count));
+                for (var candidate = first; candidate <= last; candidate++)
+                {
+                    var zeroTrailer = 0U;
+                    var closes = 0U;
+                    foreach (var body in exercising)
+                    {
+                        var outcome = ProbeSharedFrame(
+                            body,
+                            name == "middleBlockBytes" ? candidate : SharedMiddleBlockBytes,
+                            name == "middleRunElementBytes" ? candidate : SharedMiddleRunElementBytes,
+                            name == "entryBytes" ? candidate : Type08EntryBytes,
+                            name == "trailerBytes" ? candidate : Type08TrailerBytes);
+                        if (outcome != SharedFrameProbe.NoClose)
+                        {
+                            closes = checked(closes + 1);
+                        }
+                        if (outcome == SharedFrameProbe.ClosesOnZeroTrailer)
+                        {
+                            zeroTrailer = checked(zeroTrailer + 1);
+                        }
+                    }
+                    HircBump(SharedConstants.ZeroTrailerByCandidate, $"{name}_{candidate}", zeroTrailer);
+                    HircBump(SharedConstants.ClosesByCandidate, $"{name}_{candidate}", closes);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether a body's own counts make a constant matter to how it frames.
+        /// </summary>
+        /// <remarks>
+        /// A body that declares a middle run of zero frames identically under every
+        /// element width, so counting it towards a width's score measures nothing but
+        /// how many such bodies the corpus holds.
+        /// </remarks>
+        private static bool ExercisesSharedConstant(ReadOnlySpan<byte> body, string name)
+        {
+            if (name is "middleBlockBytes" or "trailerBytes")
+            {
+                return ProbeSharedFrame(
+                    body,
+                    SharedMiddleBlockBytes,
+                    SharedMiddleRunElementBytes,
+                    Type08EntryBytes,
+                    Type08TrailerBytes) != SharedFrameProbe.NoClose;
+            }
+            if (!TryReadSharedCounts(body, out var middleRun, out var entryCount))
+            {
+                return false;
+            }
+            return name == "middleRunElementBytes" ? middleRun > 0 : entryCount > 0;
+        }
+
+        /// <summary>
+        /// Read the two counts the shared body declares, under the chosen constants.
+        /// </summary>
+        private static bool TryReadSharedCounts(
+            ReadOnlySpan<byte> body,
+            out uint middleRun,
+            out byte entryCount)
+        {
+            middleRun = 0;
+            entryCount = 0;
+            if (body.Length < 5)
+            {
+                return false;
+            }
+            var cursor = 4;
+            var propertyCount = body[cursor];
+            cursor = checked(cursor + 1);
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return false;
+            }
+            cursor = checked(cursor + propertyCount * 5);
+            if (body.Length - cursor < 2)
+            {
+                return false;
+            }
+            var secondWidth = body[cursor + 1] switch
+            {
+                Type08SecondListShortKey => Type08SecondListShortBytes,
+                Type08SecondListLongKey => Type08SecondListLongBytes,
+                SharedSecondListKeyA => SharedSecondListKeyABytes,
+                _ => -1,
+            };
+            if (secondWidth < 0)
+            {
+                return false;
+            }
+            cursor = checked(cursor + 2 + secondWidth + SharedMiddleBlockBytes);
+            if (body.Length - cursor < 4)
+            {
+                return false;
+            }
+            middleRun = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
+            cursor = checked(cursor + 4);
+            if (middleRun > SharedMiddleRunMaximum)
+            {
+                return false;
+            }
+            var middleSpan = checked((long)middleRun * SharedMiddleRunElementBytes);
+            if (middleSpan > body.Length - cursor)
+            {
+                return false;
+            }
+            cursor = checked(cursor + (int)middleSpan);
+            if (cursor >= body.Length)
+            {
+                return false;
+            }
+            entryCount = body[cursor];
+            return true;
         }
 
 
@@ -1136,6 +1298,10 @@ namespace AnimeStudio.Endfield
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
+                    if (objectType is 8 or 18)
+                    {
+                        structure.SharedBodies.Add(bodySpan.ToArray());
+                    }
                     RecordHircBodyFrame(census, frame, bodySpan, bankId, ordinal, objectId);
                     if (frame.Status == "exact" && frame.References is { Count: > 0 })
                     {
@@ -3138,9 +3304,15 @@ namespace AnimeStudio.Endfield
                 $"middleBlock_{middle[0]:X2}_{BinaryPrimitives.ReadUInt32LittleEndian(middle.Slice(1, 4))}",
                 1);
             // A 32-bit count, then that many eighteen-byte elements. It reads as a
-            // constant zero in 396 of the 412 bodies of both types, which is why it was
-            // one; the sixteen that declare 1, 2, 3 or 7 are what show it is a count,
-            // and the width was solved for by asking which one lets each of them close.
+            // constant zero in almost every body of both types, which is why it was
+            // taken for one; the fourteen that declare 1, 2, 3 or 7 are what show it is
+            // a count.
+            //
+            // The width was NOT settled by asking which value lets those fourteen
+            // close -- widths 5 and 11 close all fourteen as well. It is settled by
+            // which value lands them on the five zero bytes: eighteen puts ten of the
+            // fourteen there and every rival width puts none. ClassifySharedFrameConstants
+            // re-measures that margin, and the corpus gate fails if a rival ever ties.
             if (!HircTake(body, ref cursor, 4, out failure, "middleRunCount"))
             {
                 return failure;
@@ -3191,6 +3363,114 @@ namespace AnimeStudio.Endfield
             cursor = body.Length;
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
+
+        // How a body ends under a candidate set of shared-frame constants.
+        internal enum SharedFrameProbe
+        {
+            NoClose = 0,
+            ClosesOnTailBlock = 1,
+            ClosesOnZeroTrailer = 2,
+        }
+
+        /// <summary>
+        /// Walk the shared body with the constants supplied rather than the chosen ones.
+        /// </summary>
+        /// <remarks>
+        /// This exists to score the chosen constants against their alternatives. It
+        /// deliberately stops at the same places <see cref="FrameSharedBody"/> does and
+        /// reports *how* the body ended, because that turns out to be the whole point:
+        /// three of the four constants are not picked out by whether a body closes --
+        /// several rival values close every body too -- but by whether it lands on the
+        /// five zero bytes. A rival that closes by routing every body to the tail block
+        /// has explained nothing.
+        /// </remarks>
+        internal static SharedFrameProbe ProbeSharedFrame(
+            ReadOnlySpan<byte> body,
+            int middleBlockBytes,
+            int elementBytes,
+            int entryBytes,
+            int trailerBytes)
+        {
+            if (body.Length < 5)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            var cursor = 4;
+            var propertyCount = body[cursor];
+            cursor = checked(cursor + 1);
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            cursor = checked(cursor + propertyCount * 5);
+            if (body.Length - cursor < 2)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            var secondWidth = body[cursor + 1] switch
+            {
+                Type08SecondListShortKey => Type08SecondListShortBytes,
+                Type08SecondListLongKey => Type08SecondListLongBytes,
+                SharedSecondListKeyA => SharedSecondListKeyABytes,
+                _ => -1,
+            };
+            if (secondWidth < 0)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            cursor = checked(cursor + 2 + secondWidth);
+            if (body.Length - cursor < middleBlockBytes + 4)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            cursor = checked(cursor + middleBlockBytes);
+            var middleRun = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
+            cursor = checked(cursor + 4);
+            if (middleRun > SharedMiddleRunMaximum)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            var middleSpan = checked((long)middleRun * elementBytes);
+            if (middleSpan > body.Length - cursor)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            cursor = checked(cursor + (int)middleSpan);
+            if (cursor >= body.Length)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            var entryCount = body[cursor];
+            cursor = checked(cursor + 1);
+            var span = entryCount == 0 ? 0 : checked(entryCount * entryBytes + 1);
+            if (span > body.Length - cursor)
+            {
+                return SharedFrameProbe.NoClose;
+            }
+            cursor = checked(cursor + span);
+            if (body.Length - cursor != trailerBytes)
+            {
+                return SharedFrameProbe.ClosesOnTailBlock;
+            }
+            for (var i = cursor; i < body.Length; i++)
+            {
+                if (body[i] != 0)
+                {
+                    return SharedFrameProbe.NoClose;
+                }
+            }
+            return SharedFrameProbe.ClosesOnZeroTrailer;
+        }
+
+        // The counts the probe varies, and how far. Wide enough that a value winning
+        // inside the range is not winning because the range was drawn around it.
+        private static readonly (string Name, int Chosen, int First, int Last)[] SharedFrameConstants =
+        {
+            ("middleBlockBytes", SharedMiddleBlockBytes, 1, 16),
+            ("middleRunElementBytes", SharedMiddleRunElementBytes, 1, 32),
+            ("entryBytes", Type08EntryBytes, 1, 16),
+            ("trailerBytes", Type08TrailerBytes, 0, 12),
+        };
 
         // The record the fenced tails end with: two 32-bit floats and a 32-bit code.
         internal const int Type08TailRecordBytes = 12;
@@ -4368,6 +4648,10 @@ namespace AnimeStudio.Endfield
         // cannot be read from a known offset; every word is offered instead and the
         // sparseness of the id space decides which are real.
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
+        // Numeric types 0x08 and 0x12's bodies, kept so the constants in the shared
+        // framer can be scored against their alternatives rather than asserted. All
+        // 412 of them together are about 32 KB.
+        public List<byte[]> SharedBodies { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
@@ -4562,6 +4846,22 @@ namespace AnimeStudio.Endfield
         public uint LeadingByteNotZero { get; set; }
         public uint PadNotZero { get; set; }
         public Dictionary<string, uint> ValueCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Whether each constant in the shared framer beats every rival value, and on
+    // what test. Closure is not the test -- most of these constants have rivals that
+    // close every body -- so the zero trailer is scored separately.
+    public sealed class EndfieldHircSharedConstantCensus
+    {
+        public uint Bodies { get; set; }
+        public Dictionary<string, uint> Chosen { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> BodiesExercising { get; } = new(StringComparer.Ordinal);
+        // Per "{constant}_{candidate}": how many exercising bodies close under that
+        // value, and how many of those land on the zero trailer. Published per
+        // candidate rather than reduced to a winner here, because the winner can only
+        // be decided after the packages are summed.
+        public Dictionary<string, uint> ZeroTrailerByCandidate { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ClosesByCandidate { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether numeric type 0x0A's head-length rule puts the reference where it says.
