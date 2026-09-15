@@ -246,6 +246,18 @@ namespace AnimeStudio.CLI
                                 ["anchorSelectsOneTrailer"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorSelectsOneTrailer)),
                                 ["anchorLeavesWholeRecords"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorLeavesWholeRecords)),
                             },
+                            ["hircType0CHierarchy"] = new Dictionary<string, object?>
+                            {
+                                ["banks"] = package.Type0CHierarchy.Banks,
+                                ["objects"] = package.Type0CHierarchy.Objects,
+                                ["objectsNamingAParent"] = package.Type0CHierarchy.ObjectsNamingAParent,
+                                ["rootsWithNoParent"] = package.Type0CHierarchy.RootsWithNoParent,
+                                ["parentsOutsideTheBank"] = package.Type0CHierarchy.ParentsOutsideTheBank,
+                                ["cycles"] = package.Type0CHierarchy.Cycles,
+                                ["parentsWithSeveralChildren"] = package.Type0CHierarchy.ParentsWithSeveralChildren,
+                                ["depths"] = package.Type0CHierarchy.Depths.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["childrenPerParent"] = package.Type0CHierarchy.ChildrenPerParent.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircMusicMutuality"] = new Dictionary<string, object?>
                             {
                                 ["sameBankEdges"] = package.MusicMutuality.SameBankEdges,

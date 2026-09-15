@@ -38,6 +38,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
+        public EndfieldHircType0CHierarchyCensus Type0CHierarchy { get; } = new();
         public EndfieldHircType0AElementCensus Type0AElements { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
@@ -125,6 +126,7 @@ namespace AnimeStudio.Endfield
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
             package.ClassifyMusicMutuality();
+            package.ClassifyType0CHierarchy();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -971,6 +973,100 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Walk numeric type 0x0C's parent relation, the format's fourth located one.
+        /// </summary>
+        /// <remarks>
+        /// The same shape as the relation numeric types 0x08 and 0x12 declare, in an
+        /// unrelated family of types and at a different offset: a forest, no cycles,
+        /// depth running to 7, and many children naming one parent rather than one
+        /// referrer per target. That the pattern recurs is the finding; what it means
+        /// is still not claimed.
+        ///
+        /// Found by asking which **front** offsets this type's references use. The
+        /// census measures distance from the end, and from the end 0x0C looks entirely
+        /// unlocated -- 3,757 distinct distances for 9,634 references. From the front
+        /// it is 3,193 distinct offsets, equally scattered, **except** that one offset
+        /// carries 716 of them.
+        /// </remarks>
+        private void ClassifyType0CHierarchy()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                var objects = structure.Type0CParents;
+                if (objects.Count == 0)
+                {
+                    continue;
+                }
+                Type0CHierarchy.Banks = checked(Type0CHierarchy.Banks + 1);
+                var children = new Dictionary<uint, uint>();
+                foreach (var pair in objects)
+                {
+                    if (pair.Value != 0 && objects.ContainsKey(pair.Value))
+                    {
+                        children.TryGetValue(pair.Value, out var seen);
+                        children[pair.Value] = checked(seen + 1);
+                    }
+                }
+                foreach (var pair in objects)
+                {
+                    Type0CHierarchy.Objects = checked(Type0CHierarchy.Objects + 1);
+                    if (pair.Value != 0 && objects.ContainsKey(pair.Value))
+                    {
+                        Type0CHierarchy.ObjectsNamingAParent =
+                            checked(Type0CHierarchy.ObjectsNamingAParent + 1);
+                    }
+                    else if (pair.Value == 0)
+                    {
+                        Type0CHierarchy.RootsWithNoParent =
+                            checked(Type0CHierarchy.RootsWithNoParent + 1);
+                    }
+                    else
+                    {
+                        Type0CHierarchy.ParentsOutsideTheBank =
+                            checked(Type0CHierarchy.ParentsOutsideTheBank + 1);
+                    }
+                    var seenIds = new HashSet<uint>();
+                    var cursor = pair.Key;
+                    var depth = 0;
+                    while (true)
+                    {
+                        if (!objects.TryGetValue(cursor, out var next)
+                            || next == 0
+                            || !objects.ContainsKey(next))
+                        {
+                            break;
+                        }
+                        if (!seenIds.Add(next))
+                        {
+                            Type0CHierarchy.Cycles = checked(Type0CHierarchy.Cycles + 1);
+                            depth = -1;
+                            break;
+                        }
+                        cursor = next;
+                        depth = checked(depth + 1);
+                    }
+                    if (depth >= 0)
+                    {
+                        HircBump(Type0CHierarchy.Depths, $"depth_{Math.Min(depth, 12)}", 1);
+                    }
+                }
+                foreach (var pair in children)
+                {
+                    HircBump(
+                        Type0CHierarchy.ChildrenPerParent,
+                        $"children_{Math.Min(pair.Value, 16)}",
+                        1);
+                    if (pair.Value > 1)
+                    {
+                        Type0CHierarchy.ParentsWithSeveralChildren =
+                            checked(Type0CHierarchy.ParentsWithSeveralChildren + 1);
+                    }
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1734,6 +1830,17 @@ namespace AnimeStudio.Endfield
                         CollectType0AHeadPrediction(
                             structure.Type0AHeadPredictions,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
+                    }
+                    if (objectType == 12)
+                    {
+                        // Numeric type 0x0C names another 0x0C at a fixed offset of 9.
+                        // Kept per bank: object ids repeat across banks, so a relation
+                        // resolved corpus-wide is a different relation.
+                        var parentBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                        structure.Type0CParents[objectId] = parentBody.Length >= Type0CParentOffset + 4
+                            ? BinaryPrimitives.ReadUInt32LittleEndian(
+                                parentBody.Slice(Type0CParentOffset, 4))
+                            : 0u;
                     }
                     if (objectType is 10 or 12 or 13)
                     {
@@ -2886,6 +2993,11 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x0B's entry area: a 32-bit entry count, then that many entries.
         // Each entry opens with 48 header bytes whose word at 44 counts the elements
         // that follow.
+        // Numeric type 0x0C's parent reference. Found by asking which front offsets
+        // its references use: 716 of its 742 bodies name another 0x0C object here, and
+        // every other reference the type carries is scattered across some 3,193
+        // distinct offsets.
+        internal const int Type0CParentOffset = 9;
         internal const int Type11EntryHeaderBytes = 48;
         internal const int Type11EntryElementCountOffset = 44;
         // An element ends with a trailer whose FIRST byte selects its own length: zero
@@ -5840,6 +5952,7 @@ namespace AnimeStudio.Endfield
         // kept per bank so the relation can be resolved in the scope its endpoints
         // actually live in.
         public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
+        public Dictionary<uint, uint> Type0CParents { get; } = new();
         // Numeric types 0x08 and 0x12's bodies, kept so the constants in the shared
         // framer can be scored against their alternatives rather than asserted. All
         // 412 of them together are about 32 KB.
@@ -6057,6 +6170,20 @@ namespace AnimeStudio.Endfield
         public uint EdgesBetweenScannedObjects { get; set; }
         public uint MutualEdges { get; set; }
         public Dictionary<string, uint> MutualEdgeKinds { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Numeric type 0x0C's parent relation, read at a fixed front offset.
+    public sealed class EndfieldHircType0CHierarchyCensus
+    {
+        public uint Banks { get; set; }
+        public uint Objects { get; set; }
+        public uint ObjectsNamingAParent { get; set; }
+        public uint RootsWithNoParent { get; set; }
+        public uint ParentsOutsideTheBank { get; set; }
+        public uint Cycles { get; set; }
+        public uint ParentsWithSeveralChildren { get; set; }
+        public Dictionary<string, uint> Depths { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ChildrenPerParent { get; } = new(StringComparer.Ordinal);
     }
 
     // The parent relation numeric types 0x08 and 0x12 declare, measured per bank.
