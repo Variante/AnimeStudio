@@ -206,7 +206,9 @@ namespace AnimeStudio.CLI
                             ["hircType0AHead"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.Type0AHead.Bodies,
+                                ["bodiesWhereTheRuleApplies"] = package.Type0AHead.BodiesWhereTheRuleApplies,
                                 ["namesTheSourceType"] = package.Type0AHead.NamesTheSourceType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["namesTheSourceTypeWhereTheRuleApplies"] = package.Type0AHead.NamesTheSourceTypeWhereTheRuleApplies.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircMusicReferences"] = new Dictionary<string, object?>
                             {

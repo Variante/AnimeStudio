@@ -401,9 +401,14 @@ namespace AnimeStudio.Endfield
             }
             foreach (var structure in BnkStructures)
             {
-                foreach (var (predicted, fixedWord, plus, minus) in structure.Type0AHeadPredictions)
+                foreach (var (predicted, fixedWord, plus, minus, discriminant) in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
+                    if (discriminant)
+                    {
+                        Type0AHead.BodiesWhereTheRuleApplies =
+                            checked(Type0AHead.BodiesWhereTheRuleApplies + 1);
+                    }
                     void Score(string label, uint word)
                     {
                         if (everything.Contains(word)
@@ -411,6 +416,10 @@ namespace AnimeStudio.Endfield
                             && targetType == 11)
                         {
                             HircBump(Type0AHead.NamesTheSourceType, label, 1);
+                            if (discriminant)
+                            {
+                                HircBump(Type0AHead.NamesTheSourceTypeWhereTheRuleApplies, label, 1);
+                            }
                         }
                     }
                     Score("predicted", predicted);
@@ -2633,6 +2642,9 @@ namespace AnimeStudio.Endfield
         internal const int Type0AHeadCountOffset = 14;
         internal const int Type0AHeadFixedBytes = 36;
         internal const int Type0AHeadElementBytes = 5;
+        // Byte 17 says whether the rule applies. Where it is zero the rule places the
+        // reference in 3,744 of 3,745 bodies that have one; where it is not, in 6 of 144.
+        internal const int Type0AHeadDiscriminantOffset = 17;
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2643,7 +2655,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2663,7 +2675,8 @@ namespace AnimeStudio.Endfield
                 Read(body, at),
                 Read(body, Type0AHeadFixedBytes),
                 Read(body, at + 4),
-                Read(body, at - 4)));
+                Read(body, at - 4),
+                body.Length > Type0AHeadDiscriminantOffset && body[Type0AHeadDiscriminantOffset] == 0));
         }
 
         /// <summary>
@@ -4099,7 +4112,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4288,7 +4301,9 @@ namespace AnimeStudio.Endfield
     public sealed class EndfieldHircType0AHeadCensus
     {
         public uint Bodies { get; set; }
+        public uint BodiesWhereTheRuleApplies { get; set; }
         public Dictionary<string, uint> NamesTheSourceType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> NamesTheSourceTypeWhereTheRuleApplies { get; } = new(StringComparer.Ordinal);
     }
 
     // Which words in a music body name objects the package ships, and what they name.
