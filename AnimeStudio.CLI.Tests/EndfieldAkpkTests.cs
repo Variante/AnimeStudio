@@ -21,6 +21,7 @@ internal static class EndfieldAkpkTests
         TestType5BodyFramesFailClosed();
         TestType14BodyFramesBothBranches();
         TestType14BodyFramesFailClosed();
+        TestMusicHeadReferencesFollowTheDiscriminantByte();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -568,6 +569,90 @@ internal static class EndfieldAkpkTests
             body = body[..^truncateBy];
         }
         return body;
+    }
+
+
+    private static byte[] BuildMusicBody(byte discriminant, uint target, int length = 40)
+    {
+        var body = new byte[length];
+        body[2] = discriminant;
+        var offset = discriminant == 0 ? 9 : 5;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset, 4), target);
+        return body;
+    }
+
+    private static void TestMusicHeadReferencesFollowTheDiscriminantByte()
+    {
+        // A bank holding one type 0x02 object plus music bodies that name it. The
+        // offset must come from byte 2, so a body whose word sits at the other offset
+        // must not resolve by accident.
+        const uint target = 0x7301U;
+        var targetBody = BuildType2Body();
+
+        var atNine = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0A, 0x7302U, BuildMusicBody(0, target))))).BnkStructures[0];
+        if (atNine.MusicHeadReferences.Bodies != 1
+            || atNine.MusicHeadReferences.Resolved != 1
+            || atNine.MusicHeadReferences.OffsetCounts["offset_9"] != 1
+            || atNine.MusicHeadReferences.DiscriminantCounts["byte2_00"] != 1
+            || atNine.MusicHeadReferences.BodiesByType["type0A"] != 1)
+        {
+            throw new InvalidOperationException("music head reference at offset 9 did not resolve");
+        }
+
+        var atFive = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0D, 0x7303U, BuildMusicBody(1, target))))).BnkStructures[0];
+        if (atFive.MusicHeadReferences.Resolved != 1
+            || atFive.MusicHeadReferences.OffsetCounts["offset_5"] != 1
+            || atFive.MusicHeadReferences.BodiesByType["type0D"] != 1)
+        {
+            throw new InvalidOperationException("music head reference at offset 5 did not resolve");
+        }
+
+        // Byte 2 says offset 9, but the word is written at 5. Reading the selected
+        // offset must leave this unresolved rather than finding the value elsewhere.
+        var misplaced = BuildMusicBody(1, target);
+        misplaced[2] = 0;
+        var wrongPlace = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0A, 0x7304U, misplaced)))).BnkStructures[0];
+        if (wrongPlace.MusicHeadReferences.Resolved != 0
+            || wrongPlace.MusicHeadReferences.Zero != 1)
+        {
+            throw new InvalidOperationException("music head reference ignored its discriminant byte");
+        }
+
+        // An unobserved discriminant has no branch, so it must be counted as unknown
+        // rather than assigned one.
+        var unknown = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0A, 0x7305U, BuildMusicBody(7, target))))).BnkStructures[0];
+        if (unknown.MusicHeadReferences.UnknownDiscriminant != 1
+            || unknown.MusicHeadReferences.Resolved != 0)
+        {
+            throw new InvalidOperationException("music head accepted an unobserved discriminant");
+        }
+
+        // A word naming nothing in the bank is unresolved, not silently dropped.
+        var stranger = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0A, 0x7306U, BuildMusicBody(0, 0xDEADBEEF))))).BnkStructures[0];
+        if (stranger.MusicHeadReferences.Unresolved != 1
+            || stranger.MusicHeadReferences.Resolved != 0)
+        {
+            throw new InvalidOperationException("music head lost an unresolved reference");
+        }
+
+        // A body too short to hold the selected word is counted, not skipped.
+        var tiny = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0A, 0x7307U, new byte[5])))).BnkStructures[0];
+        if (tiny.MusicHeadReferences.TooShort != 1 || tiny.MusicHeadReferences.Bodies != 1)
+        {
+            throw new InvalidOperationException("music head dropped a short body");
+        }
     }
 
     private static EndfieldBnkStructure FrameType14Fixture(byte[] body)

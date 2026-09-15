@@ -620,6 +620,58 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                // Numeric types 0x0A and 0x0D carry one 32-bit word near the head that
+                // names an object in the same bank. Byte 2 selects where it sits: zero
+                // puts it at offset 9, nonzero at offset 5. The offset is computed from
+                // that byte, never searched for, and an unobserved discriminant is
+                // counted as unknown rather than guessed either way.
+                if (objectType is 10 or 13)
+                {
+                    var head = structure.MusicHeadReferences;
+                    head.Bodies = checked(head.Bodies + 1);
+                    HircBump(head.BodiesByType, $"type{objectType:X2}", 1);
+                    var musicBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    if (musicBody.Length < 3)
+                    {
+                        head.TooShort = checked(head.TooShort + 1);
+                    }
+                    else
+                    {
+                        var discriminant = musicBody[2];
+                        HircBump(head.DiscriminantCounts, $"byte2_{discriminant:X2}", 1);
+                        if (discriminant > 2)
+                        {
+                            head.UnknownDiscriminant = checked(head.UnknownDiscriminant + 1);
+                        }
+                        else
+                        {
+                            var offset = discriminant == 0 ? 9 : 5;
+                            if (musicBody.Length < offset + 4)
+                            {
+                                head.TooShort = checked(head.TooShort + 1);
+                            }
+                            else
+                            {
+                                HircBump(head.OffsetCounts, $"offset_{offset}", 1);
+                                var target = BinaryPrimitives.ReadUInt32LittleEndian(
+                                    musicBody.Slice(offset, 4));
+                                if (target == 0)
+                                {
+                                    head.Zero = checked(head.Zero + 1);
+                                }
+                                else if (bankObjectTypes.ContainsKey(target))
+                                {
+                                    head.Resolved = checked(head.Resolved + 1);
+                                    bankEdges[objectId] = new List<uint> { target };
+                                }
+                                else
+                                {
+                                    head.Unresolved = checked(head.Unresolved + 1);
+                                }
+                            }
+                        }
+                    }
+                }
                 // Type 0x04 is framed by its own candidate-vector reader, so its edges
                 // have to be collected here rather than from the shared body result.
                 if (objectType == 4 && objectSize >= 5)
@@ -2407,6 +2459,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
+        public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2458,6 +2511,24 @@ namespace AnimeStudio.Endfield
     // Where a shipped identifier reaches. Counters only: the walk direction is the
     // physical one, which object's body holds the value, and nothing is named here
     // except the entry point the caller supplied a hash for.
+    // Numeric types 0x0A and 0x0D are not framed: their bodies still contain a
+    // variable-length region nobody has isolated. One thing in them *is* determined,
+    // and only that is recorded here -- a single 32-bit word near the head whose
+    // offset is selected by body byte 2. This is identity resolution, not framing,
+    // and it says nothing about what the relation means.
+    public sealed class EndfieldHircMusicHeadReferenceCensus
+    {
+        public uint Bodies { get; set; }
+        public uint Resolved { get; set; }
+        public uint Unresolved { get; set; }
+        public uint Zero { get; set; }
+        public uint UnknownDiscriminant { get; set; }
+        public uint TooShort { get; set; }
+        public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> OffsetCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> DiscriminantCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircNamedReachCensus
     {
         public uint MatchedObjects { get; set; }

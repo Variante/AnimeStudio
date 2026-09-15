@@ -183,6 +183,7 @@ namespace AnimeStudio.CLI
                             ["hircNamedReachCensus"] = BuildNamedReachSummary(package.BnkStructures),
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
+                            ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -237,6 +238,7 @@ namespace AnimeStudio.CLI
                                 ["hircReferenceCensus"] = BuildReferenceCensusSummary(new[] { x }),
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
+                                ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -629,6 +631,54 @@ namespace AnimeStudio.CLI
                         group => group.Key,
                         group => group.Sum(pair => (long)pair.Value),
                         StringComparer.Ordinal),
+            };
+        }
+
+
+        private static Dictionary<string, object?> BuildMusicHeadSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var bodies = 0U; var resolved = 0U; var unresolved = 0U; var zero = 0U;
+            var unknown = 0U; var tooShort = 0U;
+            var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var offsets = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var discriminants = new Dictionary<string, uint>(StringComparer.Ordinal);
+            foreach (var structure in structures)
+            {
+                var head = structure.MusicHeadReferences;
+                bodies = checked(bodies + head.Bodies);
+                resolved = checked(resolved + head.Resolved);
+                unresolved = checked(unresolved + head.Unresolved);
+                zero = checked(zero + head.Zero);
+                unknown = checked(unknown + head.UnknownDiscriminant);
+                tooShort = checked(tooShort + head.TooShort);
+                foreach (var pair in head.BodiesByType)
+                {
+                    byType.TryGetValue(pair.Key, out var existing);
+                    byType[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in head.OffsetCounts)
+                {
+                    offsets.TryGetValue(pair.Key, out var existing);
+                    offsets[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in head.DiscriminantCounts)
+                {
+                    discriminants.TryGetValue(pair.Key, out var existing);
+                    discriminants[pair.Key] = checked(existing + pair.Value);
+                }
+            }
+            return new Dictionary<string, object?>
+            {
+                ["bodies"] = bodies,
+                ["resolved"] = resolved,
+                ["unresolved"] = unresolved,
+                ["zero"] = zero,
+                ["unknownDiscriminant"] = unknown,
+                ["tooShort"] = tooShort,
+                ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["offsetCounts"] = offsets.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["discriminantCounts"] = discriminants.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
         }
 
