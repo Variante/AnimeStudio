@@ -204,6 +204,21 @@ namespace AnimeStudio.CLI
                                 ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
+                            ["hircType11EntryHeaders"] = new Dictionary<string, object?>
+                            {
+                                ["entries"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.Entries),
+                                ["rangeTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeTested),
+                                ["rangeIsSymmetric"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeIsSymmetric),
+                                ["rangeIsOrdered"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeIsOrdered),
+                                ["rangeControlTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlTested),
+                                ["rangeControlIsSymmetric"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlIsSymmetric),
+                                ["rangeControlIsOrdered"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlIsOrdered),
+                                ["fractionsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionsTested),
+                                ["fractionsAreSmall"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionsAreSmall),
+                                ["fractionControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsTested),
+                                ["fractionControlsAreSmall"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsAreSmall),
+                                ["elementCountValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.ElementCountValues)),
+                            },
                             ["hircType11Elements"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Bodies),

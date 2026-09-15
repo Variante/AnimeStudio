@@ -1301,7 +1301,7 @@ namespace AnimeStudio.Endfield
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
                         8 => FrameSharedBody(bodySpan, structure.Version),
-                        11 => FrameType11Body(bodySpan, structure.Version),
+                        11 => FrameType11Body(bodySpan, structure.Version, structure.Type11EntryHeaders),
                         18 => FrameSharedBody(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
                         22 => FrameType22Body(bodySpan, structure.Version),
@@ -4233,6 +4233,23 @@ namespace AnimeStudio.Endfield
         internal static EndfieldHircBodyFrameResult FrameType11Body(
             ReadOnlySpan<byte> body,
             uint? bankVersion)
+            => FrameType11Body(body, bankVersion, null);
+
+        // Offsets in the 48-byte entry header whose reading is established enough to
+        // census. Everything else in it is still opaque and is reported as such.
+        internal const int Type11EntryRangeLowOffset = 16;
+        internal const int Type11EntryRangeHighOffset = 24;
+        internal const int Type11EntryFractionOffset = 28;
+        internal const int Type11EntrySecondFractionOffset = 36;
+        // The neighbouring words, scored the same way so the readings above are not
+        // credited for something every word in the header would pass.
+        internal const int Type11EntryRangeControlOffset = 12;
+        internal const int Type11EntryFractionControlOffset = 40;
+
+        internal static EndfieldHircBodyFrameResult FrameType11Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion,
+            EndfieldHircType11EntryHeaderCensus? structureEntryHeaders)
         {
             if (bankVersion != 150)
             {
@@ -4240,6 +4257,7 @@ namespace AnimeStudio.Endfield
             }
             var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
             var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var headers = new List<byte[]>();
             var cursor = 0;
             if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
             {
@@ -4301,6 +4319,7 @@ namespace AnimeStudio.Endfield
                         "failed", "range_elements",
                         cursor + Type11EntryElementCountOffset, (int)Type11MaximumElements, (int)elements);
                 }
+                headers.Add(body.Slice(cursor, Type11EntryHeaderBytes).ToArray());
                 cursor = checked(cursor + Type11EntryHeaderBytes);
                 HircBump(groups, "entryElements", elements);
                 for (var element = 0U; element < elements; element++)
@@ -4395,7 +4414,125 @@ namespace AnimeStudio.Endfield
                     cursor, 0, end - cursor);
             }
             cursor = body.Length;
+            // Censused only now. An entry header from a body that later fails says
+            // nothing, because the walk that reached it may have been desynchronised.
+            foreach (var header in headers)
+            {
+                CensusType11EntryHeader(structureEntryHeaders, header);
+            }
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
+        /// <summary>
+        /// Census the fields of numeric type 0x0B's 48-byte entry header.
+        /// </summary>
+        /// <remarks>
+        /// Four readings, each scored against a neighbouring word so that none is
+        /// credited for a property every word in the header would satisfy.
+        ///
+        /// The words at 16 and 24 are a symmetric float pair: where either is nonzero
+        /// they are exact negatives of each other in 1,218 of 1,404 entries, and the
+        /// low one is the lesser in 1,264. Values sit around plus or minus five. What
+        /// they bound is not claimed.
+        ///
+        /// The words at 28 and 36 are fixed-point fractions of 2^32, the same encoding
+        /// numeric type 0x0A carries: they read as 0, 1/3, 2/3, 1/2 and 1/6 and almost
+        /// nothing else. A word read at a wrong offset does not land on small
+        /// rationals.
+        ///
+        /// The element count at 44 is censused because of what it shows about this
+        /// reader rather than about the format: it is 1 in **every** entry the frame
+        /// closes. Reading it as a count and reading it as the constant 1 produce the
+        /// same 3,715 bodies, so the corpus does not yet distinguish them, and the
+        /// gate says so instead of the code implying otherwise.
+        /// </remarks>
+        private static void CensusType11EntryHeader(
+            EndfieldHircType11EntryHeaderCensus? census,
+            ReadOnlySpan<byte> header)
+        {
+            if (census is null || header.Length < Type11EntryHeaderBytes)
+            {
+                return;
+            }
+            census.Entries = checked(census.Entries + 1);
+            var elements = BinaryPrimitives.ReadUInt32LittleEndian(
+                header.Slice(Type11EntryElementCountOffset, 4));
+            HircBump(census.ElementCountValues, $"elements_{Math.Min(elements, 8)}", 1);
+
+            static void ScoreRange(
+                ReadOnlySpan<byte> header, int lowOffset, int highOffset,
+                ref uint tested, ref uint symmetric, ref uint ordered)
+            {
+                var low = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(lowOffset, 4));
+                var high = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(highOffset, 4));
+                if (low == 0 && high == 0)
+                {
+                    // Both zero satisfies every symmetry for free; excluded so the rate
+                    // measures the entries that carry a range rather than the corpus.
+                    return;
+                }
+                tested = checked(tested + 1);
+                var lowFloat = BitConverter.Int32BitsToSingle(unchecked((int)low));
+                var highFloat = BitConverter.Int32BitsToSingle(unchecked((int)high));
+                if (float.IsFinite(lowFloat) && float.IsFinite(highFloat))
+                {
+                    if (lowFloat == -highFloat)
+                    {
+                        symmetric = checked(symmetric + 1);
+                    }
+                    if (lowFloat <= highFloat)
+                    {
+                        ordered = checked(ordered + 1);
+                    }
+                }
+            }
+
+            var tested = census.RangeTested;
+            var symmetric = census.RangeIsSymmetric;
+            var ordered = census.RangeIsOrdered;
+            ScoreRange(header, Type11EntryRangeLowOffset, Type11EntryRangeHighOffset,
+                ref tested, ref symmetric, ref ordered);
+            census.RangeTested = tested;
+            census.RangeIsSymmetric = symmetric;
+            census.RangeIsOrdered = ordered;
+
+            var controlTested = census.RangeControlTested;
+            var controlSymmetric = census.RangeControlIsSymmetric;
+            var controlOrdered = census.RangeControlIsOrdered;
+            ScoreRange(header, Type11EntryRangeControlOffset, Type11EntryRangeHighOffset,
+                ref controlTested, ref controlSymmetric, ref controlOrdered);
+            census.RangeControlTested = controlTested;
+            census.RangeControlIsSymmetric = controlSymmetric;
+            census.RangeControlIsOrdered = controlOrdered;
+
+            foreach (var (offset, isControl) in new[]
+            {
+                (Type11EntryFractionOffset, false),
+                (Type11EntrySecondFractionOffset, false),
+                (Type11EntryFractionControlOffset, true),
+            })
+            {
+                var value = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
+                if (value == 0)
+                {
+                    // Zero is a small fraction for free.
+                    continue;
+                }
+                if (isControl)
+                {
+                    census.FractionControlsTested = checked(census.FractionControlsTested + 1);
+                    if (IsSmallFraction(value))
+                    {
+                        census.FractionControlsAreSmall = checked(census.FractionControlsAreSmall + 1);
+                    }
+                    continue;
+                }
+                census.FractionsTested = checked(census.FractionsTested + 1);
+                if (IsSmallFraction(value))
+                {
+                    census.FractionsAreSmall = checked(census.FractionsAreSmall + 1);
+                }
+            }
         }
 
         private const int Type17RunElementBytes = 6;
@@ -5279,6 +5416,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType11ElementCensus Type11Elements { get; } = new();
+        public EndfieldHircType11EntryHeaderCensus Type11EntryHeaders { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType08TailCensus Type08Tail { get; } = new();
         public EndfieldHircType08TailCensus Type12Tail { get; } = new();
@@ -5510,6 +5648,25 @@ namespace AnimeStudio.Endfield
         // be decided after the packages are summed.
         public Dictionary<string, uint> ZeroTrailerByCandidate { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ClosesByCandidate { get; } = new(StringComparer.Ordinal);
+    }
+
+    // The fields of numeric type 0x0B's 48-byte entry header that read as something.
+    public sealed class EndfieldHircType11EntryHeaderCensus
+    {
+        public uint Entries { get; set; }
+        public uint RangeTested { get; set; }
+        public uint RangeIsSymmetric { get; set; }
+        public uint RangeIsOrdered { get; set; }
+        public uint RangeControlTested { get; set; }
+        public uint RangeControlIsSymmetric { get; set; }
+        public uint RangeControlIsOrdered { get; set; }
+        public uint FractionsTested { get; set; }
+        public uint FractionsAreSmall { get; set; }
+        public uint FractionControlsTested { get; set; }
+        public uint FractionControlsAreSmall { get; set; }
+        // How many elements each entry declares. Censused because it is 1 in every
+        // entry the frame closes, which is what makes the "count" reading untested.
+        public Dictionary<string, uint> ElementCountValues { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0B's entry elements: how they end, and what that leaves.
