@@ -876,7 +876,8 @@ internal static class EndfieldAkpkTests
         // five zero bytes.
         static byte[] Build(byte[] keys, byte secondKey, int secondWidth, byte entries,
                             byte secondCount = 1, uint afterSignature = 0,
-                            int trailer = 5, byte[]? signature = null)
+                            int trailer = 5, byte[]? signature = null,
+                            byte[]? trailerBytes = null)
         {
             using var stream = new MemoryStream();
             using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
@@ -897,7 +898,7 @@ internal static class EndfieldAkpkTests
             {
                 writer.Write(new byte[entries * 6 + 1]);
             }
-            writer.Write(new byte[trailer]);
+            writer.Write(trailerBytes ?? new byte[trailer]);
             writer.Flush();
             return stream.ToArray();
         }
@@ -944,10 +945,41 @@ internal static class EndfieldAkpkTests
         {
             throw new InvalidOperationException("type 0x08 framed a nonzero word after the signature");
         }
+        // A body that neither ends on the five zero bytes nor carries a whole tail
+        // block is refused under the tail block's own reason, not the trailer's: which
+        // part of the layout failed has to stay visible.
         var badTrailer = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailer: 9));
-        if (badTrailer.FailureCounts["trailer_is_not_five_bytes"] != 1)
+        if (badTrailer.FailureCounts["tail_block_too_short"] != 1)
         {
             throw new InvalidOperationException("type 0x08 framed a body with the wrong trailer");
+        }
+
+        // The tail block itself: a fifteen-byte head, a record count, one byte, that
+        // many twelve-byte records, and a zero sixteen-bit word.
+        var tailBlock = new byte[15 + 2 + 12 + 2];
+        tailBlock[1] = 1;
+        tailBlock[8] = 0x02;
+        tailBlock[14] = 0x02;
+        tailBlock[15] = 1;
+        var framedTail = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: tailBlock));
+        if (framedTail.ExactCount != 1
+            || framedTail.GroupCounts["tailBlockRecords"] != 1
+            || framedTail.SelectorCounts["tailBlockSelector_020002"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 did not frame its tail block");
+        }
+
+        // The four head bytes that are constant across both types are checked; a body
+        // that breaks one is refused rather than framed with a head that does not
+        // apply to it.
+        var brokenHead = (byte[])tailBlock.Clone();
+        brokenHead[1] = 9;
+        var refusedHead = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: brokenHead));
+        if (refusedHead.FailureCounts["tail_block_head_is_not_the_observed_shape"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 framed an unobserved tail-block head");
         }
         var badSecond = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, secondCount: 5));
         if (badSecond.FailureCounts["second_list_is_not_one_entry"] != 1)

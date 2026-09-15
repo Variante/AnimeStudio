@@ -2518,8 +2518,14 @@ namespace AnimeStudio.Endfield
 
             if (body.Length - cursor != Type08TrailerBytes)
             {
-                return HircFrameOutcome(
-                    "failed", "trailer_is_not_five_bytes", cursor, Type08TrailerBytes, body.Length - cursor);
+                // Bodies that do not end on the five zero bytes end on the shared tail
+                // block instead. Nothing is searched for: the block either starts here
+                // and finishes the body, or the body is refused.
+                if (FrameTailBlock(body, ref cursor, groups, selectors, out failure))
+                {
+                    return HircFrameExact(cursor, body.Length, groups, selectors, null);
+                }
+                return failure;
             }
             for (var i = cursor; i < body.Length; i++)
             {
@@ -2817,8 +2823,14 @@ namespace AnimeStudio.Endfield
             HircBump(groups, "entryRunElements", entryCount);
             if (body.Length - cursor != Type08TrailerBytes)
             {
-                return HircFrameOutcome(
-                    "failed", "trailer_is_not_five_bytes", cursor, Type08TrailerBytes, body.Length - cursor);
+                // Bodies that do not end on the five zero bytes end on the shared tail
+                // block instead. Nothing is searched for: the block either starts here
+                // and finishes the body, or the body is refused.
+                if (FrameTailBlock(body, ref cursor, groups, selectors, out failure))
+                {
+                    return HircFrameExact(cursor, body.Length, groups, selectors, null);
+                }
+                return failure;
             }
             for (var i = cursor; i < body.Length; i++)
             {
@@ -2829,6 +2841,91 @@ namespace AnimeStudio.Endfield
             }
             cursor = body.Length;
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
+        // The tail block numeric types 0x08 and 0x12 share. Its head is fifteen bytes:
+        // four of them are the same in every body of both types, three more are
+        // constant within each type, and two 32-bit values sit between them.
+        internal const int TailBlockHeadBytes = 15;
+        internal static ReadOnlySpan<int> TailBlockZeroOffsets => new[] { 0, 2, 7 };
+        internal const int TailBlockOneOffset = 1;
+        internal const int TailBlockFirstValueOffset = 3;
+        internal const int TailBlockSecondValueOffset = 10;
+        internal const int TailBlockRecordBytes = 12;
+
+        /// <summary>
+        /// Frame the tail block some numeric type 0x08 and 0x12 bodies carry instead of
+        /// the five zero bytes.
+        /// </summary>
+        /// <remarks>
+        /// Head, a record count, one byte, that many twelve-byte records, and a zero
+        /// sixteen-bit word. Only the four head bytes that are constant across *both*
+        /// types are checked; the three that are constant within a type are consumed
+        /// and counted as selectors instead, because a corpus where each type is
+        /// homogeneous cannot tell "this byte depends on the type" from "this byte is
+        /// whatever this type happens to carry".
+        /// </remarks>
+        private static bool FrameTailBlock(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            failure = default!;
+            if (body.Length - cursor < TailBlockHeadBytes + 2 + 2)
+            {
+                failure = HircFrameOutcome(
+                    "failed", "tail_block_too_short", cursor, TailBlockHeadBytes + 4, body.Length - cursor);
+                return false;
+            }
+            var head = body.Slice(cursor, TailBlockHeadBytes);
+            foreach (var offset in TailBlockZeroOffsets)
+            {
+                if (head[offset] != 0)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "tail_block_head_is_not_the_observed_shape", cursor + offset, 0, head[offset]);
+                    return false;
+                }
+            }
+            if (head[TailBlockOneOffset] != 1)
+            {
+                failure = HircFrameOutcome(
+                    "failed", "tail_block_head_is_not_the_observed_shape",
+                    cursor + TailBlockOneOffset, 1, head[TailBlockOneOffset]);
+                return false;
+            }
+            HircBump(selectors, $"tailBlockSelector_{head[8]:X2}{head[9]:X2}{head[14]:X2}", 1);
+            cursor = checked(cursor + TailBlockHeadBytes);
+            var records = body[cursor];
+            cursor = checked(cursor + 1);
+            if (!HircTake(body, ref cursor, 1, out failure, "tailBlockByte"))
+            {
+                return false;
+            }
+            var span = checked(records * TailBlockRecordBytes);
+            if (span > body.Length - cursor)
+            {
+                failure = HircFrameOutcome(
+                    "failed", "range_tail_block_records", cursor - 2, body.Length - cursor, span);
+                return false;
+            }
+            cursor = checked(cursor + span);
+            HircBump(groups, "tailBlockRecords", records);
+            if (body.Length - cursor != 2)
+            {
+                failure = HircFrameOutcome(
+                    "failed", "tail_block_does_not_end_the_body", cursor, 2, body.Length - cursor);
+                return false;
+            }
+            if (BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2)) != 0)
+            {
+                failure = HircFrameOutcome("failed", "tail_block_closing_word_is_not_zero", cursor, 0, 0);
+                return false;
+            }
+            cursor = body.Length;
+            return true;
         }
 
         private const int Type17RunElementBytes = 6;
