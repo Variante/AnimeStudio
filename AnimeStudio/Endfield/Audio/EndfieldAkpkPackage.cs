@@ -36,6 +36,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
+        public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
         public EndfieldHircType0AElementCensus Type0AElements { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
@@ -121,6 +122,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType0AHeadPredictions();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
+            package.ClassifyMusicMutuality();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -825,6 +827,85 @@ namespace AnimeStudio.Endfield
                     Hierarchy.ParentsWithSeveralChildren = pair.Value > 1
                         ? checked(Hierarchy.ParentsWithSeveralChildren + 1)
                         : Hierarchy.ParentsWithSeveralChildren;
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// Resolve the music types' references inside their own bank, and ask whether
+        /// the relation is symmetric.
+        /// </summary>
+        /// <remarks>
+        /// Two things this measures that the package-wide census cannot.
+        ///
+        /// **Scope.** Resolving a music body's words against the whole package counts
+        /// 24,515 references; resolving them inside the bank the object lives in counts
+        /// 12,372. Ids repeat across banks, so the wider scope credits an object with
+        /// references to namesakes in banks it has nothing to do with.
+        ///
+        /// **Direction.** 74% of the same-bank edges whose *both* ends were scanned
+        /// have their reverse present as well. That makes this relation unlike either
+        /// of the other two in the format: the main reference graph is functional, with
+        /// every target named exactly once, and the 0x08 parent relation has many
+        /// children naming one parent. A mutual edge is neither, and cannot be read as
+        /// parenthood in either direction.
+        ///
+        /// It is also not a clique. Neighbours of a node are linked to each other only
+        /// 0.1% of the time, which rules out the reading that these bodies simply share
+        /// a list of sibling ids.
+        /// </remarks>
+        private void ClassifyMusicMutuality()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                if (structure.MusicSources.Count == 0)
+                {
+                    continue;
+                }
+                var here = new Dictionary<uint, byte>();
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    here[pair.Key] = pair.Value;
+                }
+                var scanned = new HashSet<uint>();
+                foreach (var source in structure.MusicSources)
+                {
+                    scanned.Add(source.Id);
+                }
+                var edges = new HashSet<(uint From, uint To)>();
+                foreach (var (id, _, words) in structure.MusicSources)
+                {
+                    foreach (var word in words)
+                    {
+                        if (word != id && here.ContainsKey(word))
+                        {
+                            edges.Add((id, word));
+                        }
+                    }
+                }
+                foreach (var edge in edges)
+                {
+                    MusicMutuality.SameBankEdges = checked(MusicMutuality.SameBankEdges + 1);
+                    if (!scanned.Contains(edge.To))
+                    {
+                        // Only a scanned body can carry the reverse edge, so an edge
+                        // into an unscanned object cannot be asked the question and is
+                        // kept out of the rate rather than counted as one-way.
+                        MusicMutuality.EdgesIntoUnscannedObjects =
+                            checked(MusicMutuality.EdgesIntoUnscannedObjects + 1);
+                        continue;
+                    }
+                    MusicMutuality.EdgesBetweenScannedObjects =
+                        checked(MusicMutuality.EdgesBetweenScannedObjects + 1);
+                    if (edges.Contains((edge.To, edge.From)))
+                    {
+                        MusicMutuality.MutualEdges = checked(MusicMutuality.MutualEdges + 1);
+                        HircBump(
+                            MusicMutuality.MutualEdgeKinds,
+                            $"type{here[edge.From]:X2}_with_type{here[edge.To]:X2}",
+                            1);
+                    }
                 }
             }
         }
@@ -1590,6 +1671,22 @@ namespace AnimeStudio.Endfield
                         CollectType0AHeadPrediction(
                             structure.Type0AHeadPredictions,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
+                    }
+                    if (objectType is 10 or 12 or 13)
+                    {
+                        var sourceBodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                        var distinct = new HashSet<uint>();
+                        for (var at = 0; at + 4 <= sourceBodySpan.Length; at++)
+                        {
+                            var word = BinaryPrimitives.ReadUInt32LittleEndian(sourceBodySpan.Slice(at, 4));
+                            if (word != 0)
+                            {
+                                distinct.Add(word);
+                            }
+                        }
+                        var flat = new uint[distinct.Count];
+                        distinct.CopyTo(flat);
+                        structure.MusicSources.Add((objectId, objectType, flat));
                     }
                     CollectMusicBodyWords(
                         structure.MusicBodyWords,
@@ -5631,6 +5728,10 @@ namespace AnimeStudio.Endfield
         // cannot be read from a known offset; every word is offered instead and the
         // sparseness of the id space decides which are real.
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
+        // (music object id, its numeric type, the distinct words its body carries),
+        // kept per bank so the relation can be resolved in the scope its endpoints
+        // actually live in.
+        public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
         // Numeric types 0x08 and 0x12's bodies, kept so the constants in the shared
         // framer can be scored against their alternatives rather than asserted. All
         // 412 of them together are about 32 KB.
@@ -5836,6 +5937,16 @@ namespace AnimeStudio.Endfield
         public uint LeadingByteNotZero { get; set; }
         public uint PadNotZero { get; set; }
         public Dictionary<string, uint> ValueCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Whether the music types' relation is symmetric, resolved inside one bank.
+    public sealed class EndfieldHircMusicMutualityCensus
+    {
+        public uint SameBankEdges { get; set; }
+        public uint EdgesIntoUnscannedObjects { get; set; }
+        public uint EdgesBetweenScannedObjects { get; set; }
+        public uint MutualEdges { get; set; }
+        public Dictionary<string, uint> MutualEdgeKinds { get; } = new(StringComparer.Ordinal);
     }
 
     // The parent relation numeric types 0x08 and 0x12 declare, measured per bank.
