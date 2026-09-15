@@ -24,6 +24,7 @@ internal static class EndfieldAkpkTests
         TestMusicHeadReferencesFollowTheDiscriminantByte();
         TestType11SourceRecordsAreCounted();
         TestType22BodyFramesReuseGroupI();
+        TestType08HeadWordIsNullOrResolved();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -584,6 +585,54 @@ internal static class EndfieldAkpkTests
     }
 
 
+
+
+    private static void TestType08HeadWordIsNullOrResolved()
+    {
+        const uint target = 0x7601U;
+        var targetBody = BuildType2Body();
+        static byte[] Head(uint word)
+        {
+            var body = new byte[16];
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(0, 4), word);
+            return body;
+        }
+
+        var named = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7600, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x08, 0x7602U, Head(target))))).BnkStructures[0];
+        if (named.Type08Head.Bodies != 1 || named.Type08Head.Resolved != 1)
+        {
+            throw new InvalidOperationException("type 0x08 head word did not resolve");
+        }
+
+        // Null is a real outcome for this type, not a failure.
+        var nulled = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7600, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x08, 0x7603U, Head(0))))).BnkStructures[0];
+        if (nulled.Type08Head.Null != 1 || nulled.Type08Head.Resolved != 0
+            || nulled.Type08Head.Unresolved != 0)
+        {
+            throw new InvalidOperationException("type 0x08 mistook a null for a reference");
+        }
+
+        // A non-null word naming nothing is the case the claim forbids, so it must be
+        // visible rather than folded into either side.
+        var stranger = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7600, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x08, 0x7604U, Head(0xDEADBEEF))))).BnkStructures[0];
+        if (stranger.Type08Head.Unresolved != 1 || stranger.Type08Head.Null != 0)
+        {
+            throw new InvalidOperationException("type 0x08 hid an unresolved head word");
+        }
+
+        var tiny = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7600, BuildBnk(
+            ((byte)0x08, 0x7605U, new byte[2])))).BnkStructures[0];
+        if (tiny.Type08Head.TooShort != 1)
+        {
+            throw new InvalidOperationException("type 0x08 dropped a short body");
+        }
+    }
 
     private static void TestType22BodyFramesReuseGroupI()
     {

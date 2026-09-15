@@ -622,6 +622,34 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                // Numeric type 0x08's leading word: null, or one same-bank object.
+                if (objectType == 8)
+                {
+                    var head08 = structure.Type08Head;
+                    head08.Bodies = checked(head08.Bodies + 1);
+                    var head08Body = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    if (head08Body.Length < 4)
+                    {
+                        head08.TooShort = checked(head08.TooShort + 1);
+                    }
+                    else
+                    {
+                        var word = BinaryPrimitives.ReadUInt32LittleEndian(head08Body.Slice(0, 4));
+                        if (word == 0)
+                        {
+                            head08.Null = checked(head08.Null + 1);
+                        }
+                        else if (bankObjectTypes.ContainsKey(word))
+                        {
+                            head08.Resolved = checked(head08.Resolved + 1);
+                            bankEdges[objectId] = new List<uint> { word };
+                        }
+                        else
+                        {
+                            head08.Unresolved = checked(head08.Unresolved + 1);
+                        }
+                    }
+                }
                 // Numeric type 0x0B opens with one byte, a 32-bit record count, and that
                 // many fourteen-byte records: plug-in id, stream-type byte, source id,
                 // then five further bytes. Only the counted run is read here; what
@@ -2568,6 +2596,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
+        public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2629,6 +2658,19 @@ namespace AnimeStudio.Endfield
     // sparse set numeric type 0x02 uses. Plug-in ids are not small integers, so a
     // wrong record stride would scatter them out of that set almost immediately --
     // which is what makes the stride evidence rather than an assumption.
+    // Numeric type 0x08 is not framed. Its leading 32-bit word, however, is either
+    // null or the identity of an object in the same bank -- never a non-null value
+    // that names nothing. Null is a real outcome here, not a failure, so it is
+    // counted separately instead of being folded into either side.
+    public sealed class EndfieldHircType08HeadCensus
+    {
+        public uint Bodies { get; set; }
+        public uint Resolved { get; set; }
+        public uint Null { get; set; }
+        public uint Unresolved { get; set; }
+        public uint TooShort { get; set; }
+    }
+
     public sealed class EndfieldHircType11SourceCensus
     {
         public uint Bodies { get; set; }

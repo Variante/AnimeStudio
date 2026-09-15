@@ -191,6 +191,7 @@ namespace AnimeStudio.CLI
                             ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
+                            ["hircType08Head"] = BuildType08HeadSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -251,6 +252,7 @@ namespace AnimeStudio.CLI
                                 ["hircType22BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type22Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
                                 ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
+                                ["hircType08Head"] = BuildType08HeadSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -647,6 +649,30 @@ namespace AnimeStudio.CLI
         }
 
 
+
+
+        private static Dictionary<string, object?> BuildType08HeadSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var bodies = 0U; var resolved = 0U; var nulls = 0U; var unresolved = 0U; var tooShort = 0U;
+            foreach (var structure in structures)
+            {
+                var census = structure.Type08Head;
+                bodies = checked(bodies + census.Bodies);
+                resolved = checked(resolved + census.Resolved);
+                nulls = checked(nulls + census.Null);
+                unresolved = checked(unresolved + census.Unresolved);
+                tooShort = checked(tooShort + census.TooShort);
+            }
+            return new Dictionary<string, object?>
+            {
+                ["bodies"] = bodies,
+                ["resolved"] = resolved,
+                ["null"] = nulls,
+                ["unresolved"] = unresolved,
+                ["tooShort"] = tooShort,
+            };
+        }
 
         private static Dictionary<string, object?> BuildType11SourceSummary(
             IEnumerable<EndfieldBnkStructure> structures)
