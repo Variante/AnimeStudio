@@ -4910,6 +4910,7 @@ namespace AnimeStudio.Endfield
             var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
             var headers = new List<byte[]>();
             var curves = new List<byte[]>();
+            var entryShape = 0u;
             var cursor = 0;
             if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
             {
@@ -4956,6 +4957,12 @@ namespace AnimeStudio.Endfield
                     "failed", "range_entries", cursor - 4, (int)Type11MaximumEntries, (int)entries);
             }
             HircBump(groups, "entries", entries);
+            // Kept because of what it shows about this reader. Every body that frames
+            // has exactly one entry carrying exactly one element -- 3,715 of them,
+            // without exception -- so neither count has ever been read at any other
+            // value by a successful walk. The multi-entry layout is not known to be
+            // 48 bytes per header, or anything else; it has simply never been parsed.
+            entryShape = entries;
             for (var entry = 0U; entry < entries; entry++)
             {
                 if (end - cursor < Type11EntryHeaderBytes)
@@ -5076,6 +5083,13 @@ namespace AnimeStudio.Endfield
             foreach (var region in curves)
             {
                 CensusType11Curves(structureEntryHeaders, region);
+            }
+            if (structureEntryHeaders is not null)
+            {
+                HircBump(
+                    structureEntryHeaders.EntryCountValues,
+                    $"entries_{Math.Min(entryShape, 8)}",
+                    1);
             }
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
@@ -6489,6 +6503,7 @@ namespace AnimeStudio.Endfield
         // How many elements each entry declares. Censused because it is 1 in every
         // entry the frame closes, which is what makes the "count" reading untested.
         public Dictionary<string, uint> ElementCountValues { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> EntryCountValues { get; } = new(StringComparer.Ordinal);
         // The curve records the element runs carry, and their interpolation codes.
         public uint CurveRecords { get; set; }
         public uint CurveCodesInRange { get; set; }

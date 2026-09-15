@@ -218,6 +218,7 @@ namespace AnimeStudio.CLI
                                 ["fractionControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsTested),
                                 ["fractionControlsAreSmall"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsAreSmall),
                                 ["elementCountValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.ElementCountValues)),
+                                ["entryCountValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.EntryCountValues)),
                                 ["curveRecords"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveRecords),
                                 ["curveCodesInRange"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveCodesInRange),
                                 ["curveControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveControlsTested),
