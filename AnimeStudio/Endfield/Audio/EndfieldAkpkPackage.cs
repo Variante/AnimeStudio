@@ -4977,6 +4977,65 @@ namespace AnimeStudio.Endfield
         /// <summary>
         /// Walk one element body under a candidate frame, or refuse.
         /// </summary>
+        /// <summary>
+        /// The length of one numeric type 0x0B trailer, from the block that precedes it.
+        /// </summary>
+        /// <remarks>
+        /// Shared by the element trailer and the trailing section that closes a
+        /// multi-entry body, because they are the same eleven-to-thirty-one bytes and
+        /// two copies of this rule would drift apart the first time one was corrected.
+        /// </remarks>
+        private static bool TryReadType11TrailerLength(
+            ReadOnlySpan<byte> body,
+            int blockAt,
+            int end,
+            out int length,
+            out byte opens,
+            out byte flag,
+            out string reason)
+        {
+            length = 0;
+            opens = 0;
+            flag = 0;
+            reason = string.Empty;
+            if (end - blockAt < Type11ElementTrailingBlockBytes + 1)
+            {
+                reason = "range_element_trailing_block";
+                return false;
+            }
+            opens = body[blockAt + Type11ElementTrailingBlockOpenOffset];
+            var at = checked(blockAt + Type11ElementTrailingBlockBytes);
+            flag = body[at];
+            if (opens == Type11ExtendedTrailerOpenValue)
+            {
+                if (end - at <= Type11ExtendedTrailerSelectorOffset)
+                {
+                    reason = "range_extended_trailer_selector";
+                    return false;
+                }
+                var extended = body[at + Type11ExtendedTrailerSelectorOffset];
+                if (extended > Type11ExtendedTrailerMaximumFlag)
+                {
+                    reason = "range_extended_trailer_flag";
+                    return false;
+                }
+                length = checked(
+                    Type11ExtendedTrailerBaseBytes
+                    + Type11TrailerStepBytes * extended
+                    + Type11TrailerCloseBytes);
+                return true;
+            }
+            if (flag > Type11TrailerMaximumFlag)
+            {
+                reason = "range_element_trailer_flag";
+                return false;
+            }
+            length = checked(
+                Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
+            return true;
+        }
+
+
         private static bool TryWalkType11Element(
             ReadOnlySpan<byte> element,
             int bodyBytes,
@@ -5055,6 +5114,20 @@ namespace AnimeStudio.Endfield
         // The step of 5 is shared with the plain trailer, not independently
         // established: only k = 0 and k = 1 are observed, which is two points, so
         // anything above 1 is refused.
+        // A trailing section after the entry list, in multi-entry bodies only: one
+        // byte, then the same 12-byte block and the same trailer an element ends
+        // with. The prefix is discriminated -- a width of 1 closes 76 multi-entry
+        // bodies and every other width from 0 to 9 closes at most 10 -- and the
+        // section costs nothing, because the bodies that framed without it still
+        // frame: it is only attempted when the entry walk has already fallen short.
+        //
+        // It is claimed only where the section's own bytes agree with the trailer
+        // rule established on single-entry bodies. A control that accepts any of the
+        // four observed trailer lengths, ignoring the flag, closes 100 rather than
+        // 76; the extra 24 have a residue of the right total length but a block
+        // opening byte of 0xAF, 0x55 or 0x59 and a scattered selector, which is a
+        // length coincidence and not a section. Those 24 stay fenced.
+        internal const int Type11TrailingSectionPrefixBytes = 1;
         internal const int Type11ElementTrailingBlockOpenOffset = 0;
         internal const byte Type11ExtendedTrailerOpenValue = 1;
         internal const int Type11ExtendedTrailerBaseBytes = 14;
@@ -5253,54 +5326,29 @@ namespace AnimeStudio.Endfield
                         cursor = checked(cursor + recordSpan + Type11ElementRunTrailingBytes);
                         HircBump(groups, "runRecords", records);
                     }
-                    if (end - cursor < Type11ElementTrailingBlockBytes + 1)
+                    if (!TryReadType11TrailerLength(
+                            body, cursor, end, out var trailer,
+                            out var trailingBlockOpens, out var flag, out var why))
                     {
-                        return HircFrameOutcome(
-                            "failed", "range_element_trailing_block",
-                            cursor, Type11ElementTrailingBlockBytes + 1, end - cursor);
+                        return HircFrameOutcome("failed", why, cursor, 0, end - cursor);
                     }
-                    var trailingBlockOpens = body[cursor + Type11ElementTrailingBlockOpenOffset];
                     cursor = checked(cursor + Type11ElementTrailingBlockBytes);
-                    var flag = body[cursor];
-                    int trailer;
                     if (trailingBlockOpens == Type11ExtendedTrailerOpenValue)
                     {
-                        if (end - cursor <= Type11ExtendedTrailerSelectorOffset)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_extended_trailer_selector",
-                                cursor, Type11ExtendedTrailerSelectorOffset + 1, end - cursor);
-                        }
-                        var extended = body[cursor + Type11ExtendedTrailerSelectorOffset];
-                        if (extended > Type11ExtendedTrailerMaximumFlag)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_extended_trailer_flag",
-                                cursor + Type11ExtendedTrailerSelectorOffset,
-                                Type11ExtendedTrailerMaximumFlag, extended);
-                        }
-                        HircBump(selectors, $"extendedTrailerFlag_{extended}", 1);
+                        HircBump(
+                            selectors,
+                            "extendedTrailerFlag_"
+                            + body[cursor + Type11ExtendedTrailerSelectorOffset],
+                            1);
                         // Every element that takes this branch carries flag 0, all 148
                         // of them. Recorded rather than required: it is an observation
                         // about the corpus, and making it a rule would hide the day it
                         // stops being true.
                         HircBump(selectors, $"extendedTrailerPlainFlag_{flag}", 1);
-                        trailer = checked(
-                            Type11ExtendedTrailerBaseBytes
-                            + Type11TrailerStepBytes * extended
-                            + Type11TrailerCloseBytes);
                     }
                     else
                     {
-                        if (flag > Type11TrailerMaximumFlag)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_element_trailer_flag",
-                                cursor, Type11TrailerMaximumFlag, flag);
-                        }
                         HircBump(selectors, $"elementTrailerFlag_{flag}", 1);
-                        trailer = checked(
-                            Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
                     }
                     if (trailer > end - cursor)
                     {
@@ -5311,6 +5359,28 @@ namespace AnimeStudio.Endfield
                         body.Slice(checked(cursor + trailer - Type11TrailerCloseBytes),
                                    Type11TrailerCloseBytes).ToArray());
                     cursor = checked(cursor + trailer);
+                }
+            }
+            if (cursor != end)
+            {
+                // The trailing section, attempted only now. Because it runs after the
+                // entry walk has already fallen short, it can add bodies but never
+                // take one that framed without it.
+                var sectionBlock = checked(cursor + Type11TrailingSectionPrefixBytes);
+                if (sectionBlock < end
+                    && TryReadType11TrailerLength(
+                        body, sectionBlock, end, out var sectionTrailer,
+                        out var sectionOpens, out var sectionFlag, out _)
+                    && checked(sectionBlock + Type11ElementTrailingBlockBytes
+                               + sectionTrailer) == end)
+                {
+                    HircBump(groups, "trailingSections", 1);
+                    HircBump(selectors, $"trailingSectionOpens_{sectionOpens}", 1);
+                    HircBump(selectors, $"trailingSectionFlag_{sectionFlag}", 1);
+                    closeBlocks.Add(
+                        body.Slice(end - Type11TrailerCloseBytes,
+                                   Type11TrailerCloseBytes).ToArray());
+                    cursor = end;
                 }
             }
             if (cursor != end)
@@ -5342,10 +5412,22 @@ namespace AnimeStudio.Endfield
             // nothing, because the walk that reached it may have been desynchronised.
             if (structureEntryHeaders is not null)
             {
-                foreach (var close in closeBlocks)
+                for (var index = 0; index < closeBlocks.Count; index++)
                 {
+                    var close = closeBlocks[index];
+                    var isFinal = index == closeBlocks.Count - 1;
                     structureEntryHeaders.CloseBlocks =
                         checked(structureEntryHeaders.CloseBlocks + 1);
+                    if (isFinal)
+                    {
+                        structureEntryHeaders.FinalCloseBlocks =
+                            checked(structureEntryHeaders.FinalCloseBlocks + 1);
+                    }
+                    else
+                    {
+                        structureEntryHeaders.InteriorCloseBlocks =
+                            checked(structureEntryHeaders.InteriorCloseBlocks + 1);
+                    }
                     var zeroed = true;
                     for (var at = 4; at < close.Length; at++)
                     {
@@ -5359,6 +5441,16 @@ namespace AnimeStudio.Endfield
                     {
                         structureEntryHeaders.CloseBlocksEndingInEightZeros =
                             checked(structureEntryHeaders.CloseBlocksEndingInEightZeros + 1);
+                        if (isFinal)
+                        {
+                            structureEntryHeaders.FinalCloseBlocksEndingInEightZeros = checked(
+                                structureEntryHeaders.FinalCloseBlocksEndingInEightZeros + 1);
+                        }
+                        else
+                        {
+                            structureEntryHeaders.InteriorCloseBlocksEndingInEightZeros = checked(
+                                structureEntryHeaders.InteriorCloseBlocksEndingInEightZeros + 1);
+                        }
                     }
                     // The control that makes the count mean something: the same span
                     // read four bytes earlier. If eight zeros were simply common here
@@ -5383,6 +5475,7 @@ namespace AnimeStudio.Endfield
                         1);
                 }
             }
+            var headersNamingASource = 0;
             foreach (var header in headers)
             {
                 CensusType11EntryHeader(structureEntryHeaders, header);
@@ -5397,7 +5490,22 @@ namespace AnimeStudio.Endfield
                     {
                         structureEntryHeaders.SourceJoinMatched =
                             checked(structureEntryHeaders.SourceJoinMatched + 1);
+                        headersNamingASource = checked(headersNamingASource + 1);
                     }
+                }
+            }
+            if (structureEntryHeaders is not null && headers.Count > 0)
+            {
+                // Per body, not per header. The word at +4 names a declared source in
+                // every single-entry body, and in exactly one of the two entries of a
+                // two-entry body -- so a per-header rate would read as a regression
+                // where a per-body one reads as the structure it is.
+                structureEntryHeaders.SourceJoinBodies =
+                    checked(structureEntryHeaders.SourceJoinBodies + 1);
+                if (headersNamingASource > 0)
+                {
+                    structureEntryHeaders.SourceJoinBodiesWithAMatch =
+                        checked(structureEntryHeaders.SourceJoinBodiesWithAMatch + 1);
                 }
             }
             foreach (var region in curves)
@@ -6852,6 +6960,16 @@ namespace AnimeStudio.Endfield
         public uint CloseBlocks { get; set; }
         public uint CloseBlocksEndingInEightZeros { get; set; }
         public uint CloseBlockControlsEndingInEightZeros { get; set; }
+        // Split once multi-element bodies began to frame, which is when the question
+        // "per element or per body?" finally had an answer.
+        public uint FinalCloseBlocks { get; set; }
+        public uint FinalCloseBlocksEndingInEightZeros { get; set; }
+        public uint InteriorCloseBlocks { get; set; }
+        public uint InteriorCloseBlocksEndingInEightZeros { get; set; }
+        // Every framed body must have at least one entry header naming a source the
+        // same body declares. In two-entry bodies exactly one of the two does.
+        public uint SourceJoinBodies { get; set; }
+        public uint SourceJoinBodiesWithAMatch { get; set; }
         public Dictionary<string, uint> CloseBlockHeads { get; } = new(StringComparer.Ordinal);
         // The curve records the element runs carry, and their interpolation codes.
         public uint CurveRecords { get; set; }
