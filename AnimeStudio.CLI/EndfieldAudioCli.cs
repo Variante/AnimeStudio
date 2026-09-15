@@ -173,6 +173,11 @@ namespace AnimeStudio.CLI
                                     .GroupBy(x => x.Key)
                                     .OrderBy(x => x.Key)
                                         .ToDictionary(x => $"0x{x.Key:X}", x => x.Sum(y => (long)y.Value)),
+                                ["pluginIdCounts"] = package.BnkStructures
+                                    .SelectMany(x => x.Type2PluginIdCounts)
+                                    .GroupBy(x => x.Key, StringComparer.Ordinal)
+                                    .OrderBy(x => x.Key, StringComparer.Ordinal)
+                                        .ToDictionary(x => x.Key, x => x.Sum(y => (long)y.Value)),
                             },
                             ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(package.BnkStructures),
                             ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(package.BnkStructures),
@@ -184,6 +189,7 @@ namespace AnimeStudio.CLI
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
+                            ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
                             ["hircObjectTypeCounts"] = package.BnkStructures
                                 .SelectMany(x => x.HircObjectTypeCounts)
                                 .GroupBy(x => x.Key)
@@ -229,6 +235,9 @@ namespace AnimeStudio.CLI
                                     ["pluginTypeCounts"] = x.Type2PluginTypeCounts
                                         .OrderBy(pair => pair.Key)
                                         .ToDictionary(pair => $"0x{pair.Key:X}", pair => pair.Value),
+                                    ["pluginIdCounts"] = x.Type2PluginIdCounts
+                                        .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                                        .ToDictionary(pair => pair.Key, pair => pair.Value),
                                 },
                                 ["hircType03ActionFrame"] = BuildType3ActionFrameSummary(new[] { x }),
                                 ["hircType04U32VectorFrame"] = BuildType4U32VectorFrameSummary(new[] { x }),
@@ -239,6 +248,7 @@ namespace AnimeStudio.CLI
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
+                                ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -634,6 +644,52 @@ namespace AnimeStudio.CLI
             };
         }
 
+
+
+        private static Dictionary<string, object?> BuildType11SourceSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var bodies = 0U; var withRecords = 0U; var records = 0U;
+            var outOfRange = 0U; var tooShort = 0U;
+            var plugins = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var streams = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var counts = new Dictionary<string, uint>(StringComparer.Ordinal);
+            foreach (var structure in structures)
+            {
+                var census = structure.Type11Sources;
+                bodies = checked(bodies + census.Bodies);
+                withRecords = checked(withRecords + census.BodiesWithRecords);
+                records = checked(records + census.Records);
+                outOfRange = checked(outOfRange + census.RecordsOutOfRange);
+                tooShort = checked(tooShort + census.TooShort);
+                foreach (var pair in census.PluginIdCounts)
+                {
+                    plugins.TryGetValue(pair.Key, out var existing);
+                    plugins[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in census.StreamTypeCounts)
+                {
+                    streams.TryGetValue(pair.Key, out var existing);
+                    streams[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in census.RecordCountCounts)
+                {
+                    counts.TryGetValue(pair.Key, out var existing);
+                    counts[pair.Key] = checked(existing + pair.Value);
+                }
+            }
+            return new Dictionary<string, object?>
+            {
+                ["bodies"] = bodies,
+                ["bodiesWithRecords"] = withRecords,
+                ["records"] = records,
+                ["recordsOutOfRange"] = outOfRange,
+                ["tooShort"] = tooShort,
+                ["pluginIdCounts"] = plugins.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["streamTypeCounts"] = streams.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+            };
+        }
 
         private static Dictionary<string, object?> BuildMusicHeadSummary(
             IEnumerable<EndfieldBnkStructure> structures)

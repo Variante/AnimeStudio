@@ -22,6 +22,7 @@ internal static class EndfieldAkpkTests
         TestType14BodyFramesBothBranches();
         TestType14BodyFramesFailClosed();
         TestMusicHeadReferencesFollowTheDiscriminantByte();
+        TestType11SourceRecordsAreCounted();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -579,6 +580,68 @@ internal static class EndfieldAkpkTests
         var offset = discriminant == 0 ? 9 : 5;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset, 4), target);
         return body;
+    }
+
+
+    private static void TestType11SourceRecordsAreCounted()
+    {
+        // One byte, a 32-bit record count, then that many fourteen-byte records.
+        static byte[] Build(uint records, uint plugin, byte streamType)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write((byte)0);
+            writer.Write(records);
+            for (var i = 0U; i < records; i++)
+            {
+                writer.Write(plugin);
+                writer.Write(streamType);
+                writer.Write(0x1000U + i);
+                writer.Write(new byte[5]);
+            }
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        var two = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7400, BuildBnk(
+            ((byte)0x0B, 0x7401U, Build(2, 0x00040001U, 2))))).BnkStructures[0];
+        if (two.Type11Sources.Bodies != 1
+            || two.Type11Sources.BodiesWithRecords != 1
+            || two.Type11Sources.Records != 2
+            || two.Type11Sources.PluginIdCounts["plugin_00040001"] != 2
+            || two.Type11Sources.StreamTypeCounts["streamType_02"] != 2
+            || two.Type11Sources.RecordCountCounts["records_2"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0B source records were not counted");
+        }
+
+        // A body declaring no records is still a body, and must not count as one
+        // carrying records.
+        var none = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7400, BuildBnk(
+            ((byte)0x0B, 0x7402U, Build(0, 0, 0))))).BnkStructures[0];
+        if (none.Type11Sources.Bodies != 1
+            || none.Type11Sources.BodiesWithRecords != 0
+            || none.Type11Sources.Records != 0)
+        {
+            throw new InvalidOperationException("type 0x0B miscounted an empty record run");
+        }
+
+        // A count that cannot fit is reported, never clamped to the bytes present.
+        var overrun = Build(1, 0x00040001U, 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(overrun.AsSpan(1, 4), 9999);
+        var bad = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7400, BuildBnk(
+            ((byte)0x0B, 0x7403U, overrun)))).BnkStructures[0];
+        if (bad.Type11Sources.RecordsOutOfRange != 1 || bad.Type11Sources.Records != 0)
+        {
+            throw new InvalidOperationException("type 0x0B accepted an impossible record count");
+        }
+
+        var tiny = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7400, BuildBnk(
+            ((byte)0x0B, 0x7404U, new byte[3])))).BnkStructures[0];
+        if (tiny.Type11Sources.TooShort != 1)
+        {
+            throw new InvalidOperationException("type 0x0B dropped a short body");
+        }
     }
 
     private static void TestMusicHeadReferencesFollowTheDiscriminantByte()

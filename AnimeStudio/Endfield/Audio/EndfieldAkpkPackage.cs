@@ -620,6 +620,46 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                // Numeric type 0x0B opens with one byte, a 32-bit record count, and that
+                // many fourteen-byte records: plug-in id, stream-type byte, source id,
+                // then five further bytes. Only the counted run is read here; what
+                // follows it is not established and is deliberately not touched.
+                if (objectType == 11)
+                {
+                    var sources = structure.Type11Sources;
+                    sources.Bodies = checked(sources.Bodies + 1);
+                    var sourceBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    if (sourceBody.Length < 5)
+                    {
+                        sources.TooShort = checked(sources.TooShort + 1);
+                    }
+                    else
+                    {
+                        var recordCount = BinaryPrimitives.ReadUInt32LittleEndian(sourceBody.Slice(1, 4));
+                        HircBump(sources.RecordCountCounts, $"records_{recordCount}", 1);
+                        if (recordCount > Type11MaximumRecords
+                            || 5 + recordCount * Type11SourceRecordBytes > (uint)sourceBody.Length)
+                        {
+                            sources.RecordsOutOfRange = checked(sources.RecordsOutOfRange + 1);
+                        }
+                        else
+                        {
+                            if (recordCount > 0)
+                            {
+                                sources.BodiesWithRecords = checked(sources.BodiesWithRecords + 1);
+                            }
+                            for (var record = 0U; record < recordCount; record++)
+                            {
+                                var at = checked(5 + (int)record * Type11SourceRecordBytes);
+                                var plugin = BinaryPrimitives.ReadUInt32LittleEndian(
+                                    sourceBody.Slice(at, 4));
+                                sources.Records = checked(sources.Records + 1);
+                                HircBump(sources.PluginIdCounts, $"plugin_{plugin:X8}", 1);
+                                HircBump(sources.StreamTypeCounts, $"streamType_{sourceBody[at + 4]:X2}", 1);
+                            }
+                        }
+                    }
+                }
                 // Numeric types 0x0A and 0x0D carry one 32-bit word near the head that
                 // names an object in the same bank. Byte 2 selects where it sits: zero
                 // puts it at offset 9, nonzero at offset 5. The offset is computed from
@@ -1097,6 +1137,10 @@ namespace AnimeStudio.Endfield
             structure.Type2PrefixCount = checked(structure.Type2PrefixCount + 1);
             structure.Type2PluginTypeCounts.TryGetValue(pluginType, out var pluginCount);
             structure.Type2PluginTypeCounts[pluginType] = checked(pluginCount + 1);
+            // The whole plug-in id, not just its type field. Numeric type 0x0B's source
+            // records are checked against this set, and that check only has force if
+            // both sides are the same sparse 32-bit value.
+            HircBump(structure.Type2PluginIdCounts, $"plugin_{pluginId:X8}", 1);
             structure.Type2PrefixBytes = checked(structure.Type2PrefixBytes + (uint)prefixLength);
             var opaqueLength = checked(bodyLength - prefixLength);
             structure.Type2OpaqueTailBytes = checked(structure.Type2OpaqueTailBytes + (uint)opaqueLength);
@@ -1702,6 +1746,9 @@ namespace AnimeStudio.Endfield
         // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
         // counted vector of fixed-width anonymous references.
         internal const int Type14ElementBytes = 12;
+        internal const int Type11SourceRecordBytes = 14;
+        // A bound so a corrupt count cannot make the reader walk the whole body.
+        internal const uint Type11MaximumRecords = 64;
 
         internal static EndfieldHircBodyFrameResult FrameType7Body(
             ReadOnlySpan<byte> body,
@@ -2428,6 +2475,7 @@ namespace AnimeStudio.Endfield
         public Dictionary<byte, EndfieldBnkObjectTypeStats> HircObjectTypeStats { get; } = new();
         public uint Type2PrefixCount { get; set; }
         public Dictionary<uint, uint> Type2PluginTypeCounts { get; } = new();
+        public Dictionary<string, uint> Type2PluginIdCounts { get; } = new(StringComparer.Ordinal);
         public uint Type2PrefixBytes { get; set; }
         public uint Type2OpaqueTailBytes { get; set; }
         public uint Type2MinOpaqueTailBytes { get; set; }
@@ -2460,6 +2508,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
+        public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2516,6 +2565,23 @@ namespace AnimeStudio.Endfield
     // and only that is recorded here -- a single 32-bit word near the head whose
     // offset is selected by body byte 2. This is identity resolution, not framing,
     // and it says nothing about what the relation means.
+    // Numeric type 0x0B is not framed either, but its head is a counted run of
+    // fourteen-byte records whose first word is a plug-in id drawn from the same
+    // sparse set numeric type 0x02 uses. Plug-in ids are not small integers, so a
+    // wrong record stride would scatter them out of that set almost immediately --
+    // which is what makes the stride evidence rather than an assumption.
+    public sealed class EndfieldHircType11SourceCensus
+    {
+        public uint Bodies { get; set; }
+        public uint BodiesWithRecords { get; set; }
+        public uint Records { get; set; }
+        public uint RecordsOutOfRange { get; set; }
+        public uint TooShort { get; set; }
+        public Dictionary<string, uint> PluginIdCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> StreamTypeCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircMusicHeadReferenceCensus
     {
         public uint Bodies { get; set; }
