@@ -189,6 +189,7 @@ namespace AnimeStudio.CLI
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
+                            ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
                             ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
@@ -273,6 +274,7 @@ namespace AnimeStudio.CLI
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
                                 ["hircType08BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type08Body),
+                                ["hircType08Tail"] = BuildType08TailSummary(new[] { x }),
                                 ["hircType22BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type22Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
                                 ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
@@ -848,6 +850,55 @@ namespace AnimeStudio.CLI
                 ["null"] = nulls,
                 ["unresolved"] = unresolved,
                 ["tooShort"] = tooShort,
+            };
+        }
+
+        private static Dictionary<string, object?> BuildType08TailSummary(
+            IEnumerable<EndfieldBnkStructure> structures)
+        {
+            var bodies = 0U; var notWalkable = 0U; var framed = 0U; var tails = 0U;
+            var noZero = 0U; var noCount = 0U; var ambiguous = 0U; var unique = 0U;
+            var records = 0U; var headBytes = 0U;
+            var counts = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var codes = new Dictionary<string, uint>(StringComparer.Ordinal);
+            foreach (var structure in structures)
+            {
+                var census = structure.Type08Tail;
+                bodies = checked(bodies + census.Bodies);
+                notWalkable = checked(notWalkable + census.NotWalkable);
+                framed = checked(framed + census.FramedByTheReader);
+                tails = checked(tails + census.Tails);
+                noZero = checked(noZero + census.NoZeroWordAtTheEnd);
+                noCount = checked(noCount + census.NoCountBeforeTheRecords);
+                ambiguous = checked(ambiguous + census.CountIsAmbiguous);
+                unique = checked(unique + census.TailsWithAUniqueCount);
+                records = checked(records + census.Records);
+                headBytes = checked(headBytes + census.UnexplainedHeadBytes);
+                foreach (var pair in census.RecordCountCounts)
+                {
+                    counts.TryGetValue(pair.Key, out var existing);
+                    counts[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in census.ThirdFieldCounts)
+                {
+                    codes.TryGetValue(pair.Key, out var existing);
+                    codes[pair.Key] = checked(existing + pair.Value);
+                }
+            }
+            return new Dictionary<string, object?>
+            {
+                ["bodies"] = bodies,
+                ["notWalkable"] = notWalkable,
+                ["framedByTheReader"] = framed,
+                ["tails"] = tails,
+                ["noZeroWordAtTheEnd"] = noZero,
+                ["noCountBeforeTheRecords"] = noCount,
+                ["countIsAmbiguous"] = ambiguous,
+                ["tailsWithAUniqueCount"] = unique,
+                ["records"] = records,
+                ["unexplainedHeadBytes"] = headBytes,
+                ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["thirdFieldCounts"] = codes.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
         }
 

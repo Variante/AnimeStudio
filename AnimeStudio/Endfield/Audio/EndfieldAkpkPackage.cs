@@ -832,6 +832,7 @@ namespace AnimeStudio.Endfield
                     var head08 = structure.Type08Head;
                     head08.Bodies = checked(head08.Bodies + 1);
                     var head08Body = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    CensusType08Tail(structure.Type08Tail, head08Body);
                     if (head08Body.Length < 4)
                     {
                         head08.TooShort = checked(head08.TooShort + 1);
@@ -2440,6 +2441,147 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
+        // The record the fenced tails end with: two 32-bit floats and a 32-bit code.
+        internal const int Type08TailRecordBytes = 12;
+
+        /// <summary>
+        /// Walk numeric type 0x08's body to the end of its counted entry run, or fail.
+        /// </summary>
+        /// <remarks>
+        /// Shared with <see cref="FrameType8Body"/> so the tail census and the framer
+        /// can never disagree about where the body's framed part ends.
+        /// </remarks>
+        private static bool TryWalkType08ToTail(ReadOnlySpan<byte> body, out int cursor)
+        {
+            cursor = 0;
+            if (body.Length < 5)
+            {
+                return false;
+            }
+            cursor = 4;
+            var propertyCount = body[cursor];
+            cursor = checked(cursor + 1);
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return false;
+            }
+            cursor = checked(cursor + propertyCount * 5);
+            if (body.Length - cursor < 2 || body[cursor] != 1)
+            {
+                return false;
+            }
+            var secondWidth = body[cursor + 1] switch
+            {
+                Type08SecondListShortKey => Type08SecondListShortBytes,
+                Type08SecondListLongKey => Type08SecondListLongBytes,
+                _ => -1,
+            };
+            if (secondWidth < 0)
+            {
+                return false;
+            }
+            cursor = checked(cursor + 2 + secondWidth);
+            if (body.Length - cursor < Type08Signature.Length
+                || !body.Slice(cursor, Type08Signature.Length).SequenceEqual(Type08Signature))
+            {
+                return false;
+            }
+            cursor = checked(cursor + Type08Signature.Length);
+            if (body.Length - cursor < 5
+                || BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)) != 0)
+            {
+                return false;
+            }
+            cursor = checked(cursor + 4);
+            var entries = body[cursor];
+            cursor = checked(cursor + 1);
+            var span = entries == 0 ? 0 : checked(entries * Type08EntryBytes + 1);
+            if (span > body.Length - cursor)
+            {
+                return false;
+            }
+            cursor = checked(cursor + span);
+            return true;
+        }
+
+        /// <summary>
+        /// Census what the framer fences: the tail some numeric type 0x08 bodies carry
+        /// after their entry run.
+        /// </summary>
+        /// <remarks>
+        /// This deliberately does **not** frame the tail. The bytes before its trailing
+        /// run are not understood, so the run is anchored from the *end* instead: the
+        /// tail must finish with a zero 16-bit word, and the count must sit exactly two
+        /// bytes before a run of that many twelve-byte records. Only a uniquely
+        /// determined count is accepted -- if two lengths both fit, the alignment is not
+        /// evidence of anything and the body is left unresolved.
+        ///
+        /// What makes the alignment credible rather than arithmetic is each record's
+        /// third field: across the corpus it takes a handful of small values, which
+        /// arbitrary bytes read at a wrong offset would not do.
+        /// </remarks>
+        private static void CensusType08Tail(
+            EndfieldHircType08TailCensus census,
+            ReadOnlySpan<byte> body)
+        {
+            census.Bodies = checked(census.Bodies + 1);
+            if (!TryWalkType08ToTail(body, out var cursor))
+            {
+                census.NotWalkable = checked(census.NotWalkable + 1);
+                return;
+            }
+            if (body.Length - cursor == Type08TrailerBytes)
+            {
+                census.FramedByTheReader = checked(census.FramedByTheReader + 1);
+                return;
+            }
+            census.Tails = checked(census.Tails + 1);
+            var tail = body.Slice(cursor);
+            if (tail.Length < 6
+                || BinaryPrimitives.ReadUInt16LittleEndian(tail.Slice(tail.Length - 2, 2)) != 0)
+            {
+                census.NoZeroWordAtTheEnd = checked(census.NoZeroWordAtTheEnd + 1);
+                return;
+            }
+            var matches = 0;
+            var chosen = 0;
+            var limit = (tail.Length - 4) / Type08TailRecordBytes;
+            for (var count = 1; count <= limit; count++)
+            {
+                var at = tail.Length - 2 - count * Type08TailRecordBytes - 2;
+                if (at < 0)
+                {
+                    break;
+                }
+                if (tail[at] == count)
+                {
+                    matches = checked(matches + 1);
+                    chosen = count;
+                }
+            }
+            if (matches == 0)
+            {
+                census.NoCountBeforeTheRecords = checked(census.NoCountBeforeTheRecords + 1);
+                return;
+            }
+            if (matches > 1)
+            {
+                census.CountIsAmbiguous = checked(census.CountIsAmbiguous + 1);
+                return;
+            }
+            census.TailsWithAUniqueCount = checked(census.TailsWithAUniqueCount + 1);
+            census.Records = checked(census.Records + (uint)chosen);
+            HircBump(census.RecordCountCounts, $"records_{chosen}", 1);
+            var start = tail.Length - 2 - chosen * Type08TailRecordBytes;
+            for (var i = 0; i < chosen; i++)
+            {
+                var code = BinaryPrimitives.ReadUInt32LittleEndian(
+                    tail.Slice(start + i * Type08TailRecordBytes + 8, 4));
+                HircBump(census.ThirdFieldCounts, $"code_{code}", 1);
+            }
+            census.UnexplainedHeadBytes = checked(census.UnexplainedHeadBytes + (uint)start);
+        }
+
         private const int Type17RunElementBytes = 6;
 
         // A counted block: one byte of count, that many one-byte keys, then that many
@@ -3319,6 +3461,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
+        public EndfieldHircType08TailCensus Type08Tail { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -3501,6 +3644,24 @@ namespace AnimeStudio.Endfield
         public uint Null { get; set; }
         public uint Unresolved { get; set; }
         public uint TooShort { get; set; }
+    }
+
+    // What numeric type 0x08's framer fences. The tail is not framed; only its
+    // trailing counted run is located, and only when the count is unambiguous.
+    public sealed class EndfieldHircType08TailCensus
+    {
+        public uint Bodies { get; set; }
+        public uint NotWalkable { get; set; }
+        public uint FramedByTheReader { get; set; }
+        public uint Tails { get; set; }
+        public uint NoZeroWordAtTheEnd { get; set; }
+        public uint NoCountBeforeTheRecords { get; set; }
+        public uint CountIsAmbiguous { get; set; }
+        public uint TailsWithAUniqueCount { get; set; }
+        public uint Records { get; set; }
+        public uint UnexplainedHeadBytes { get; set; }
+        public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ThirdFieldCounts { get; } = new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircType11SourceCensus

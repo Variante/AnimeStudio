@@ -26,6 +26,7 @@ internal static class EndfieldAkpkTests
         TestType11TailEntriesAreCounted();
         TestType22BodyFramesReuseGroupI();
         TestType08BodiesFrameOrAreNamed();
+        TestType08TailRecordsAreLocatedFromTheEnd();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
         TestSmallTypesFrameExactly();
@@ -950,6 +951,82 @@ internal static class EndfieldAkpkTests
         if (badSecond.FailureCounts["second_list_is_not_one_entry"] != 1)
         {
             throw new InvalidOperationException("type 0x08 framed a multi-entry second list");
+        }
+    }
+
+    private static void TestType08TailRecordsAreLocatedFromTheEnd()
+    {
+        // A framed type 0x08 head, then a tail: unexplained bytes, a record count,
+        // one byte, that many twelve-byte records, and a zero sixteen-bit word.
+        static byte[] Build(byte[] headBytes, byte records, uint code, bool zeroWord = true)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(0x1234U);
+            writer.Write((byte)1);
+            writer.Write((byte)0x1B);
+            writer.Write(0U);
+            writer.Write((byte)1);
+            writer.Write((byte)0x15);
+            writer.Write(new byte[11]);
+            writer.Write(new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 });
+            writer.Write(0U);
+            writer.Write((byte)0);
+            writer.Write(headBytes);
+            writer.Write(records);
+            writer.Write((byte)0);
+            for (var i = 0; i < records; i++)
+            {
+                writer.Write(0.0f);
+                writer.Write(1.0f);
+                writer.Write(code);
+            }
+            writer.Write((ushort)(zeroWord ? 0 : 7));
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        static EndfieldHircType08TailCensus Census(byte[] body) => EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(((byte)0x08, 0x7701U, body))))
+            .BnkStructures[0].Type08Tail;
+
+        var located = Census(Build(new byte[15], 2, 4));
+        if (located.Tails != 1
+            || located.TailsWithAUniqueCount != 1
+            || located.Records != 2
+            || located.RecordCountCounts["records_2"] != 1
+            || located.ThirdFieldCounts["code_4"] != 2
+            || located.UnexplainedHeadBytes != 17)
+        {
+            throw new InvalidOperationException("type 0x08 tail run was not located from the end");
+        }
+
+        // Without the closing zero word there is nothing to anchor on, and the census
+        // must say so rather than search for a run that fits.
+        var noWord = Census(Build(new byte[15], 2, 4, zeroWord: false));
+        if (noWord.NoZeroWordAtTheEnd != 1 || noWord.TailsWithAUniqueCount != 0)
+        {
+            throw new InvalidOperationException("type 0x08 tail anchored without its zero word");
+        }
+
+        // A body the reader frames outright has no tail to census, and must not be
+        // counted as one that does.
+        var framed = Census(Build(Array.Empty<byte>(), 0, 0, zeroWord: true));
+        if (framed.Tails + framed.FramedByTheReader != 1)
+        {
+            throw new InvalidOperationException("type 0x08 tail census lost a body");
+        }
+
+        // Two counts that both fit make the alignment arithmetic rather than
+        // evidence, so the body must be reported ambiguous and contribute no records.
+        var ambiguousHead = new byte[15];
+        // A tail of this length also admits a three-record reading, whose count byte
+        // would land at offset 3. Making that byte a 3 gives two lengths that both fit.
+        ambiguousHead[3] = 3;
+        var ambiguous = Census(Build(ambiguousHead, 2, 4));
+        if (ambiguous.CountIsAmbiguous != 1 || ambiguous.Records != 0)
+        {
+            throw new InvalidOperationException("type 0x08 tail accepted an ambiguous count");
         }
     }
 
