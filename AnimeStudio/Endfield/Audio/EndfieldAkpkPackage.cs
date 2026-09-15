@@ -2615,9 +2615,34 @@ namespace AnimeStudio.Endfield
         internal const int Type11ElementLongTrailerBytes = 24;
         internal const int Type11ElementHeadBytes = 17;
         internal const int Type11ElementRecordBytes = 12;
-        // The field that carries the record count in just over half the elements that
-        // have one. Censused, not trusted: it is not yet the rule.
-        internal const int Type11ElementCountOffset = 8;
+        // The element's own frame: five head bytes whose first is the run count, then
+        // that many runs, then a fixed twelve-byte block. A run is a twelve-byte
+        // header whose byte at +7 counts the twelve-byte records that follow it.
+        internal const int Type11ElementHeadBytes5 = 5;
+        internal const int Type11ElementRunHeaderBytes = 12;
+        internal const int Type11ElementRunCountOffset = 7;
+        internal const int Type11ElementTrailingBlockBytes = 12;
+        internal const int Type11ElementRunCountField = 0;
+        internal const byte Type11ElementMaximumRuns = 16;
+        internal const byte Type11ElementMaximumRecords = 64;
+        // Rival frames, scored the same way. Each is (head, runHeader, countOffset,
+        // trailingBlock); the first is the chosen one.
+        internal static readonly (int Head, int RunHeader, int CountOffset, int Trailing)[]
+            Type11ElementFrameRivals =
+        {
+            (5, 12, 7, 12),
+            (5, 12, 7, 0),
+            (17, 12, 7, 0),
+            (5, 12, 11, 12),
+            (5, 12, 0, 12),
+            (5, 12, 3, 12),
+            (5, 11, 7, 12),
+            (5, 13, 7, 12),
+            (5, 12, 7, 11),
+            (5, 12, 7, 13),
+            (6, 12, 6, 12),
+            (4, 12, 8, 12),
+        };
         // Anchors the chosen trailer lengths are scored against. A trailer pair is only
         // established if the element bodies it leaves are congruent to the head length
         // modulo the record size far more often than any rival pair manages.
@@ -4065,6 +4090,44 @@ namespace AnimeStudio.Endfield
             HircBump(census.TrailerForm, shortForm ? "short" : "long", 1);
             var elementBody = element.Length
                 - (shortForm ? Type11ElementShortTrailerBytes : Type11ElementLongTrailerBytes);
+            // Score every candidate frame, the chosen one included, and keep the
+            // elements that declare no runs apart. An element with no runs closes
+            // under almost any frame whose head and trailing block happen to add up,
+            // and there are 2,491 of them against 1,151 that actually exercise the
+            // run walk -- so a headline rate over all of them measures the corpus, not
+            // the frame. The gate reads the exercising subset.
+            var declaredRuns = element.Length > Type11ElementRunCountField
+                ? element[Type11ElementRunCountField]
+                : (byte)0;
+            if (declaredRuns > 0)
+            {
+                census.ElementsWithRuns = checked(census.ElementsWithRuns + 1);
+            }
+            foreach (var (head, runHeader, countOffset, trailing) in Type11ElementFrameRivals)
+            {
+                var label = $"frame_{head}_{runHeader}_{countOffset}_{trailing}";
+                if (!TryWalkType11Element(
+                        element, elementBody, head, runHeader, countOffset, trailing,
+                        out _, out _))
+                {
+                    continue;
+                }
+                HircBump(census.FrameCloses, label, 1);
+                if (declaredRuns > 0)
+                {
+                    HircBump(census.FrameClosesWithRuns, label, 1);
+                }
+            }
+            if (TryWalkType11Element(
+                    element, elementBody,
+                    Type11ElementHeadBytes5, Type11ElementRunHeaderBytes,
+                    Type11ElementRunCountOffset, Type11ElementTrailingBlockBytes,
+                    out var walkedRuns, out var walkedRecords))
+            {
+                census.ElementFrames = checked(census.ElementFrames + 1);
+                HircBump(census.RunsPerElement, $"runs_{Math.Min(walkedRuns, 8)}", 1);
+                HircBump(census.RecordsPerFramedElement, $"records_{Math.Min(walkedRecords, 16)}", 1);
+            }
             if (elementBody < Type11ElementHeadBytes
                 || (elementBody - Type11ElementHeadBytes) % Type11ElementRecordBytes != 0)
             {
@@ -4074,19 +4137,59 @@ namespace AnimeStudio.Endfield
             var k = (elementBody - Type11ElementHeadBytes) / Type11ElementRecordBytes;
             census.Framed = checked(census.Framed + 1);
             HircBump(census.RecordsPerElement, $"records_{Math.Min(k, 16)}", 1);
-            if (k == 0)
+            if (k > 0)
             {
-                // Excluded from the count-field score on purpose: an element with no
-                // records agrees with any zero field for free, and 2,491 of them would
-                // turn a half-right guess into a 3,066-strong result.
-                return;
+                census.ElementsWithRecords = checked(census.ElementsWithRecords + 1);
             }
-            census.ElementsWithRecords = checked(census.ElementsWithRecords + 1);
-            if (element.Length > Type11ElementCountOffset
-                && element[Type11ElementCountOffset] == k)
+        }
+
+        /// <summary>
+        /// Walk one element body under a candidate frame, or refuse.
+        /// </summary>
+        private static bool TryWalkType11Element(
+            ReadOnlySpan<byte> element,
+            int bodyBytes,
+            int head,
+            int runHeader,
+            int countOffset,
+            int trailing,
+            out int runs,
+            out int records)
+        {
+            runs = 0;
+            records = 0;
+            if (element.Length < bodyBytes || bodyBytes < head)
             {
-                census.CountFieldAgrees = checked(census.CountFieldAgrees + 1);
+                return false;
             }
+            var declared = element[Type11ElementRunCountField];
+            if (declared > Type11ElementMaximumRuns)
+            {
+                return false;
+            }
+            var cursor = head;
+            for (var run = 0; run < declared; run++)
+            {
+                if (cursor + runHeader > bodyBytes || cursor + countOffset >= bodyBytes)
+                {
+                    return false;
+                }
+                var count = element[cursor + countOffset];
+                if (count > Type11ElementMaximumRecords)
+                {
+                    return false;
+                }
+                cursor = checked(cursor + runHeader);
+                var span = checked(count * Type11ElementRecordBytes);
+                if (span > bodyBytes - cursor)
+                {
+                    return false;
+                }
+                cursor = checked(cursor + span);
+                records = checked(records + count);
+            }
+            runs = declared;
+            return checked(cursor + trailing) == bodyBytes;
         }
 
         private const int Type17RunElementBytes = 6;
@@ -5221,6 +5324,15 @@ namespace AnimeStudio.Endfield
         // test; the first is the control that shows the second is not just closure.
         public Dictionary<string, uint> AnchorSelectsOneTrailer { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> AnchorLeavesWholeRecords { get; } = new(StringComparer.Ordinal);
+        // The element's own frame. FrameCloses counts every element a candidate frame
+        // closes; FrameClosesWithRuns counts only the elements that declare at least
+        // one run, which are the ones whose run walk is exercised at all.
+        public uint ElementsWithRuns { get; set; }
+        public uint ElementFrames { get; set; }
+        public Dictionary<string, uint> FrameCloses { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> FrameClosesWithRuns { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RunsPerElement { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether numeric type 0x0A's head-length rule puts the reference where it says.
