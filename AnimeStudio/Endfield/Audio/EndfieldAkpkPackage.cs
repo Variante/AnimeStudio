@@ -28,6 +28,7 @@ namespace AnimeStudio.Endfield
         public int SoundCount { get; private set; }
         public int ExternalCount { get; private set; }
         public List<EndfieldBnkStructure> BnkStructures { get; } = new();
+        public EndfieldHircMediaJoinCensus MediaJoin { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -104,7 +105,40 @@ namespace AnimeStudio.Endfield
             package.SoundCount = package.ParseSector(reader, soundsStart, soundsSectorSize, isSounds: true, isExternals: false);
             var externalsStart = checked(soundsStart + checked((int)soundsSectorSize));
             package.ExternalCount = package.ParseSector(reader, externalsStart, externalsSectorSize, isSounds: true, isExternals: true);
+            package.JoinType2SourcesToMedia();
             return package;
+        }
+
+
+        // Runs once every sector is parsed, because it needs both the HIRC bodies and
+        // the media table. Counts are over distinct source ids per plug-in id: the same
+        // id declared twice is one media question, not two.
+        private void JoinType2SourcesToMedia()
+        {
+            foreach (var entry in Entries)
+            {
+                if (entry.Id <= uint.MaxValue)
+                {
+                    MediaJoin.MediaIds.Add(checked((uint)entry.Id));
+                }
+            }
+            MediaJoin.MediaEntries = checked((uint)MediaJoin.MediaIds.Count);
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.Type2SourcesByPlugin)
+                {
+                    var key = $"plugin_{pair.Key:X8}";
+                    if (!MediaJoin.SourceIdsByPlugin.TryGetValue(key, out var ids))
+                    {
+                        ids = new SortedSet<uint>();
+                        MediaJoin.SourceIdsByPlugin[key] = ids;
+                    }
+                    foreach (var sourceId in pair.Value)
+                    {
+                        ids.Add(sourceId);
+                    }
+                }
+            }
         }
 
         private static uint ReadUInt32(BinaryReader reader, string field)
@@ -1203,6 +1237,14 @@ namespace AnimeStudio.Endfield
             // records are checked against this set, and that check only has force if
             // both sides are the same sparse 32-bit value.
             HircBump(structure.Type2PluginIdCounts, $"plugin_{pluginId:X8}", 1);
+            if (!structure.Type2SourcesByPlugin.TryGetValue(pluginId, out var pluginSources))
+            {
+                pluginSources = new HashSet<uint>();
+                structure.Type2SourcesByPlugin[pluginId] = pluginSources;
+            }
+            // The source id is the bounded prefix's third field: plug-in id, stream type,
+            // then the id, at body offset five.
+            pluginSources.Add(BitConverter.ToUInt32(payload, checked(bodyStart + 5)));
             structure.Type2PrefixBytes = checked(structure.Type2PrefixBytes + (uint)prefixLength);
             var opaqueLength = checked(bodyLength - prefixLength);
             structure.Type2OpaqueTailBytes = checked(structure.Type2OpaqueTailBytes + (uint)opaqueLength);
@@ -2877,6 +2919,9 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
+        // (plug-in id -> source ids) for numeric type 0x02, kept so the package can
+        // join them against its own media entries once every sector is parsed.
+        public Dictionary<uint, HashSet<uint>> Type2SourcesByPlugin { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2962,6 +3007,22 @@ namespace AnimeStudio.Endfield
     // published beside it. A layout that consumes four bodies exactly is a weak claim
     // on its own; what makes the eight-byte value width more than a fit is that some
     // bodies actually carry a nonempty second block, and those are counted here.
+    // The two id sets a media join needs, reported rather than joined here.
+    //
+    // Joining them inside one package is the wrong question: a bank's media almost
+    // always lives in a *different* package of the same corpus, so a same-package
+    // join answers 12 of 75,958 and means nothing. The union belongs to whoever can
+    // see every package, so this type carries the inputs and no verdict.
+    public sealed class EndfieldHircMediaJoinCensus
+    {
+        public uint MediaEntries { get; set; }
+        public SortedSet<uint> MediaIds { get; } = new();
+        // Distinct source ids per plug-in id, so a caller can test whether the
+        // plug-in decides the outcome instead of assuming it.
+        public Dictionary<string, SortedSet<uint>> SourceIdsByPlugin { get; } =
+            new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircSmallTypeCensus
     {
         public uint Bodies { get; set; }
