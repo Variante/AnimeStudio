@@ -203,6 +203,11 @@ namespace AnimeStudio.CLI
                                 ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
+                            ["hircType0AHead"] = new Dictionary<string, object?>
+                            {
+                                ["bodies"] = package.Type0AHead.Bodies,
+                                ["namesTheSourceType"] = package.Type0AHead.NamesTheSourceType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircMusicReferences"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.MusicReferences.Bodies,

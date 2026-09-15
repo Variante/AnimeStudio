@@ -33,6 +33,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType08TailWordCensus Type08TailWords { get; } = new();
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
+        public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -114,6 +115,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType03Targets();
             package.ClassifyType08TailWords();
             package.ClassifyMusicReferences();
+            package.ClassifyType0AHeadPredictions();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -371,6 +373,51 @@ namespace AnimeStudio.Endfield
                 var targetType = Convert.ToByte(pair.Key.Substring(pair.Key.Length - 2), 16);
                 var declared = population.TryGetValue(targetType, out var set) ? (uint)set.Count : 0U;
                 HircBump(MusicReferences.TargetPopulation, pair.Key, declared);
+            }
+        }
+
+
+        /// <summary>
+        /// Test numeric type 0x0A's head-length rule against its controls.
+        /// </summary>
+        /// <remarks>
+        /// The rule says the head is a fixed part plus a counted run of five-byte
+        /// elements, so the reference that follows sits at a position the count
+        /// decides. It is worth nothing unless the count is what puts it there, which
+        /// is what the controls measure: a fixed offset that ignores the count, and the
+        /// two neighbouring positions.
+        /// </remarks>
+        private void ClassifyType0AHeadPredictions()
+        {
+            var everything = new HashSet<uint>();
+            var typeOf = new Dictionary<uint, byte>();
+            foreach (var structure in BnkStructures)
+            {
+                everything.UnionWith(structure.DeclaredObjectIds);
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
+            }
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var (predicted, fixedWord, plus, minus) in structure.Type0AHeadPredictions)
+                {
+                    Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
+                    void Score(string label, uint word)
+                    {
+                        if (everything.Contains(word)
+                            && typeOf.TryGetValue(word, out var targetType)
+                            && targetType == 11)
+                        {
+                            HircBump(Type0AHead.NamesTheSourceType, label, 1);
+                        }
+                    }
+                    Score("predicted", predicted);
+                    Score("fixedOffset", fixedWord);
+                    Score("predictedPlusFour", plus);
+                    Score("predictedMinusFour", minus);
+                }
             }
         }
 
@@ -1113,6 +1160,12 @@ namespace AnimeStudio.Endfield
                 {
                     var head = structure.MusicHeadReferences;
                     head.Bodies = checked(head.Bodies + 1);
+                    if (objectType == 10)
+                    {
+                        CollectType0AHeadPrediction(
+                            structure.Type0AHeadPredictions,
+                            payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
+                    }
                     CollectMusicBodyWords(
                         structure.MusicBodyWords,
                         objectType,
@@ -2574,6 +2627,45 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x08's tail is anchored by a nine-byte constant that every body
         // carries. It is treated as a landmark, not as data: a body whose bytes do not
         // match it here is refused rather than framed with an offset that fits.
+        // Numeric type 0x0A's head: a fixed part, then that many five-byte elements,
+        // then the reference. The count sits at byte 14 -- it equals (headLength - 36)
+        // / 5 in every body of the dominant family, all 3,441 of them.
+        internal const int Type0AHeadCountOffset = 14;
+        internal const int Type0AHeadFixedBytes = 36;
+        internal const int Type0AHeadElementBytes = 5;
+
+        /// <summary>
+        /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
+        /// </summary>
+        /// <remarks>
+        /// Three controls, because a formula that hits often is not evidence on its own.
+        /// The fixed offset asks whether the count matters at all; the two neighbours
+        /// ask whether the position is the one the rule names or merely near it.
+        /// </remarks>
+        private static void CollectType0AHeadPrediction(
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus)> sink,
+            ReadOnlySpan<byte> body)
+        {
+            if (body.Length <= Type0AHeadCountOffset)
+            {
+                return;
+            }
+            var at = checked(Type0AHeadFixedBytes + Type0AHeadElementBytes * body[Type0AHeadCountOffset]);
+            if (at + 4 > body.Length)
+            {
+                return;
+            }
+            static uint Read(ReadOnlySpan<byte> span, int offset) =>
+                offset >= 0 && offset + 4 <= span.Length
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4))
+                    : 0U;
+            sink.Add((
+                Read(body, at),
+                Read(body, Type0AHeadFixedBytes),
+                Read(body, at + 4),
+                Read(body, at - 4)));
+        }
+
         /// <summary>
         /// Keep every distinct nonzero 32-bit word a music body contains.
         /// </summary>
@@ -4005,6 +4097,9 @@ namespace AnimeStudio.Endfield
         // cannot be read from a known offset; every word is offered instead and the
         // sparseness of the id space decides which are real.
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
+        // Per numeric type 0x0A body: the word the head-length rule predicts, and three
+        // controls. Classified once the package's object set is known.
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4187,6 +4282,13 @@ namespace AnimeStudio.Endfield
         public uint Null { get; set; }
         public uint Unresolved { get; set; }
         public uint TooShort { get; set; }
+    }
+
+    // Whether numeric type 0x0A's head-length rule puts the reference where it says.
+    public sealed class EndfieldHircType0AHeadCensus
+    {
+        public uint Bodies { get; set; }
+        public Dictionary<string, uint> NamesTheSourceType { get; } = new(StringComparer.Ordinal);
     }
 
     // Which words in a music body name objects the package ships, and what they name.
