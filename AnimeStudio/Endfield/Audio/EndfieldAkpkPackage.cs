@@ -2689,6 +2689,9 @@ namespace AnimeStudio.Endfield
         // The second counted run, present only when the flag byte is nonzero.
         internal const int Type0AHeadSecondCountOffset = 21;
         internal const int Type0AHeadSecondRunFixedBytes = 7;
+        // Above this, byte 21 is not a count and a fixed block follows instead.
+        internal const int Type0AHeadSecondCountCeiling = 16;
+        internal const int Type0AHeadFixedBlockBytes = 16;
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2710,10 +2713,18 @@ namespace AnimeStudio.Endfield
             // nonzero a second run follows, seven bytes plus five per body[21]. In the
             // bodies where byte 17 is zero, byte 21 is zero too, so the second term
             // vanishes and the rule reduces to the single-run form.
+            // Three shapes, selected by two bytes. Byte 17 says whether anything
+            // follows the first run at all. Byte 21 then says which: read as a count it
+            // gives a second five-byte run, but in some bodies it is part of a 32-bit
+            // value rather than a count, and those carry a fixed sixteen-byte block
+            // instead. Its magnitude separates the two -- a count here is never above
+            // a handful, and the bodies carrying the block hold 65, 97, 111 or 243.
             var extra = body[Type0AHeadDiscriminantOffset] == 0
                 ? 0
-                : checked(Type0AHeadSecondRunFixedBytes
-                    + Type0AHeadElementBytes * body[Type0AHeadSecondCountOffset]);
+                : body[Type0AHeadSecondCountOffset] <= Type0AHeadSecondCountCeiling
+                    ? checked(Type0AHeadSecondRunFixedBytes
+                        + Type0AHeadElementBytes * body[Type0AHeadSecondCountOffset])
+                    : Type0AHeadFixedBlockBytes;
             var at = checked(
                 Type0AHeadFixedBytes + Type0AHeadElementBytes * body[Type0AHeadCountOffset] + extra);
             if (at + 4 > body.Length)
