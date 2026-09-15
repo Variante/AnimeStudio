@@ -1235,6 +1235,46 @@ namespace AnimeStudio.Endfield
                 HircBump(census.ArrayLengths, $"entries_{Math.Min(count, 9)}", 1);
             }
 
+            // The region after the array, and the flag that lengthens it.
+            if (resolved)
+            {
+                var regionStart = checked(start + 4 * (int)count);
+                var flagAt = checked(regionStart + Type0CRegionFlagOffset);
+                if (flagAt < body.Length)
+                {
+                    var flag = body[flagAt];
+                    HircBump(census.RegionFlags, $"flag_{Math.Min((int)flag, 9)}", 1);
+                    var next = -1;
+                    for (var o = regionStart; o + 4 <= body.Length; o++)
+                    {
+                        if (bankObjectTypes.ContainsKey(BinaryPrimitives.ReadUInt32LittleEndian(
+                                body.Slice(o, 4))))
+                        {
+                            next = o;
+                            break;
+                        }
+                    }
+                    if (next >= 0)
+                    {
+                        if (flag <= Type0CRegionMaximumFlag)
+                        {
+                            census.RegionGapsTested = checked(census.RegionGapsTested + 1);
+                            var want = checked(Type0CRegionBaseGap + Type0CRegionBlockBytes * flag);
+                            if (next - regionStart == want)
+                            {
+                                census.RegionGapsPredicted =
+                                    checked(census.RegionGapsPredicted + 1);
+                            }
+                        }
+                        else
+                        {
+                            census.RegionFlagAboveTheObservedRange =
+                                checked(census.RegionFlagAboveTheObservedRange + 1);
+                        }
+                    }
+                }
+            }
+
             // Every rival base, scored the same way, so the offset is discriminated
             // rather than asserted.
             foreach (var rival in Type0CArrayRivalBases)
@@ -3285,6 +3325,18 @@ namespace AnimeStudio.Endfield
         // where 0, 4, 6 and 8 reach 564, and the 140 it adds are exactly the bodies
         // whose selector is nonzero.
         internal static readonly int[] Type0CArrayRivalBases = { 28, 30, 31, 33, 34, 36, 40 };
+        // After the array comes a fixed 96-byte region, then a flag, then a 27-byte
+        // block the flag gates, then the next reference. The flag is INSIDE the region
+        // rather than in the body header, which is why a header scan never found it.
+        //
+        // The multiplier form holds for 0 and 1 only: flag 0 puts the next reference 99
+        // bytes after the array and flag 1 puts it 126, but flag 2 gives 155, 167 or
+        // 215 rather than the 153 a repeat would predict. So this is a gate on one
+        // block, not a count of them, and values above 1 are censused as unexplained.
+        internal const int Type0CRegionFlagOffset = 96;
+        internal const int Type0CRegionBaseGap = 99;
+        internal const int Type0CRegionBlockBytes = 27;
+        internal const byte Type0CRegionMaximumFlag = 1;
         // The parent field: an object naming the object that owns it, at a fixed front
         // offset. Found by sweeping front offsets and asking which carry a reference in
         // most bodies, then keeping only those whose target names the child back.
@@ -6585,6 +6637,10 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> SelectorValues { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ArrayLengths { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> TargetTypes { get; } = new(StringComparer.Ordinal);
+        public uint RegionGapsTested { get; set; }
+        public uint RegionGapsPredicted { get; set; }
+        public uint RegionFlagAboveTheObservedRange { get; set; }
+        public Dictionary<string, uint> RegionFlags { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0C's parent relation, read at a fixed front offset.

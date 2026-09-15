@@ -276,6 +276,10 @@ namespace AnimeStudio.CLI
                                 ["selectorValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.SelectorValues)),
                                 ["arrayLengths"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.ArrayLengths)),
                                 ["targetTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.TargetTypes)),
+                                ["regionGapsTested"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.RegionGapsTested),
+                                ["regionGapsPredicted"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.RegionGapsPredicted),
+                                ["regionFlagAboveTheObservedRange"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.RegionFlagAboveTheObservedRange),
+                                ["regionFlags"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.RegionFlags)),
                             },
                             ["hircType0CHierarchy"] = new Dictionary<string, object?>
                             {
