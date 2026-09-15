@@ -40,6 +40,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicReachCensus MusicReach { get; } = new();
         public EndfieldHircStmgWordCensus StmgWords { get; } = new();
         public EndfieldStmgCensus Stmg { get; } = new();
+        public EndfieldInitCensus Init { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -131,6 +132,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType0ACountedArray();
             package.WalkMusicFromActions();
             package.FrameStmgSections();
+            package.FrameInitAndPlat();
             package.ResolveStmgWords();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
@@ -1583,6 +1585,30 @@ namespace AnimeStudio.Endfield
         // 8 to 20 collapses them to between 107 and 220. And at 12 the word directly
         // after the run is 15 -- a small count that frames a further block -- where
         // every other stride lands on zero or on an arbitrary large value.
+        // INIT is a plugin name table, and it is self-describing: a u32 count, then
+        // that many entries of `u16 company, u16 plugin, NUL-terminated ASCII name`.
+        // It closes byte-exactly at 347 bytes over 22 entries, which is the whole
+        // check -- a wrong field order would not land on the section end.
+        //
+        // What makes it worth parsing is the join -- which is NOT done here. INIT lives
+        // in init_banks.pck and the 147,262 source records live in default_banks.pck,
+        // so a package-local join scores 1. This is the third field in this format whose
+        // two sides sit in different packages, after the media ids and the source ids.
+        // *When a table and its users are in separate files, the join belongs in the
+        // pass that already unions the files.*
+        //
+        // The plugin id word at the front of
+        // the 14-byte source record decomposes as `(plugin << 16) | company`, and every
+        // company-2 value the corpus carries is named here: 0x00640002 AkSineTone,
+        // 0x00650002 AkSilenceGenerator, 0x00940002 AkSynthOne, 0x01990002 AkMotion.
+        // The company-1 values are not, and that is not a failure: INIT lists plugin
+        // DLLs, and company 1 is the built-in codec set.
+        internal const int InitEntryHeadBytes = 4;
+        internal const uint InitMaximumEntries = 1024;
+        internal const int InitMaximumNameBytes = 256;
+        // PLAT is a single NUL-terminated platform name.
+        internal const int PlatMaximumBytes = 256;
+
         // STMG's middle block: a counted run of variable-length entries.
         //
         // One STMG in the corpus, but FIFTEEN entries inside this block, and they must
@@ -1953,6 +1979,100 @@ namespace AnimeStudio.Endfield
             Stmg.EntryRecordsCarryingTheMarker =
                 checked(Stmg.EntryRecordsCarryingTheMarker + markers);
             return true;
+        }
+
+
+        /// <summary>
+        /// Frame the INIT plugin name table and the PLAT platform string.
+        /// </summary>
+        private void FrameInitAndPlat()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var section in structure.Sections)
+                {
+                    if (section.Body is null)
+                    {
+                        continue;
+                    }
+                    if (section.Tag == "PLAT")
+                    {
+                        Init.PlatSections = checked(Init.PlatSections + 1);
+                        var terminator = Array.IndexOf(section.Body, (byte)0);
+                        if (terminator < 0 || terminator != section.Body.Length - 1
+                            || section.Body.Length > PlatMaximumBytes)
+                        {
+                            Init.PlatSectionsNotClosing =
+                                checked(Init.PlatSectionsNotClosing + 1);
+                            continue;
+                        }
+                        Init.PlatSectionsFramed = checked(Init.PlatSectionsFramed + 1);
+                        HircBump(
+                            Init.PlatformNames,
+                            Encoding.ASCII.GetString(section.Body, 0, terminator),
+                            1);
+                        continue;
+                    }
+                    if (section.Tag != "INIT")
+                    {
+                        continue;
+                    }
+                    Init.Sections = checked(Init.Sections + 1);
+                    var body = section.Body;
+                    if (body.Length < 4)
+                    {
+                        Init.SectionsTooShort = checked(Init.SectionsTooShort + 1);
+                        continue;
+                    }
+                    var declared = BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.AsSpan(0, 4));
+                    if (declared == 0 || declared > InitMaximumEntries)
+                    {
+                        Init.CountOutOfRange = checked(Init.CountOutOfRange + 1);
+                        continue;
+                    }
+                    var cursor = 4;
+                    var names = new Dictionary<uint, string>();
+                    var failed = false;
+                    for (var entry = 0U; entry < declared; entry++)
+                    {
+                        if (checked(cursor + InitEntryHeadBytes) > body.Length)
+                        {
+                            failed = true;
+                            break;
+                        }
+                        var company = BinaryPrimitives.ReadUInt16LittleEndian(
+                            body.AsSpan(cursor, 2));
+                        var plugin = BinaryPrimitives.ReadUInt16LittleEndian(
+                            body.AsSpan(cursor + 2, 2));
+                        cursor = checked(cursor + InitEntryHeadBytes);
+                        var terminator = Array.IndexOf(body, (byte)0, cursor);
+                        if (terminator < 0
+                            || terminator - cursor > InitMaximumNameBytes)
+                        {
+                            failed = true;
+                            break;
+                        }
+                        names[((uint)plugin << 16) | company] =
+                            Encoding.ASCII.GetString(body, cursor, terminator - cursor);
+                        cursor = terminator + 1;
+                    }
+                    if (failed || cursor != body.Length)
+                    {
+                        // Self-describing and bounded, so anything short of byte-exact
+                        // is a failure rather than a partial frame.
+                        Init.SectionsNotClosing = checked(Init.SectionsNotClosing + 1);
+                        continue;
+                    }
+                    Init.SectionsFramed = checked(Init.SectionsFramed + 1);
+                    Init.Entries = checked(Init.Entries + declared);
+                    Init.DistinctPluginIds = checked(Init.DistinctPluginIds + (uint)names.Count);
+                    foreach (var pair in names)
+                    {
+                        Init.PluginNames[pair.Key] = pair.Value;
+                    }
+                }
+            }
         }
 
 
@@ -7859,6 +7979,23 @@ namespace AnimeStudio.Endfield
         public uint EntryRecords { get; set; }
         public uint EntryRecordsCarryingTheMarker { get; set; }
         public Dictionary<string, uint> EntryRecordCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // The INIT plugin name table and the PLAT platform string.
+    public sealed class EndfieldInitCensus
+    {
+        public uint Sections { get; set; }
+        public uint SectionsTooShort { get; set; }
+        public uint CountOutOfRange { get; set; }
+        public uint SectionsNotClosing { get; set; }
+        public uint SectionsFramed { get; set; }
+        public uint Entries { get; set; }
+        public uint DistinctPluginIds { get; set; }
+        public uint PlatSections { get; set; }
+        public uint PlatSectionsNotClosing { get; set; }
+        public uint PlatSectionsFramed { get; set; }
+        public Dictionary<uint, string> PluginNames { get; } = new();
+        public Dictionary<string, uint> PlatformNames { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the STMG section names HIRC objects at all.

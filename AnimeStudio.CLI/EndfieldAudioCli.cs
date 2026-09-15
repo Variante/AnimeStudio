@@ -159,7 +159,28 @@ namespace AnimeStudio.CLI
                             ["invalidExamples"] = invalidExamples,
                             ["languageNames"] = package.Languages.Values.Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray(),
                             ["bnkPayloads"] = package.BnkStructures.Count,
+                            // Bank ids, so that a media id nothing names can be told
+                            // apart from a bank id that was never audio in the first
+                            // place. Pooled in the audit, because the two live in
+                            // different packages.
+                            ["bnkBankIds"] = package.BnkStructures
+                                .Select(x => x.BankId).Distinct().OrderBy(x => x).ToArray(),
                             ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
+                            ["init"] = new Dictionary<string, object?>
+                            {
+                                ["sections"] = (long)package.Init.Sections,
+                                ["sectionsTooShort"] = (long)package.Init.SectionsTooShort,
+                                ["countOutOfRange"] = (long)package.Init.CountOutOfRange,
+                                ["sectionsNotClosing"] = (long)package.Init.SectionsNotClosing,
+                                ["sectionsFramed"] = (long)package.Init.SectionsFramed,
+                                ["entries"] = (long)package.Init.Entries,
+                                ["distinctPluginIds"] = (long)package.Init.DistinctPluginIds,
+                                ["platSections"] = (long)package.Init.PlatSections,
+                                ["platSectionsNotClosing"] = (long)package.Init.PlatSectionsNotClosing,
+                                ["platSectionsFramed"] = (long)package.Init.PlatSectionsFramed,
+                                ["platformNames"] = package.Init.PlatformNames.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["pluginNames"] = package.Init.PluginNames.OrderBy(z => z.Key).ToDictionary(z => $"{z.Key:X8}", z => z.Value),
+                            },
                             ["stmg"] = new Dictionary<string, object?>
                             {
                                 ["sections"] = (long)package.Stmg.Sections,
