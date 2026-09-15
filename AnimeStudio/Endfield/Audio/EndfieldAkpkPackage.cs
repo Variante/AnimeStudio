@@ -4362,6 +4362,20 @@ namespace AnimeStudio.Endfield
         // header is four bytes longer than 48 and overlaps what the element walk read.
         // The reader compensates where the evidence is, and says so rather than
         // inventing a field.
+        // Twelve bytes per element that are ALWAYS zero, and were never checked.
+        //
+        // The element head is 5 bytes and only byte 0 was used, the run count. Bytes 1,
+        // 2 and 3 are zero in all 3,861 first elements that frame. The run header is 11
+        // bytes and only byte 7 was used, the record count; nine of the other ten are
+        // zero in all 1,479 run headers that frame, leaving only byte 3 varying.
+        //
+        // Enforcing them costs nothing -- 4,115 bodies frame either way -- so this is
+        // free strictness: twelve bytes an element that the reader used to accept
+        // whatever was in them. *A field that is always zero is still a field, and a
+        // parser that does not check it will happily walk through garbage.*
+        internal static readonly int[] Type11ElementHeadZeroOffsets = { 1, 2, 3 };
+        internal static readonly int[] Type11RunHeaderZeroOffsets =
+            { 0, 1, 2, 4, 5, 6, 8, 9, 10 };
         internal const int Type11EntryStepBackBytes = 4;
         internal const int Type11EntryGainOffset = 32;
         internal const int Type11EntryGainControlOffset = 28;
@@ -6315,6 +6329,38 @@ namespace AnimeStudio.Endfield
                         return HircFrameOutcome(
                             "failed", "range_element_runs", cursor, Type11ElementMaximumRuns, runs);
                     }
+                    foreach (var zero in Type11ElementHeadZeroOffsets)
+                    {
+                        if (body[cursor + zero] != 0)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "element_head_reserved_byte_is_not_zero",
+                                cursor + zero, 0, body[cursor + zero]);
+                        }
+                    }
+                    if (structureEntryHeaders is not null)
+                    {
+                        structureEntryHeaders.ReservedBytesChecked = checked(
+                            structureEntryHeaders.ReservedBytesChecked
+                            + (uint)Type11ElementHeadZeroOffsets.Length);
+                        // The control: the same number of bytes read five further on,
+                        // which is inside the run header rather than the head. If those
+                        // were zero too the invariant would be about the neighbourhood
+                        // and not about these three offsets.
+                        foreach (var zero in Type11ElementHeadZeroOffsets)
+                        {
+                            if (cursor + zero + 5 < end)
+                            {
+                                structureEntryHeaders.ReservedControlsChecked = checked(
+                                    structureEntryHeaders.ReservedControlsChecked + 1);
+                                if (body[cursor + zero + 5] == 0)
+                                {
+                                    structureEntryHeaders.ReservedControlsZero = checked(
+                                        structureEntryHeaders.ReservedControlsZero + 1);
+                                }
+                            }
+                        }
+                    }
                     cursor = checked(cursor + Type11ElementHeadBytes5);
                     HircBump(groups, "elementRuns", runs);
                     for (var run = 0; run < runs; run++)
@@ -6332,6 +6378,21 @@ namespace AnimeStudio.Endfield
                                 "failed", "range_run_records",
                                 cursor + Type11ElementRunCountOffset,
                                 Type11ElementMaximumRecords, records);
+                        }
+                        foreach (var zero in Type11RunHeaderZeroOffsets)
+                        {
+                            if (body[cursor + zero] != 0)
+                            {
+                                return HircFrameOutcome(
+                                    "failed", "run_header_reserved_byte_is_not_zero",
+                                    cursor + zero, 0, body[cursor + zero]);
+                            }
+                        }
+                        if (structureEntryHeaders is not null)
+                        {
+                            structureEntryHeaders.ReservedBytesChecked = checked(
+                                structureEntryHeaders.ReservedBytesChecked
+                                + (uint)Type11RunHeaderZeroOffsets.Length);
                         }
                         cursor = checked(cursor + Type11ElementRunHeaderBytes);
                         var recordSpan = checked(records * Type11ElementRecordBytes);
@@ -8103,6 +8164,10 @@ namespace AnimeStudio.Endfield
         public uint LaterEntryGainsPlausible { get; set; }
         public uint PairsTested { get; set; }
         public uint PairsEqual { get; set; }
+        // The twelve bytes an element carries that are always zero.
+        public uint ReservedBytesChecked { get; set; }
+        public uint ReservedControlsChecked { get; set; }
+        public uint ReservedControlsZero { get; set; }
         public uint FloatControlsTested { get; set; }
         public uint FloatControlsInBand { get; set; }
         public uint SourceJoinTested { get; set; }
