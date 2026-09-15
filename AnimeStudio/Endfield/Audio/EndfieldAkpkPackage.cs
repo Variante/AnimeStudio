@@ -29,6 +29,7 @@ namespace AnimeStudio.Endfield
         public int ExternalCount { get; private set; }
         public List<EndfieldBnkStructure> BnkStructures { get; } = new();
         public EndfieldHircMediaJoinCensus MediaJoin { get; } = new();
+        public EndfieldHircSourceRecordCensus SourceRecords { get; } = new();
         public EndfieldHircType03TargetCensus Type03Targets { get; } = new();
         public EndfieldHircType08TailWordCensus Type08TailWords { get; } = new();
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
@@ -137,6 +138,94 @@ namespace AnimeStudio.Endfield
         // Runs once every sector is parsed, because it needs both the HIRC bodies and
         // the media table. Counts are over distinct source ids per plug-in id: the same
         // id declared twice is one media question, not two.
+        /// <summary>
+        /// The 14-byte source record numeric types 0x02 and 0x0B share.
+        /// </summary>
+        /// <remarks>
+        /// 0x02 carries exactly one, at body offset 0. 0x0B carries a counted array of
+        /// them after its leading flag and count. That they are the same record is
+        /// shown twice over, not assumed from a matching width.
+        ///
+        /// The word at +0 is a plugin id from a closed set. 0x0B uses two values and
+        /// 0x02 opens with one of those same two in 140,121 of its 142,815 bodies.
+        ///
+        /// The word at +5 names a declared media id in **every** one of 0x0B's 4,447
+        /// records, and in 0 of them at any other offset in the record. That contrast
+        /// is what makes +5 the id field; a bare hit rate would not.
+        ///
+        /// Between them the two types account for 61,325 of the 61,333 media ids the
+        /// packages declare. Adding 0x0B closed 1,276 that no source record had named.
+        /// </remarks>
+        private static void CollectSourceRecord(
+            EndfieldBnkStructure structure, byte objectType, ReadOnlySpan<byte> record)
+        {
+            if (!structure.SourceRecordsByType.TryGetValue(objectType, out var rows))
+            {
+                rows = new List<byte[]>();
+                structure.SourceRecordsByType[objectType] = rows;
+            }
+            rows.Add(record.ToArray());
+        }
+
+
+        private void CensusSourceRecords()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.SourceRecordsByType)
+                {
+                    var typeKey = $"type{pair.Key:X2}";
+                    foreach (var record in pair.Value)
+                    {
+                        SourceRecords.Records = checked(SourceRecords.Records + 1);
+                        HircBump(SourceRecords.RecordsByType, typeKey, 1);
+                        if (record.Length < SourceRecordBytes)
+                        {
+                            SourceRecords.RecordsTooShort =
+                                checked(SourceRecords.RecordsTooShort + 1);
+                            continue;
+                        }
+                        HircBump(
+                            SourceRecords.PluginIdsByType,
+                            $"{typeKey}_plugin_{BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(0, 4)):X8}",
+                            1);
+                        // The id field and its two neighbours, published as distinct
+                        // value sets rather than joined here.
+                        //
+                        // The join CANNOT be done in this method: a source id names media
+                        // declared by a DIFFERENT package, so a package-local join scores
+                        // 12 of 147,262 and says nothing. The pooling happens in the
+                        // Python audit, which already unions every package's media.
+                        // *A join that must cross a file boundary cannot be gated inside
+                        // one file.*
+                        Collect(SourceRecords.IdValuesByType, typeKey,
+                                BinaryPrimitives.ReadUInt32LittleEndian(
+                                    record.AsSpan(SourceRecordIdOffset, 4)));
+                        Collect(SourceRecords.IdValuesBeforeByType, typeKey,
+                                BinaryPrimitives.ReadUInt32LittleEndian(
+                                    record.AsSpan(SourceRecordIdOffset - 1, 4)));
+                        Collect(SourceRecords.IdValuesAfterByType, typeKey,
+                                BinaryPrimitives.ReadUInt32LittleEndian(
+                                    record.AsSpan(SourceRecordIdOffset + 1, 4)));
+                    }
+                }
+            }
+            SourceRecords.MediaIdsDeclared = checked((uint)MediaJoin.MediaIds.Count);
+        }
+
+
+        private static void Collect(
+            Dictionary<string, SortedSet<uint>> map, string key, uint value)
+        {
+            if (!map.TryGetValue(key, out var set))
+            {
+                set = new SortedSet<uint>();
+                map[key] = set;
+            }
+            set.Add(value);
+        }
+
+
         private void JoinType2SourcesToMedia()
         {
             foreach (var entry in Entries)
@@ -147,6 +236,7 @@ namespace AnimeStudio.Endfield
                 }
             }
             MediaJoin.MediaEntries = checked((uint)MediaJoin.MediaIds.Count);
+            CensusSourceRecords();
             foreach (var structure in BnkStructures)
             {
                 foreach (var pair in structure.Type2SourcesByPlugin)
@@ -1318,10 +1408,18 @@ namespace AnimeStudio.Endfield
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
             var everything = new HashSet<uint>();
+            // Which TYPE an action addresses, not just which bank it lives in. The
+            // locality census cannot answer whether the music types are addressable
+            // from an action at all, and that is a different question.
+            var typeOf = new Dictionary<uint, byte>();
             foreach (var structure in BnkStructures)
             {
                 perBank[structure.BankId] = structure.DeclaredObjectIds;
                 everything.UnionWith(structure.DeclaredObjectIds);
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
             }
             foreach (var structure in BnkStructures)
             {
@@ -1338,12 +1436,20 @@ namespace AnimeStudio.Endfield
                     {
                         Type03Targets.SameBank = checked(Type03Targets.SameBank + 1);
                         HircBump(Type03Targets.SameBankByActionByte, key, 1);
+                        if (typeOf.TryGetValue(target, out var sameType))
+                        {
+                            HircBump(Type03Targets.TargetTypes, $"type{sameType:X2}", 1);
+                        }
                     }
                     else if (everything.Contains(target))
                     {
                         Type03Targets.OtherBankInPackage =
                             checked(Type03Targets.OtherBankInPackage + 1);
                         HircBump(Type03Targets.OtherBankByActionByte, key, 1);
+                        if (typeOf.TryGetValue(target, out var otherType))
+                        {
+                            HircBump(Type03Targets.TargetTypes, $"type{otherType:X2}", 1);
+                        }
                     }
                     else
                     {
@@ -1369,7 +1475,7 @@ namespace AnimeStudio.Endfield
             }
             var types = new Dictionary<uint, byte>();
             var edges = new Dictionary<uint, List<uint>>();
-            var sources = new Dictionary<uint, uint>();
+            var sources = new Dictionary<uint, List<uint>>();
             foreach (var structure in BnkStructures)
             {
                 foreach (var pair in structure.WalkObjectTypes)
@@ -1393,6 +1499,7 @@ namespace AnimeStudio.Endfield
                 census.ReachingASource = 0;
                 census.ReachingNoSource = 0;
                 census.ReachedSourceIds = 0;
+                census.ReachedObjectTypes.Clear();
                 census.WalkEdgesLeavingThePackage = 0;
                 census.MatchesByObjectType.Clear();
                 census.ReachedSourceIdsByIdentity.Clear();
@@ -1808,7 +1915,10 @@ namespace AnimeStudio.Endfield
             var referrerCounts = new Dictionary<uint, uint>();
             var referrerOf = new Dictionary<uint, uint>();
             var bankEdges = new Dictionary<uint, List<uint>>();
-            var bankSourceIds = new Dictionary<uint, uint>();
+            // One object can own several sources, which only became true when numeric
+            // type 0x0B joined this map: 0x02 carries exactly one record and 0x0B a
+            // counted array of the same record.
+            var bankSourceIds = new Dictionary<uint, List<uint>>();
             for (var ordinal = 0U; ordinal < objectCount; ordinal++)
             {
                 if (bodyEnd - cursor < 9)
@@ -1920,10 +2030,45 @@ namespace AnimeStudio.Endfield
                     {
                         bankEdges[objectId] = new List<uint>(frame.References);
                     }
-                    if (objectType == 2 && bodySpan.Length >= 14)
+                    // Numeric types 0x02 and 0x0B carry the SAME 14-byte source record.
+                    // 0x02 holds exactly one, at body offset 0; 0x0B holds a counted
+                    // array of them after its leading flag and count.
+                    //
+                    // The record is shared, not merely similar. Its word at +0 is a
+                    // plugin id drawn from a closed set: 0x0B uses 0x00040001 (3,506
+                    // records) and 0x00140001 (941), and 140,121 of 0x02's 142,815
+                    // bodies open with one of exactly those two. And its word at +5
+                    // names a declared media id in 4,447 of 4,447 of 0x0B's records --
+                    // against 0 at every other offset in the record, which is what
+                    // makes +5 the id field rather than a hit rate.
+                    if (objectType == 2 && bodySpan.Length >= SourceRecordBytes)
                     {
-                        bankSourceIds[objectId] =
-                            BinaryPrimitives.ReadUInt32LittleEndian(bodySpan.Slice(5, 4));
+                        bankSourceIds[objectId] = new List<uint>
+                        {
+                            BinaryPrimitives.ReadUInt32LittleEndian(
+                                bodySpan.Slice(SourceRecordIdOffset, 4)),
+                        };
+                        CollectSourceRecord(structure, 2, bodySpan.Slice(0, SourceRecordBytes));
+                    }
+                    else if (objectType == 11 && bodySpan.Length >= 5)
+                    {
+                        var declared = BinaryPrimitives.ReadUInt32LittleEndian(
+                            bodySpan.Slice(1, 4));
+                        if (declared > 0 && declared <= Type11MaximumRecords
+                            && checked(5 + (int)declared * SourceRecordBytes) <= bodySpan.Length)
+                        {
+                            var owned = new List<uint>();
+                            for (var record = 0U; record < declared; record++)
+                            {
+                                var at = checked(5 + (int)record * SourceRecordBytes);
+                                owned.Add(BinaryPrimitives.ReadUInt32LittleEndian(
+                                    bodySpan.Slice(
+                                        checked(at + SourceRecordIdOffset), 4)));
+                                CollectSourceRecord(
+                                    structure, 11, bodySpan.Slice(at, SourceRecordBytes));
+                            }
+                            bankSourceIds[objectId] = owned;
+                        }
                     }
                     ResolveHircReferences(
                         structure.ReferenceCensus,
@@ -2692,7 +2837,7 @@ namespace AnimeStudio.Endfield
             HashSet<uint> namedIdentityHashes,
             Dictionary<uint, byte> bankObjectTypes,
             Dictionary<uint, List<uint>> bankEdges,
-            Dictionary<uint, uint> bankSourceIds)
+            Dictionary<uint, List<uint>> bankSourceIds)
         {
             if (namedIdentityHashes == null || namedIdentityHashes.Count == 0)
             {
@@ -2737,9 +2882,19 @@ namespace AnimeStudio.Endfield
                         {
                             continue;
                         }
-                        if (bankSourceIds.TryGetValue(reference, out var sourceId))
+                        // Which types the walk actually arrives at. Without this the
+                        // report says how many sources were reached but not where the
+                        // walk stopped, and those are different questions.
+                        HircBump(
+                            census.ReachedObjectTypes,
+                            $"type{bankObjectTypes[reference]:X2}",
+                            1);
+                        if (bankSourceIds.TryGetValue(reference, out var owned))
                         {
-                            sources.Add(sourceId);
+                            foreach (var sourceId in owned)
+                            {
+                                sources.Add(sourceId);
+                            }
                         }
                         queue.Enqueue(reference);
                     }
@@ -3302,7 +3457,10 @@ namespace AnimeStudio.Endfield
         // Numeric HIRC type 0x07 opens with the shared node groups and ends with one
         // counted vector of fixed-width anonymous references.
         internal const int Type14ElementBytes = 12;
-        internal const int Type11SourceRecordBytes = 14;
+        // The source record numeric types 0x02 and 0x0B share.
+        internal const int SourceRecordBytes = 14;
+        internal const int SourceRecordIdOffset = 5;
+        internal const int Type11SourceRecordBytes = SourceRecordBytes;
         // Numeric type 0x0B's entry area: a 32-bit entry count, then that many entries.
         // Each entry opens with 48 header bytes whose word at 44 counts the elements
         // that follow.
@@ -6658,7 +6816,11 @@ namespace AnimeStudio.Endfield
         // Retained for the package-wide named-reach walk.
         public Dictionary<uint, byte> WalkObjectTypes { get; } = new();
         public Dictionary<uint, List<uint>> WalkEdges { get; } = new();
-        public Dictionary<uint, uint> WalkSourceIds { get; } = new();
+        // One object, several sources: numeric type 0x0B owns a counted array of
+        // the same 14-byte record numeric type 0x02 carries exactly one of.
+        public Dictionary<uint, List<uint>> WalkSourceIds { get; } = new();
+        // The 14-byte source records this bank carries, by the type that carries them.
+        public Dictionary<byte, List<byte[]>> SourceRecordsByType { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -6763,6 +6925,8 @@ namespace AnimeStudio.Endfield
     // classification is counted here rather than folded into the reference graph.
     public sealed class EndfieldHircType03TargetCensus
     {
+        // The object types an action's target word resolves to.
+        public Dictionary<string, uint> TargetTypes { get; } = new(StringComparer.Ordinal);
         public uint Objects { get; set; }
         public uint Zero { get; set; }
         public uint SameBank { get; set; }
@@ -6778,6 +6942,8 @@ namespace AnimeStudio.Endfield
     {
         public uint MediaEntries { get; set; }
         public SortedSet<uint> MediaIds { get; } = new();
+        // Media ids some source record names, whichever type carries the record.
+
         // Distinct source ids per plug-in id, so a caller can test whether the
         // plug-in decides the outcome instead of assuming it.
         public Dictionary<string, SortedSet<uint>> SourceIdsByPlugin { get; } =
@@ -6863,6 +7029,23 @@ namespace AnimeStudio.Endfield
         public uint ParentDeclaresNoChildren { get; set; }
         public Dictionary<string, uint> EdgeTypes { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> DisagreementTypes { get; } = new(StringComparer.Ordinal);
+    }
+
+    // The 14-byte source record numeric types 0x02 and 0x0B share.
+    public sealed class EndfieldHircSourceRecordCensus
+    {
+        public uint Records { get; set; }
+        public uint RecordsTooShort { get; set; }
+        public uint MediaIdsDeclared { get; set; }
+        // Distinct values at the id field and at the words one byte either side, per
+        // type. Joined against the pooled media set by the Python audit, because the
+        // media a record names are declared by another package.
+        public Dictionary<string, SortedSet<uint>> IdValuesByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, SortedSet<uint>> IdValuesBeforeByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, SortedSet<uint>> IdValuesAfterByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RecordsByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> NamingMediaByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> PluginIdsByType { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0C's counted reference array, at 32 + 5 * body[14].
@@ -7187,6 +7370,9 @@ namespace AnimeStudio.Endfield
 
     public sealed class EndfieldHircNamedReachCensus
     {
+        // Object types the walk arrives at, so a zero source count can be told apart
+        // from a walk that never left the first hop.
+        public Dictionary<string, uint> ReachedObjectTypes { get; } = new(StringComparer.Ordinal);
         public uint MatchedObjects { get; set; }
         public uint MatchedNamedType { get; set; }
         public uint ReachingASource { get; set; }

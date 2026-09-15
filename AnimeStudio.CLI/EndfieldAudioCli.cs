@@ -424,6 +424,7 @@ namespace AnimeStudio.CLI
                                 ["sameBank"] = package.Type03Targets.SameBank,
                                 ["otherBankInPackage"] = package.Type03Targets.OtherBankInPackage,
                                 ["outsidePackage"] = package.Type03Targets.OutsidePackage,
+                                ["targetTypes"] = package.Type03Targets.TargetTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["sameBankByActionByte"] = package.Type03Targets.SameBankByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["otherBankByActionByte"] = package.Type03Targets.OtherBankByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["outsideByActionByte"] = package.Type03Targets.OutsideByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
@@ -431,6 +432,18 @@ namespace AnimeStudio.CLI
                             ["hircMediaJoin"] = new Dictionary<string, object?>
                             {
                                 ["mediaEntries"] = package.MediaJoin.MediaEntries,
+                            ["hircSourceRecords"] = new Dictionary<string, object?>
+                            {
+                                ["records"] = (long)package.SourceRecords.Records,
+                                ["recordsTooShort"] = (long)package.SourceRecords.RecordsTooShort,
+                                ["mediaIdsDeclared"] = (long)package.SourceRecords.MediaIdsDeclared,
+                                ["idValuesByType"] = package.SourceRecords.IdValuesByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value.ToArray()),
+                                ["idValuesBeforeByType"] = package.SourceRecords.IdValuesBeforeByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value.ToArray()),
+                                ["idValuesAfterByType"] = package.SourceRecords.IdValuesAfterByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value.ToArray()),
+                                ["recordsByType"] = package.SourceRecords.RecordsByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["namingMediaByType"] = package.SourceRecords.NamingMediaByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["pluginIdsByType"] = package.SourceRecords.PluginIdsByType.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                                 ["mediaIds"] = package.MediaJoin.MediaIds.ToArray(),
                                 ["sourceIdsByPlugin"] = package.MediaJoin.SourceIdsByPlugin
                                     .OrderBy(z => z.Key, StringComparer.Ordinal)
@@ -857,6 +870,14 @@ namespace AnimeStudio.CLI
                     .ToDictionary(
                         group => group.Key,
                         group => group.Max(pair => (long)pair.Value),
+                        StringComparer.Ordinal),
+                ["reachedObjectTypes"] = rows
+                    .SelectMany(row => row.ReachedObjectTypes)
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Sum(pair => (long)pair.Value),
                         StringComparer.Ordinal),
                 ["banksMatched"] = rows.Sum(row => (long)row.BanksMatched),
                 ["banksSeen"] = rows.Sum(row => (long)row.BanksSeen),
