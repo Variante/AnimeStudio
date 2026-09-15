@@ -41,6 +41,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircStmgWordCensus StmgWords { get; } = new();
         public EndfieldStmgCensus Stmg { get; } = new();
         public EndfieldInitCensus Init { get; } = new();
+        public EndfieldEnvsCensus Envs { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -1606,6 +1607,20 @@ namespace AnimeStudio.Endfield
         internal const int InitEntryHeadBytes = 4;
         internal const uint InitMaximumEntries = 1024;
         internal const int InitMaximumNameBytes = 256;
+        // ENVS is a run of curves, and its point is the SAME 12-byte record numeric
+        // type 0x0B carries: `f32 x, f32 y, u32 interpolation`.
+        //
+        // Three shapes consume the section exactly with every curve non-empty; the
+        // content separates them. At head 4 with the count at +2 and a 12-byte point,
+        // all 16 interpolation codes are 0 to 9, x is non-decreasing in all 6 curves,
+        // and all 16 floats are bounded. The nearest rival -- head 12, count at +2,
+        // 18-byte record -- puts 3 of 10 codes in range and orders 1 of 3 curves.
+        internal const int EnvsCurveHeadBytes = 4;
+        internal const int EnvsCurveCountOffset = 2;
+        internal const int EnvsPointBytes = 12;
+        internal const uint EnvsMaximumInterpolation = 9;
+        internal const int EnvsMaximumCurves = 256;
+
         // PLAT is a single NUL-terminated platform name.
         internal const int PlatMaximumBytes = 256;
 
@@ -1983,6 +1998,89 @@ namespace AnimeStudio.Endfield
 
 
         /// <summary>
+        /// Frame the ENVS section: a run of curves over the shared 12-byte point.
+        /// </summary>
+        /// <remarks>
+        /// Each curve is `u8, u8, u8 count, u8` then that many points of `f32 x, f32 y,
+        /// u32 interpolation` -- the same record numeric type 0x0B's element runs carry.
+        /// The section has no count of its own; the run ends when the bytes do, so
+        /// byte-exact closure is what makes the walk a frame rather than a scan.
+        /// </remarks>
+        private void FrameEnvsSection(byte[] body)
+        {
+            Envs.Sections = checked(Envs.Sections + 1);
+            Envs.SectionBytes = checked(Envs.SectionBytes + (uint)body.Length);
+            var cursor = 0;
+            var curves = 0U;
+            var points = 0U;
+            var inRange = 0U;
+            var bounded = 0U;
+            var ordered = 0U;
+            while (cursor < body.Length)
+            {
+                if (checked(cursor + EnvsCurveHeadBytes) > body.Length
+                    || curves >= EnvsMaximumCurves)
+                {
+                    Envs.SectionsNotClosing = checked(Envs.SectionsNotClosing + 1);
+                    return;
+                }
+                var count = body[cursor + EnvsCurveCountOffset];
+                cursor = checked(cursor + EnvsCurveHeadBytes);
+                var span = checked(count * EnvsPointBytes);
+                if (checked(cursor + span) > body.Length)
+                {
+                    Envs.SectionsNotClosing = checked(Envs.SectionsNotClosing + 1);
+                    return;
+                }
+                curves = checked(curves + 1);
+                var previous = float.NegativeInfinity;
+                var rising = true;
+                for (var point = 0; point < count; point++)
+                {
+                    var at = checked(cursor + point * EnvsPointBytes);
+                    var x = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(at, 4));
+                    var y = BinaryPrimitives.ReadSingleLittleEndian(body.AsSpan(at + 4, 4));
+                    var code = BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.AsSpan(at + 8, 4));
+                    points = checked(points + 1);
+                    if (code <= EnvsMaximumInterpolation)
+                    {
+                        inRange = checked(inRange + 1);
+                        HircBump(Envs.InterpolationCodes, $"code_{code}", 1);
+                    }
+                    if (!float.IsNaN(x) && !float.IsInfinity(x)
+                        && !float.IsNaN(y) && !float.IsInfinity(y)
+                        && Math.Abs(x) < 1e7f && Math.Abs(y) < 1e7f)
+                    {
+                        bounded = checked(bounded + 1);
+                    }
+                    if (x < previous)
+                    {
+                        rising = false;
+                    }
+                    previous = x;
+                }
+                if (rising)
+                {
+                    ordered = checked(ordered + 1);
+                }
+                cursor = checked(cursor + span);
+            }
+            if (curves == 0 || points == 0)
+            {
+                Envs.SectionsNotClosing = checked(Envs.SectionsNotClosing + 1);
+                return;
+            }
+            Envs.SectionsFramed = checked(Envs.SectionsFramed + 1);
+            Envs.Curves = checked(Envs.Curves + curves);
+            Envs.Points = checked(Envs.Points + points);
+            Envs.CodesInRange = checked(Envs.CodesInRange + inRange);
+            Envs.FloatsBounded = checked(Envs.FloatsBounded + bounded);
+            Envs.CurvesWithRisingX = checked(Envs.CurvesWithRisingX + ordered);
+        }
+
+
+        /// <summary>
         /// Frame the INIT plugin name table and the PLAT platform string.
         /// </summary>
         private void FrameInitAndPlat()
@@ -2011,6 +2109,11 @@ namespace AnimeStudio.Endfield
                             Init.PlatformNames,
                             Encoding.ASCII.GetString(section.Body, 0, terminator),
                             1);
+                        continue;
+                    }
+                    if (section.Tag == "ENVS")
+                    {
+                        FrameEnvsSection(section.Body);
                         continue;
                     }
                     if (section.Tag != "INIT")
@@ -7979,6 +8082,21 @@ namespace AnimeStudio.Endfield
         public uint EntryRecords { get; set; }
         public uint EntryRecordsCarryingTheMarker { get; set; }
         public Dictionary<string, uint> EntryRecordCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // The ENVS section: curves over the same 12-byte point numeric type 0x0B uses.
+    public sealed class EndfieldEnvsCensus
+    {
+        public uint Sections { get; set; }
+        public uint SectionBytes { get; set; }
+        public uint SectionsNotClosing { get; set; }
+        public uint SectionsFramed { get; set; }
+        public uint Curves { get; set; }
+        public uint Points { get; set; }
+        public uint CodesInRange { get; set; }
+        public uint FloatsBounded { get; set; }
+        public uint CurvesWithRisingX { get; set; }
+        public Dictionary<string, uint> InterpolationCodes { get; } = new(StringComparer.Ordinal);
     }
 
     // The INIT plugin name table and the PLAT platform string.

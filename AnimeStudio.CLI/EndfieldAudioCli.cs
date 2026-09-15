@@ -166,6 +166,19 @@ namespace AnimeStudio.CLI
                             ["bnkBankIds"] = package.BnkStructures
                                 .Select(x => x.BankId).Distinct().OrderBy(x => x).ToArray(),
                             ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
+                            ["envs"] = new Dictionary<string, object?>
+                            {
+                                ["sections"] = (long)package.Envs.Sections,
+                                ["sectionBytes"] = (long)package.Envs.SectionBytes,
+                                ["sectionsNotClosing"] = (long)package.Envs.SectionsNotClosing,
+                                ["sectionsFramed"] = (long)package.Envs.SectionsFramed,
+                                ["curves"] = (long)package.Envs.Curves,
+                                ["points"] = (long)package.Envs.Points,
+                                ["codesInRange"] = (long)package.Envs.CodesInRange,
+                                ["floatsBounded"] = (long)package.Envs.FloatsBounded,
+                                ["curvesWithRisingX"] = (long)package.Envs.CurvesWithRisingX,
+                                ["interpolationCodes"] = package.Envs.InterpolationCodes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["init"] = new Dictionary<string, object?>
                             {
                                 ["sections"] = (long)package.Init.Sections,
