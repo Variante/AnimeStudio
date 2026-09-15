@@ -189,6 +189,7 @@ namespace AnimeStudio.CLI
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
+                            ["hircType11BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type11Body),
                             ["hircType12BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type12Body),
                             ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
                             ["hircType12Tail"] = BuildType08TailSummary(package.BnkStructures, x => x.Type12Tail),

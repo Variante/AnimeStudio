@@ -25,6 +25,7 @@ internal static class EndfieldAkpkTests
         TestType11SourceRecordsAreCounted();
         TestType11TailEntriesAreCounted();
         TestType22BodyFramesReuseGroupI();
+        TestType11BodiesFrame();
         TestType08BodiesFrameOrAreNamed();
         TestType08TailRecordsAreLocatedFromTheEnd();
         TestType08TailHeadWordsAreClassifiedAgainstAControl();
@@ -866,6 +867,113 @@ internal static class EndfieldAkpkTests
         if (FrameType22Fixture(truncated[..^1]).Type22Body.ExactCount != 0)
         {
             throw new InvalidOperationException("type 0x16 accepted a truncated body");
+        }
+    }
+
+    // Numeric type 0x0B's body frame: every run in it is a count the body declares,
+    // so a synthetic body built from those counts must close, and a body whose
+    // counts are wrong must not.
+    private static void TestType11BodiesFrame()
+    {
+        static byte[] Element(int runs, int recordsPerRun, byte trailerFlag)
+        {
+            var bytes = new List<byte> { (byte)runs, 0, 0, 0, 0 };
+            for (var run = 0; run < runs; run++)
+            {
+                var header = new byte[12];
+                header[7] = (byte)recordsPerRun;
+                bytes.AddRange(header);
+                bytes.AddRange(new byte[recordsPerRun * 12]);
+            }
+            bytes.AddRange(new byte[12]);
+            bytes.Add(trailerFlag);
+            bytes.AddRange(new byte[19 + 5 * trailerFlag - 1]);
+            return bytes.ToArray();
+        }
+
+        static byte[] Body(int sources, int entries, int elementsPerEntry, int runs,
+            int recordsPerRun, byte trailerFlag)
+        {
+            var bytes = new List<byte> { 0x00 };
+            bytes.AddRange(BitConverter.GetBytes((uint)sources));
+            bytes.AddRange(new byte[sources * 14]);
+            bytes.AddRange(BitConverter.GetBytes((uint)entries));
+            for (var entry = 0; entry < entries; entry++)
+            {
+                var header = new byte[48];
+                BitConverter.GetBytes((uint)elementsPerEntry).CopyTo(header, 44);
+                bytes.AddRange(header);
+                for (var element = 0; element < elementsPerEntry; element++)
+                {
+                    bytes.AddRange(Element(runs, recordsPerRun, trailerFlag));
+                }
+            }
+            bytes.AddRange(BitConverter.GetBytes(100u));
+            return bytes.ToArray();
+        }
+
+        static EndfieldHircBodyFrameResult Frame(byte[] body) =>
+            EndfieldAkpkPackage.FrameType11Body(body, 150);
+
+        // The shapes the corpus actually contains: no runs, one run, several runs,
+        // several elements, several entries, and each observed trailer flag.
+        foreach (var body in new[]
+        {
+            Body(1, 1, 1, 0, 0, 0),
+            Body(1, 1, 1, 1, 2, 0),
+            Body(2, 1, 1, 2, 3, 1),
+            Body(1, 1, 3, 1, 1, 0),
+            Body(1, 3, 1, 1, 1, 2),
+            Body(0, 0, 0, 0, 0, 0),
+        })
+        {
+            if (Frame(body).Status != "exact")
+            {
+                throw new InvalidOperationException(
+                    $"type 0x0B refused a body built from its own counts: {Frame(body).Category}");
+            }
+        }
+
+        // A trailer flag above the highest observed one is refused rather than
+        // assumed to continue the 19 + 5 * flag line.
+        var wildFlag = Body(1, 1, 1, 1, 1, 0);
+        // The flag sits 23 bytes from the end: its own byte, the 18 trailer bytes a
+        // flag of zero asks for, and the 4-byte terminator.
+        wildFlag[wildFlag.Length - 23] = 0x09;
+        if (Frame(wildFlag).Status == "exact")
+        {
+            throw new InvalidOperationException("type 0x0B accepted an unobserved trailer flag");
+        }
+        // A missing terminator is refused before any entry is walked.
+        var noTerminator = Body(1, 1, 1, 1, 1, 0);
+        noTerminator[noTerminator.Length - 4] = 0x63;
+        if (Frame(noTerminator).Category != "terminator_is_not_the_observed_value")
+        {
+            throw new InvalidOperationException("type 0x0B framed a body with no terminator");
+        }
+        // Trailing bytes between the last entry and the terminator are a failure,
+        // not something to absorb.
+        var trailing = Body(1, 1, 1, 1, 1, 0).ToList();
+        trailing.InsertRange(trailing.Count - 4, new byte[6]);
+        if (Frame(trailing.ToArray()).Category != "entries_do_not_reach_the_terminator")
+        {
+            throw new InvalidOperationException("type 0x0B absorbed bytes before its terminator");
+        }
+        // A count that cannot fit is refused rather than clamped.
+        var wildEntries = Body(1, 1, 1, 1, 1, 0);
+        wildEntries[19] = 0xFF;
+        if (Frame(wildEntries).Status == "exact")
+        {
+            throw new InvalidOperationException("type 0x0B accepted an impossible entry count");
+        }
+        // A truncated body fails at the part that ran out, not silently.
+        var full = Body(1, 1, 1, 2, 2, 1);
+        for (var cut = 10; cut < full.Length; cut += 7)
+        {
+            if (Frame(full[..cut]).Status == "exact")
+            {
+                throw new InvalidOperationException("type 0x0B framed a truncated body");
+            }
         }
     }
 

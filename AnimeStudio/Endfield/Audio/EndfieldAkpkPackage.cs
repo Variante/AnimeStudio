@@ -1274,7 +1274,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7 or 8 or 14 or 18 or 22)
+                if (objectType is 2 or 5 or 6 or 7 or 8 or 11 or 14 or 18 or 22)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -1287,6 +1287,7 @@ namespace AnimeStudio.Endfield
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
                         8 => structure.Type08Body,
+                        11 => structure.Type11Body,
                         18 => structure.Type12Body,
                         14 => structure.Type14Body,
                         22 => structure.Type22Body,
@@ -1300,6 +1301,7 @@ namespace AnimeStudio.Endfield
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
                         8 => FrameSharedBody(bodySpan, structure.Version),
+                        11 => FrameType11Body(bodySpan, structure.Version),
                         18 => FrameSharedBody(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
                         22 => FrameType22Body(bodySpan, structure.Version),
@@ -4192,6 +4194,191 @@ namespace AnimeStudio.Endfield
             return checked(cursor + trailing) == bodyBytes;
         }
 
+        // The element trailer's length is 19 + 5 * flag. Flags 0, 1 and 2 are each
+        // observed closing bodies exactly -- three points on the line, not two and an
+        // extrapolation -- and anything above the highest observed flag is refused
+        // rather than assumed to continue.
+        internal const int Type11TrailerBaseBytes = 19;
+        internal const int Type11TrailerStepBytes = 5;
+        internal const byte Type11TrailerMaximumFlag = 2;
+        internal const uint Type11MaximumEntries = 64;
+        internal const uint Type11MaximumElements = 64;
+
+        /// <summary>
+        /// Frame a whole numeric type 0x0B body.
+        /// </summary>
+        /// <remarks>
+        /// The first frame this type has had. Every counted run in it is a count the
+        /// body declares, and every width was settled by scoring rivals the same way
+        /// rather than by whether the parse closed:
+        ///
+        ///   u8  flag
+        ///   u32 sourceCount, that many 14-byte source records
+        ///   u32 entryCount
+        ///   entryCount x entry:
+        ///       48 header bytes, the element count at +44
+        ///       elementCount x element:
+        ///           5 head bytes, the run count at +0
+        ///           runCount x run: 12 header bytes, the record count at +7,
+        ///                           then that many 12-byte records
+        ///           12 trailing bytes
+        ///           a trailer of 19 + 5 * flag bytes
+        ///   u32 terminator, always 100
+        ///
+        /// This is NOT a closure-gated lane: 3,715 of 4,325 bodies close and the rest
+        /// are fenced by reason. It is censused alongside numeric types 0x08 and 0x12
+        /// for the same reason they are -- the type is understood well enough to say
+        /// where each body stops being understood.
+        /// </remarks>
+        internal static EndfieldHircBodyFrameResult FrameType11Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"leadingFlag_{body[0]:X2}", 1);
+            if (!HircReadUInt32(body, ref cursor, out var sources, out failure, "sourceCount"))
+            {
+                return failure;
+            }
+            if (sources > Type11MaximumRecords)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_sources", cursor - 4, (int)Type11MaximumRecords, (int)sources);
+            }
+            var sourceSpan = checked((int)sources * Type11SourceRecordBytes);
+            if (sourceSpan > body.Length - cursor)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_sources", cursor - 4, body.Length - cursor, sourceSpan);
+            }
+            cursor = checked(cursor + sourceSpan);
+            HircBump(groups, "sourceRecords", sources);
+            // The terminator is read from the end, so the entry walk has a hard stop
+            // that does not depend on the walk itself being right.
+            if (body.Length - cursor < 4)
+            {
+                return HircFrameOutcome("failed", "no_terminator", cursor, 4, body.Length - cursor);
+            }
+            var end = body.Length - 4;
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(end, 4)) != Type11TerminatorValue)
+            {
+                return HircFrameOutcome("failed", "terminator_is_not_the_observed_value", end, 0, 0);
+            }
+            if (end - cursor < 4)
+            {
+                return HircFrameOutcome("failed", "no_entry_count", cursor, 4, end - cursor);
+            }
+            var entries = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
+            cursor = checked(cursor + 4);
+            if (entries > Type11MaximumEntries)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_entries", cursor - 4, (int)Type11MaximumEntries, (int)entries);
+            }
+            HircBump(groups, "entries", entries);
+            for (var entry = 0U; entry < entries; entry++)
+            {
+                if (end - cursor < Type11EntryHeaderBytes)
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_entry_header", cursor, Type11EntryHeaderBytes, end - cursor);
+                }
+                var elements = BinaryPrimitives.ReadUInt32LittleEndian(
+                    body.Slice(cursor + Type11EntryElementCountOffset, 4));
+                if (elements > Type11MaximumElements)
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_elements",
+                        cursor + Type11EntryElementCountOffset, (int)Type11MaximumElements, (int)elements);
+                }
+                cursor = checked(cursor + Type11EntryHeaderBytes);
+                HircBump(groups, "entryElements", elements);
+                for (var element = 0U; element < elements; element++)
+                {
+                    if (end - cursor < Type11ElementHeadBytes5)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_element_head",
+                            cursor, Type11ElementHeadBytes5, end - cursor);
+                    }
+                    var runs = body[cursor];
+                    if (runs > Type11ElementMaximumRuns)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_element_runs", cursor, Type11ElementMaximumRuns, runs);
+                    }
+                    cursor = checked(cursor + Type11ElementHeadBytes5);
+                    HircBump(groups, "elementRuns", runs);
+                    for (var run = 0; run < runs; run++)
+                    {
+                        if (end - cursor < Type11ElementRunHeaderBytes)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_run_header",
+                                cursor, Type11ElementRunHeaderBytes, end - cursor);
+                        }
+                        var records = body[cursor + Type11ElementRunCountOffset];
+                        if (records > Type11ElementMaximumRecords)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_run_records",
+                                cursor + Type11ElementRunCountOffset,
+                                Type11ElementMaximumRecords, records);
+                        }
+                        cursor = checked(cursor + Type11ElementRunHeaderBytes);
+                        var recordSpan = checked(records * Type11ElementRecordBytes);
+                        if (recordSpan > end - cursor)
+                        {
+                            return HircFrameOutcome(
+                                "failed", "range_run_records", cursor, end - cursor, recordSpan);
+                        }
+                        cursor = checked(cursor + recordSpan);
+                        HircBump(groups, "runRecords", records);
+                    }
+                    if (end - cursor < Type11ElementTrailingBlockBytes + 1)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_element_trailing_block",
+                            cursor, Type11ElementTrailingBlockBytes + 1, end - cursor);
+                    }
+                    cursor = checked(cursor + Type11ElementTrailingBlockBytes);
+                    var flag = body[cursor];
+                    if (flag > Type11TrailerMaximumFlag)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_element_trailer_flag",
+                            cursor, Type11TrailerMaximumFlag, flag);
+                    }
+                    HircBump(selectors, $"elementTrailerFlag_{flag}", 1);
+                    var trailer = checked(
+                        Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
+                    if (trailer > end - cursor)
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_element_trailer", cursor, end - cursor, trailer);
+                    }
+                    cursor = checked(cursor + trailer);
+                }
+            }
+            if (cursor != end)
+            {
+                return HircFrameOutcome(
+                    "failed", "entries_do_not_reach_the_terminator", cursor, 0, end - cursor);
+            }
+            cursor = body.Length;
+            return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
         private const int Type17RunElementBytes = 6;
 
         // A counted block: one byte of count, that many one-byte keys, then that many
@@ -5066,6 +5253,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type08Body { get; } = new();
+        public EndfieldHircBodyCensus Type11Body { get; } = new();
         public EndfieldHircBodyCensus Type12Body { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircBodyCensus Type22Body { get; } = new();
