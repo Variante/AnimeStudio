@@ -223,6 +223,10 @@ namespace AnimeStudio.CLI
                                 ["curveControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveControlsTested),
                                 ["curveControlsInRange"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveControlsInRange),
                                 ["curveCodes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.CurveCodes)),
+                                ["boundedFloatsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.BoundedFloatsTested),
+                                ["boundedFloatsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.BoundedFloatsInBand),
+                                ["floatControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsTested),
+                                ["floatControlsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsInBand),
                             },
                             ["hircType11Elements"] = new Dictionary<string, object?>
                             {

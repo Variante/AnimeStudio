@@ -4774,7 +4774,17 @@ namespace AnimeStudio.Endfield
         // The neighbouring words, scored the same way so the readings above are not
         // credited for something every word in the header would pass.
         internal const int Type11EntryRangeControlOffset = 12;
+        // The word at 40 is a float, present in every entry and confined to a narrow
+        // band. It was previously used as the fraction control, which it still serves
+        // as -- it is never a small rational -- but it is not opaque.
         internal const int Type11EntryFractionControlOffset = 40;
+        internal const int Type11EntryBoundedFloatOffset = 40;
+        internal const float Type11EntryBoundedFloatLow = 1e-3f;
+        internal const float Type11EntryBoundedFloatHigh = 1e4f;
+        // Scored against the source id at 4 and the opaque word at 12, both read the
+        // same way. A float field is not established by its own values being finite;
+        // it is established by neighbouring words not being.
+        internal static readonly int[] Type11EntryFloatControlOffsets = { 4, 12 };
 
         internal static EndfieldHircBodyFrameResult FrameType11Body(
             ReadOnlySpan<byte> body,
@@ -5041,6 +5051,39 @@ namespace AnimeStudio.Endfield
             census.RangeControlIsSymmetric = controlSymmetric;
             census.RangeControlIsOrdered = controlOrdered;
 
+            foreach (var (offset, isFloatControl) in new[]
+            {
+                (Type11EntryBoundedFloatOffset, false),
+                (Type11EntryFloatControlOffsets[0], true),
+                (Type11EntryFloatControlOffsets[1], true),
+            })
+            {
+                var raw = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
+                if (raw == 0)
+                {
+                    continue;
+                }
+                var value = Math.Abs(BitConverter.Int32BitsToSingle(unchecked((int)raw)));
+                var inBand = float.IsFinite(value)
+                    && value >= Type11EntryBoundedFloatLow
+                    && value <= Type11EntryBoundedFloatHigh;
+                if (isFloatControl)
+                {
+                    census.FloatControlsTested = checked(census.FloatControlsTested + 1);
+                    if (inBand)
+                    {
+                        census.FloatControlsInBand = checked(census.FloatControlsInBand + 1);
+                    }
+                }
+                else
+                {
+                    census.BoundedFloatsTested = checked(census.BoundedFloatsTested + 1);
+                    if (inBand)
+                    {
+                        census.BoundedFloatsInBand = checked(census.BoundedFloatsInBand + 1);
+                    }
+                }
+            }
             foreach (var (offset, isControl) in new[]
             {
                 (Type11EntryFractionOffset, false),
@@ -6340,6 +6383,10 @@ namespace AnimeStudio.Endfield
         public uint CurveControlsTested { get; set; }
         public uint CurveControlsInRange { get; set; }
         public Dictionary<string, uint> CurveCodes { get; } = new(StringComparer.Ordinal);
+        public uint BoundedFloatsTested { get; set; }
+        public uint BoundedFloatsInBand { get; set; }
+        public uint FloatControlsTested { get; set; }
+        public uint FloatControlsInBand { get; set; }
     }
 
     // Numeric type 0x0B's entry elements: how they end, and what that leaves.
