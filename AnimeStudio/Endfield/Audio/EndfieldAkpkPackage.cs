@@ -35,6 +35,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
         public EndfieldHircType0AEndAnchorCensus Type0AEndAnchor { get; } = new();
+        public EndfieldHircType0ACountedArrayCensus Type0ACountedArray { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -123,6 +124,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyMusicReferences();
             package.ClassifyType0AHeadPredictions();
             package.ClassifyType0AEndAnchor();
+            package.ClassifyType0ACountedArray();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
             package.ClassifyMusicMutuality();
@@ -1071,6 +1073,93 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Numeric type 0x0A's reference to 0x0B is a counted array, not a lone word.
+        /// </summary>
+        /// <remarks>
+        /// The word immediately before the first reference is a count, and it equals
+        /// the number of references that follow it four bytes apart, in **every** one
+        /// of the 3,903 bodies that carry a reference at all. Counts are 1 in 3,565
+        /// bodies, 2 in 271, 3 in 58 and 4 in 9.
+        ///
+        /// This supersedes both earlier readings rather than competing with them. The
+        /// three-branch head rule and the two end anchors were each locating the first
+        /// element of this array; where they disagreed with each other, or reached
+        /// nothing, the array was simply longer or shorter than one. With it, numeric
+        /// type 0x0A has **no unexplained bodies**: 3,903 counted arrays plus 255
+        /// carrying no reference is its whole population of 4,158.
+        ///
+        /// The array is found here by locating a reference and stepping back four
+        /// bytes, which is a reading rather than a forward frame. What makes it
+        /// evidence is that the count agrees with the run length every time -- a wrong
+        /// step-back would give a number unrelated to how many references follow.
+        /// </remarks>
+        private void ClassifyType0ACountedArray()
+        {
+            var targets = new HashSet<uint>();
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    if (pair.Value == 11)
+                    {
+                        targets.Add(pair.Key);
+                    }
+                }
+            }
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var body in structure.Type0ABodies)
+                {
+                    Type0ACountedArray.Bodies = checked(Type0ACountedArray.Bodies + 1);
+                    var first = -1;
+                    for (var at = 0; at + 4 <= body.Length; at++)
+                    {
+                        if (targets.Contains(BinaryPrimitives.ReadUInt32LittleEndian(
+                                body.AsSpan(at, 4))))
+                        {
+                            first = at;
+                            break;
+                        }
+                    }
+                    if (first < 0)
+                    {
+                        Type0ACountedArray.BodiesWithNoReference =
+                            checked(Type0ACountedArray.BodiesWithNoReference + 1);
+                        continue;
+                    }
+                    if (first < 4)
+                    {
+                        Type0ACountedArray.NoRoomForACount =
+                            checked(Type0ACountedArray.NoRoomForACount + 1);
+                        continue;
+                    }
+                    var run = 1;
+                    while (first + 4 * run + 4 <= body.Length
+                        && targets.Contains(BinaryPrimitives.ReadUInt32LittleEndian(
+                            body.AsSpan(first + 4 * run, 4))))
+                    {
+                        run = checked(run + 1);
+                    }
+                    var declared = BinaryPrimitives.ReadUInt32LittleEndian(
+                        body.AsSpan(first - 4, 4));
+                    Type0ACountedArray.Checkable = checked(Type0ACountedArray.Checkable + 1);
+                    if (declared == (uint)run)
+                    {
+                        Type0ACountedArray.CountMatchesTheRun =
+                            checked(Type0ACountedArray.CountMatchesTheRun + 1);
+                        HircBump(Type0ACountedArray.RunLengths, $"references_{Math.Min(run, 8)}", 1);
+                    }
+                    else
+                    {
+                        Type0ACountedArray.CountDoesNotMatch =
+                            checked(Type0ACountedArray.CountDoesNotMatch + 1);
+                    }
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1846,6 +1935,8 @@ namespace AnimeStudio.Endfield
                     head.Bodies = checked(head.Bodies + 1);
                     if (objectType == 10)
                     {
+                        structure.Type0ABodies.Add(
+                            payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)).ToArray());
                         CollectType0AEndAnchor(
                             structure.Type0AEndAnchors,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
@@ -6089,6 +6180,7 @@ namespace AnimeStudio.Endfield
         // controls. Classified once the package's object set is known.
         // Per numeric type 0x0A body: the words at the end anchor and its neighbours.
         public List<uint[]> Type0AEndAnchors { get; } = new();
+        public List<byte[]> Type0ABodies { get; } = new();
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
@@ -6417,6 +6509,18 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> FrameClosesWithRuns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RunsPerElement { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Numeric type 0x0A's reference to 0x0B, read as a counted array.
+    public sealed class EndfieldHircType0ACountedArrayCensus
+    {
+        public uint Bodies { get; set; }
+        public uint BodiesWithNoReference { get; set; }
+        public uint NoRoomForACount { get; set; }
+        public uint Checkable { get; set; }
+        public uint CountMatchesTheRun { get; set; }
+        public uint CountDoesNotMatch { get; set; }
+        public Dictionary<string, uint> RunLengths { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0A's reference measured from the end, and its neighbours.

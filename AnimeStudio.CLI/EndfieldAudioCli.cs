@@ -305,6 +305,16 @@ namespace AnimeStudio.CLI
                                 ["zeroTrailerByCandidate"] = package.SharedConstants.ZeroTrailerByCandidate.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["closesByCandidate"] = package.SharedConstants.ClosesByCandidate.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
+                            ["hircType0ACountedArray"] = new Dictionary<string, object?>
+                            {
+                                ["bodies"] = package.Type0ACountedArray.Bodies,
+                                ["bodiesWithNoReference"] = package.Type0ACountedArray.BodiesWithNoReference,
+                                ["noRoomForACount"] = package.Type0ACountedArray.NoRoomForACount,
+                                ["checkable"] = package.Type0ACountedArray.Checkable,
+                                ["countMatchesTheRun"] = package.Type0ACountedArray.CountMatchesTheRun,
+                                ["countDoesNotMatch"] = package.Type0ACountedArray.CountDoesNotMatch,
+                                ["runLengths"] = package.Type0ACountedArray.RunLengths.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircType0AEndAnchor"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.Type0AEndAnchor.Bodies,
