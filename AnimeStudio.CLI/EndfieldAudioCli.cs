@@ -189,6 +189,7 @@ namespace AnimeStudio.CLI
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
+                            ["hircType12BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type12Body),
                             ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
                             ["hircType08TailWords"] = new Dictionary<string, object?>
                             {
@@ -285,6 +286,7 @@ namespace AnimeStudio.CLI
                                 ["hircType07BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type7Body),
                                 ["hircType14BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14Body),
                                 ["hircType08BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type08Body),
+                                ["hircType12BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type12Body),
                                 ["hircType08Tail"] = BuildType08TailSummary(new[] { x }),
                                 ["hircType22BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type22Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),

@@ -28,6 +28,7 @@ internal static class EndfieldAkpkTests
         TestType08BodiesFrameOrAreNamed();
         TestType08TailRecordsAreLocatedFromTheEnd();
         TestType08TailHeadWordsAreClassifiedAgainstAControl();
+        TestType12SharesType08Layout();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
         TestSmallTypesFrameExactly();
@@ -1096,6 +1097,75 @@ internal static class EndfieldAkpkTests
         if (outside.FirstWordOutsidePackage != 1 || outside.FirstWordTargetTypeCounts.Count != 0)
         {
             throw new InvalidOperationException("type 0x08 tail head word outside the package was miscounted");
+        }
+    }
+
+    private static void TestType12SharesType08Layout()
+    {
+        // Reference, counted key/value block, a second list whose key sizes its value,
+        // nine bytes, a zero word, the counted entry run, five zero bytes.
+        static byte[] Build(byte secondKey, int secondWidth, byte secondCount, byte entries,
+                            int trailer = 5)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(0x1234U);
+            writer.Write((byte)1);
+            writer.Write((byte)0x29);
+            writer.Write(100.0f);
+            writer.Write(secondCount);
+            writer.Write(secondKey);
+            writer.Write(new byte[secondWidth]);
+            // Nine bytes that are a field here, not a constant: a byte, a word and a
+            // float. Numeric type 0x08 happens to carry the same values in every body.
+            writer.Write((byte)0);
+            writer.Write(0U);
+            writer.Write(-96.3f);
+            writer.Write(0U);
+            writer.Write(entries);
+            if (entries != 0)
+            {
+                writer.Write(new byte[entries * 6 + 1]);
+            }
+            writer.Write(new byte[trailer]);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        static EndfieldHircBodyCensus Frame(byte[] body) => EndfieldAkpkPackage
+            .Parse(BuildEncryptedBankPackage(0x7900, BuildBnk(((byte)0x12, 0x7901U, body))))
+            .BnkStructures[0].Type12Body;
+
+        // The two widths numeric type 0x08 already uses, and the one this type adds.
+        var shortKey = Frame(Build(0x15, 11, 1, 0));
+        var longKey = Frame(Build(0x1D, 27, 1, 2));
+        var keyA = Frame(Build(0x0A, 12, 3, 1));
+        if (shortKey.ExactCount != 1 || longKey.ExactCount != 1 || keyA.ExactCount != 1
+            || keyA.SelectorCounts["secondListKey_0A"] != 1
+            || keyA.SelectorCounts["secondListCount_3"] != 1)
+        {
+            throw new InvalidOperationException("type 0x12 did not frame its second-list keys");
+        }
+
+        // A width that is not the one its key predicts must not frame: the width is a
+        // rule, not a tolerance, and accepting a wrong one would frame arbitrary bytes.
+        var wrongWidth = Frame(Build(0x15, 12, 1, 0));
+        var wrongWidthFailures = 0U;
+        foreach (var pair in wrongWidth.FailureCounts)
+        {
+            wrongWidthFailures = checked(wrongWidthFailures + pair.Value);
+        }
+        if (wrongWidth.ExactCount != 0 || wrongWidthFailures != 1)
+        {
+            throw new InvalidOperationException("type 0x12 framed a body with the wrong value width");
+        }
+
+        // An unobserved key is held unsupported rather than walked with a guess.
+        var unknownKey = Frame(Build(0x44, 11, 1, 0));
+        if (unknownKey.ExactCount != 0
+            || unknownKey.UnsupportedCategories["unsupported_second_list_key"] != 1)
+        {
+            throw new InvalidOperationException("type 0x12 accepted an unobserved list key");
         }
     }
 

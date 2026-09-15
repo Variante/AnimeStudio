@@ -821,7 +821,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7 or 8 or 14 or 22)
+                if (objectType is 2 or 5 or 6 or 7 or 8 or 14 or 18 or 22)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -834,6 +834,7 @@ namespace AnimeStudio.Endfield
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
                         8 => structure.Type08Body,
+                        18 => structure.Type12Body,
                         14 => structure.Type14Body,
                         22 => structure.Type22Body,
                         _ => throw new InvalidDataException(
@@ -846,6 +847,7 @@ namespace AnimeStudio.Endfield
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
                         8 => FrameType8Body(bodySpan, structure.Version),
+                        18 => FrameType12Body(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
                         22 => FrameType22Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
@@ -2674,6 +2676,128 @@ namespace AnimeStudio.Endfield
                 BinaryPrimitives.ReadUInt32LittleEndian(tail.Slice(Type08TailSecondWordOffset, 4))));
         }
 
+        // Numeric type 0x12 shares numeric type 0x08's layout. Where 0x08's nine bytes
+        // after the second list are always the same, 0x12's differ, so they are read
+        // as a byte, a word and a float rather than matched against a constant.
+        internal const int Type12MiddleBlockBytes = 9;
+        internal const byte Type12SecondListKeyA = 0x0A;
+        internal const int Type12SecondListKeyABytes = 12;
+
+        /// <summary>
+        /// Frame numeric HIRC type 0x12 with numeric type 0x08's layout.
+        /// </summary>
+        /// <remarks>
+        /// Reference, counted key/value block, a second list whose key sizes its value,
+        /// nine bytes, a zero word, the counted run of six-byte entries with its extra
+        /// byte when nonzero, and five zero bytes. Two of the three second-list keys and
+        /// their widths are the ones numeric type 0x08 already uses.
+        ///
+        /// The widths were solved for rather than guessed: everything after the second
+        /// list is deterministic, so each body was asked which width makes it close
+        /// exactly, and every body that closes has exactly one such width.
+        ///
+        /// What this deliberately does not decide: key 0x0A always arrives with a list
+        /// count of 3 and a twelve-byte value, so "the key decides the width" and "the
+        /// count multiplies a four-byte per-key width" predict the same bytes
+        /// everywhere in this corpus. The simpler rule is implemented and the ambiguity
+        /// is recorded rather than resolved.
+        /// </remarks>
+        internal static EndfieldHircBodyFrameResult FrameType12Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircTake(body, ref cursor, 4, out var failure, "reference"))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var propertyCount, out failure, "propertyCount"))
+            {
+                return failure;
+            }
+            if (propertyCount > (body.Length - cursor) / 5)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_properties", cursor - 1, (body.Length - cursor) / 5, propertyCount);
+            }
+            for (var i = 0; i < propertyCount; i++)
+            {
+                HircBump(selectors, $"propertyKey_{body[cursor + i]:X2}", 1);
+            }
+            cursor = checked(cursor + propertyCount * 5);
+            HircBump(groups, "propertyEntries", propertyCount);
+
+            if (!HircReadByte(body, ref cursor, out var secondCount, out failure, "secondListCount"))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var secondKey, out failure, "secondListKey"))
+            {
+                return failure;
+            }
+            var secondWidth = secondKey switch
+            {
+                Type08SecondListShortKey => Type08SecondListShortBytes,
+                Type08SecondListLongKey => Type08SecondListLongBytes,
+                Type12SecondListKeyA => Type12SecondListKeyABytes,
+                _ => -1,
+            };
+            if (secondWidth < 0)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_second_list_key", cursor - 1, 0, secondKey);
+            }
+            HircBump(selectors, $"secondListKey_{secondKey:X2}", 1);
+            HircBump(selectors, $"secondListCount_{secondCount}", 1);
+            if (!HircTake(body, ref cursor, secondWidth, out failure, "secondListValue"))
+            {
+                return failure;
+            }
+            if (!HircTake(body, ref cursor, Type12MiddleBlockBytes, out failure, "middleBlock"))
+            {
+                return failure;
+            }
+            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterTheMiddleBlock"))
+            {
+                return failure;
+            }
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4)) != 0)
+            {
+                return HircFrameOutcome("failed", "word_after_the_middle_block_is_not_zero", cursor - 4, 0, 0);
+            }
+            if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "entryCount"))
+            {
+                return failure;
+            }
+            var span = entryCount == 0 ? 0 : checked(entryCount * Type08EntryBytes + 1);
+            if (span > body.Length - cursor)
+            {
+                return HircFrameOutcome("failed", "range_entries", cursor - 1, body.Length - cursor, span);
+            }
+            cursor = checked(cursor + span);
+            HircBump(groups, "entryRunElements", entryCount);
+            if (body.Length - cursor != Type08TrailerBytes)
+            {
+                return HircFrameOutcome(
+                    "failed", "trailer_is_not_five_bytes", cursor, Type08TrailerBytes, body.Length - cursor);
+            }
+            for (var i = cursor; i < body.Length; i++)
+            {
+                if (body[i] != 0)
+                {
+                    return HircFrameOutcome("failed", "trailer_is_not_zero", i, 0, body[i]);
+                }
+            }
+            cursor = body.Length;
+            return HircFrameExact(cursor, body.Length, groups, selectors, null);
+        }
+
         private const int Type17RunElementBytes = 6;
 
         // A counted block: one byte of count, that many one-byte keys, then that many
@@ -3548,6 +3672,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type08Body { get; } = new();
+        public EndfieldHircBodyCensus Type12Body { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
