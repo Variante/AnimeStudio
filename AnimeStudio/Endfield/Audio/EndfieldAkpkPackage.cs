@@ -622,6 +622,14 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                if (objectType == 9)
+                {
+                    var census09 = structure.Type09;
+                    var body09 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    census09.Bodies = checked(census09.Bodies + 1);
+                    census09.BodyBytes = checked(census09.BodyBytes + (uint)body09.Length);
+                    RecordType09(census09, body09, structure.Version);
+                }
                 if (objectType == 17)
                 {
                     var census17 = structure.Type17;
@@ -1980,6 +1988,70 @@ namespace AnimeStudio.Endfield
 
         private const int Type17RunElementBytes = 6;
 
+        private static void RecordType09(
+            EndfieldHircType09Census census,
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            void Fail(string category)
+            {
+                census.Failed = checked(census.Failed + 1);
+                HircBump(census.FailureCounts, category, 1);
+            }
+
+            if (bankVersion != 150)
+            {
+                Fail("unsupported_bank_version");
+                return;
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
+            {
+                Fail(failure.Category ?? "nodeFrame");
+                return;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var entryCount, out failure, "type09RunCount"))
+            {
+                Fail(failure.Category ?? "truncated_type09RunCount");
+                return;
+            }
+            if (entryCount > (uint)((body.Length - cursor) / 4))
+            {
+                Fail("range_type09Run");
+                return;
+            }
+            cursor = checked(cursor + (int)entryCount * 4);
+            if (!HircReadUInt32(body, ref cursor, out var secondCount, out failure, "type09SecondCount"))
+            {
+                Fail(failure.Category ?? "truncated_type09SecondCount");
+                return;
+            }
+            if (secondCount != 0)
+            {
+                // A nonzero second count introduces records this reader cannot frame.
+                // Consuming them by guess would produce an exact-looking body that is
+                // not evidence of anything.
+                census.UnestablishedSecondRun = checked(census.UnestablishedSecondRun + 1);
+                return;
+            }
+            if (!HircReadByte(body, ref cursor, out var tailFlag, out failure, "type09TailFlag"))
+            {
+                Fail(failure.Category ?? "truncated_type09TailFlag");
+                return;
+            }
+            HircBump(census.TailFlagCounts, $"tail_{tailFlag:X2}", 1);
+            if (cursor != body.Length)
+            {
+                Fail("trailing_bytes");
+                return;
+            }
+            census.Exact = checked(census.Exact + 1);
+            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
+            census.RunEntries = checked(census.RunEntries + entryCount);
+        }
+
         private static void RecordType17(EndfieldHircType17Census census, ReadOnlySpan<byte> body)
         {
             void Fail(string category)
@@ -2680,6 +2752,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
+        public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2755,6 +2828,24 @@ namespace AnimeStudio.Endfield
     // zero count. The flag is never greater than 1 anywhere, so no body can separate
     // them, and a flagged body is therefore fenced as unsupported rather than framed
     // on a coin flip.
+    // Numeric type 0x09 does use the shared node frame -- it opens every one of its
+    // bodies. After it comes a counted run of four-byte entries, then a second count.
+    // When that second count is zero the body ends with one more byte and is consumed
+    // exactly. When it is not zero it introduces records whose shape is not
+    // established, so those bodies are fenced rather than framed.
+    public sealed class EndfieldHircType09Census
+    {
+        public uint Bodies { get; set; }
+        public uint Exact { get; set; }
+        public uint UnestablishedSecondRun { get; set; }
+        public uint Failed { get; set; }
+        public uint ExactBytes { get; set; }
+        public uint BodyBytes { get; set; }
+        public uint RunEntries { get; set; }
+        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TailFlagCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircType17Census
     {
         public uint Bodies { get; set; }
