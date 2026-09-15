@@ -1583,6 +1583,24 @@ namespace AnimeStudio.Endfield
         // 8 to 20 collapses them to between 107 and 220. And at 12 the word directly
         // after the run is 15 -- a small count that frames a further block -- where
         // every other stride lands on zero or on an arbitrary large value.
+        // STMG's middle block: a counted run of variable-length entries.
+        //
+        // One STMG in the corpus, but FIFTEEN entries inside this block, and they must
+        // consume it exactly. Searching every shape of the form "head bytes with a
+        // u32 count inside, then n records, then a tail" over head 4..40, count offset
+        // 0..head-4, record 1..32 and tail 0..16 -- about 745,000 candidates -- exactly
+        // ONE lands on the block's end in exactly 15 entries.
+        //
+        // The content then agrees independently: all 15 entry ids are distinct, the
+        // head's bytes at +8 and +10..+12 are zero in every entry, and the record's
+        // byte at +8 is 9 in all 45 records with +9..+11 zero.
+        internal const int StmgEntryHeadBytes = 13;
+        internal const int StmgEntryCountOffset = 9;
+        internal const int StmgEntryRecordBytes = 12;
+        internal const uint StmgMaximumEntryRecords = 64;
+        internal const int StmgEntryRecordMarkerOffset = 8;
+        internal const byte StmgEntryRecordMarker = 9;
+
         // STMG's trailing run, framed BACKWARD from the section end.
         //
         // It has to be backward. The block between the two runs is variable-length and
@@ -1694,13 +1712,18 @@ namespace AnimeStudio.Endfield
                         }
                     }
                     var tailStart = FrameStmgTail(body, after);
+                    var middleFramed = tailStart >= 0
+                        && FrameStmgEntries(body, after, tailStart - 4);
+                    var middleBytes = tailStart < 0 ? 0 : tailStart - 4 - after;
                     Stmg.BytesFramed = checked(
                         Stmg.BytesFramed
                         + (uint)after
-                        + (uint)(tailStart < 0 ? 0 : body.Length - tailStart + 4));
+                        + (uint)(tailStart < 0 ? 0 : body.Length - tailStart + 4)
+                        + (uint)(middleFramed ? middleBytes : 0));
                     Stmg.BytesUnframed = checked(
                         Stmg.BytesUnframed
-                        + (uint)(tailStart < 0 ? body.Length - after : tailStart - 4 - after));
+                        + (uint)(tailStart < 0 ? body.Length - after : 0)
+                        + (uint)(tailStart >= 0 && !middleFramed ? middleBytes : 0));
                 }
             }
         }
@@ -1848,6 +1871,88 @@ namespace AnimeStudio.Endfield
                 }
             }
             return cursor;
+        }
+
+
+        /// <summary>
+        /// Frame the counted run of variable-length entries between STMG's two arrays.
+        /// </summary>
+        /// <remarks>
+        /// `u32 count`, then that many entries of `u32, u32, u8 zero, u32 count` followed
+        /// by that many 12-byte records. With the leading and trailing runs already
+        /// located this block is bounded on both sides, so the frame has to consume it
+        /// byte-exactly or be refused -- which is the strongest check available for a
+        /// section that appears once.
+        /// </remarks>
+        private bool FrameStmgEntries(byte[] body, int start, int end)
+        {
+            Stmg.EntryBlocks = checked(Stmg.EntryBlocks + 1);
+            Stmg.EntryBlockBytes = checked(Stmg.EntryBlockBytes + (uint)(end - start));
+            if (end - start < 4)
+            {
+                Stmg.EntryBlocksTooShort = checked(Stmg.EntryBlocksTooShort + 1);
+                return false;
+            }
+            var declared = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(start, 4));
+            if (declared == 0 || declared > StmgMaximumRecords)
+            {
+                Stmg.EntryCountOutOfRange = checked(Stmg.EntryCountOutOfRange + 1);
+                return false;
+            }
+            var cursor = start + 4;
+            var ids = new HashSet<uint>();
+            var records = 0U;
+            var markers = 0U;
+            for (var entry = 0U; entry < declared; entry++)
+            {
+                if (checked(cursor + StmgEntryHeadBytes) > end)
+                {
+                    Stmg.EntryHeadPastTheEnd = checked(Stmg.EntryHeadPastTheEnd + 1);
+                    return false;
+                }
+                ids.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(cursor, 4)));
+                var owned = BinaryPrimitives.ReadUInt32LittleEndian(
+                    body.AsSpan(cursor + StmgEntryCountOffset, 4));
+                if (owned > StmgMaximumEntryRecords)
+                {
+                    Stmg.EntryRecordCountOutOfRange =
+                        checked(Stmg.EntryRecordCountOutOfRange + 1);
+                    return false;
+                }
+                cursor = checked(cursor + StmgEntryHeadBytes);
+                var span = checked((int)owned * StmgEntryRecordBytes);
+                if (checked(cursor + span) > end)
+                {
+                    Stmg.EntryRecordsPastTheEnd =
+                        checked(Stmg.EntryRecordsPastTheEnd + 1);
+                    return false;
+                }
+                for (var record = 0U; record < owned; record++)
+                {
+                    if (body[cursor + (int)record * StmgEntryRecordBytes
+                             + StmgEntryRecordMarkerOffset] == StmgEntryRecordMarker)
+                    {
+                        markers = checked(markers + 1);
+                    }
+                }
+                cursor = checked(cursor + span);
+                records = checked(records + owned);
+                HircBump(Stmg.EntryRecordCounts, $"records_{owned}", 1);
+            }
+            if (cursor != end)
+            {
+                // Bounded on both sides, so anything short of byte-exact is a failure
+                // and is fenced rather than reported as a partial frame.
+                Stmg.EntryBlocksNotClosing = checked(Stmg.EntryBlocksNotClosing + 1);
+                return false;
+            }
+            Stmg.EntryBlocksFramed = checked(Stmg.EntryBlocksFramed + 1);
+            Stmg.Entries = checked(Stmg.Entries + declared);
+            Stmg.DistinctEntryIds = checked(Stmg.DistinctEntryIds + (uint)ids.Count);
+            Stmg.EntryRecords = checked(Stmg.EntryRecords + records);
+            Stmg.EntryRecordsCarryingTheMarker =
+                checked(Stmg.EntryRecordsCarryingTheMarker + markers);
+            return true;
         }
 
 
@@ -7739,6 +7844,21 @@ namespace AnimeStudio.Endfield
         public uint TailRivalStridesWithDistinctIds { get; set; }
         public uint TailRivalStridesWithTheZeroRun { get; set; }
         public Dictionary<string, uint> TailSelectors { get; } = new(StringComparer.Ordinal);
+        // The middle block of variable-length entries.
+        public uint EntryBlocks { get; set; }
+        public uint EntryBlockBytes { get; set; }
+        public uint EntryBlocksTooShort { get; set; }
+        public uint EntryCountOutOfRange { get; set; }
+        public uint EntryHeadPastTheEnd { get; set; }
+        public uint EntryRecordCountOutOfRange { get; set; }
+        public uint EntryRecordsPastTheEnd { get; set; }
+        public uint EntryBlocksNotClosing { get; set; }
+        public uint EntryBlocksFramed { get; set; }
+        public uint Entries { get; set; }
+        public uint DistinctEntryIds { get; set; }
+        public uint EntryRecords { get; set; }
+        public uint EntryRecordsCarryingTheMarker { get; set; }
+        public Dictionary<string, uint> EntryRecordCounts { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the STMG section names HIRC objects at all.
