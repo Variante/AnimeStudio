@@ -4405,6 +4405,20 @@ namespace AnimeStudio.Endfield
         // for a fixed closing word.
         internal const int TailSectionAbsentBytes = 1;
         internal const int TailBlockUnitHeadBytes = 12;
+        // After a unit's head come two bytes -- a record count and a pad -- unless the
+        // high bit is set on head byte 6, in which case there are three and the count
+        // is the middle one. 111 units take the short form and 1 takes the long, with
+        // no counter-examples either way.
+        //
+        // One unit is thin evidence for a rule, and the closure is not what carries
+        // this one. Under the long form that unit's eight records all read as curve
+        // records with interpolation codes 9, 9, 9, 9, 5, 4, 4 and 4, and the body
+        // lands exactly on its two-byte absent section. Under the short form they are
+        // noise. Eight independent twelve-byte windows agreeing on a ten-value enum is
+        // the evidence; the unit count is not.
+        internal const int TailBlockUnitGapBytes = 2;
+        internal const int TailBlockUnitWideGapBytes = 3;
+        internal const int TailBlockUnitWideHeadOffset = 6;
         internal const int TailBlockRecordBytes = 12;
         // A bound so a corrupt count cannot make the reader walk the whole body.
         internal const int TailBlockMaximumUnits = 64;
@@ -4474,13 +4488,19 @@ namespace AnimeStudio.Endfield
                     selectors,
                     $"tailBlockUnitSelector_{body[cursor + 5]:X2}{body[cursor + 6]:X2}{body[cursor + 11]:X2}",
                     1);
+                var wideGap = (body[cursor + TailBlockUnitWideHeadOffset] & 0x80) != 0;
                 cursor = checked(cursor + TailBlockUnitHeadBytes);
-                var records = body[cursor];
-                cursor = checked(cursor + 1);
-                if (!HircTake(body, ref cursor, 1, out failure, "tailBlockUnitByte"))
+                var gap = wideGap ? TailBlockUnitWideGapBytes : TailBlockUnitGapBytes;
+                if (body.Length - cursor < gap)
                 {
+                    failure = HircFrameOutcome(
+                        "failed", "tail_block_unit_runs_past_the_end", cursor, gap,
+                        body.Length - cursor);
                     return false;
                 }
+                var records = body[cursor + (wideGap ? 1 : 0)];
+                HircBump(selectors, wideGap ? "tailBlockUnitGap_wide" : "tailBlockUnitGap_short", 1);
+                cursor = checked(cursor + gap);
                 var span = checked(records * TailBlockRecordBytes);
                 if (span > body.Length - cursor)
                 {

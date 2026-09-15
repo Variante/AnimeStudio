@@ -1188,6 +1188,42 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("type 0x08 framed a truncated tail section");
         }
 
+        // A unit whose head byte 6 has the high bit set carries three bytes after the
+        // head rather than two, with the record count in the middle. One unit in the
+        // corpus is shaped that way, and what establishes it is not the closure but
+        // that its eight records then all read as curve records.
+        static byte[] WideGapUnit(int records)
+        {
+            var bytes = new List<byte> { 0x00, 0x01, 0x00 };
+            var head = new byte[12];
+            head[5] = 0x04;
+            head[6] = 0x84;
+            bytes.AddRange(head);
+            bytes.AddRange(new byte[] { 0x00, (byte)records, 0x00 });
+            bytes.AddRange(new byte[records * 12]);
+            bytes.AddRange(new byte[] { 0x00, 0x00 });
+            return bytes.ToArray();
+        }
+
+        var wideGap = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: WideGapUnit(3)));
+        if (wideGap.ExactCount != 1 || wideGap.GroupCounts["tailBlockRecords"] != 3)
+        {
+            throw new InvalidOperationException("type 0x08 refused a wide-gap tail unit");
+        }
+        if (wideGap.SelectorCounts["tailBlockUnitGap_wide"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 did not record the wide gap");
+        }
+        // Clearing the high bit must make the same bytes stop framing, or the flag is
+        // not what selects the gap.
+        var narrowed = WideGapUnit(3);
+        narrowed[3 + 6] = 0x04;
+        if (Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: narrowed)).ExactCount != 0)
+        {
+            throw new InvalidOperationException("type 0x08 framed a wide gap without its flag");
+        }
+
         var oneUnit = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailBlock(1, 1)));
         var threeUnits = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, trailerBytes: TailBlock(3, 2)));
         if (oneUnit.ExactCount != 1
