@@ -259,6 +259,8 @@ namespace AnimeStudio.CLI
                                 ["internalTypes"] = package.Hierarchy.InternalTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["leafTypes"] = package.Hierarchy.LeafTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["depths"] = package.Hierarchy.Depths.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["parentsWithSeveralChildren"] = package.Hierarchy.ParentsWithSeveralChildren,
+                                ["childrenPerParent"] = package.Hierarchy.ChildrenPerParent.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
                             ["hircSharedConstants"] = new Dictionary<string, object?>
                             {

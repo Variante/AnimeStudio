@@ -815,6 +815,17 @@ namespace AnimeStudio.Endfield
                     }
                 }
                 HircBump(Hierarchy.RootsPerBank, $"roots_{Math.Min(roots, 8)}", 1);
+                // How many children each parent has. This is what separates this
+                // relation from the main reference graph, which is the same shape
+                // pointing the other way: there every target has exactly one referrer,
+                // here a parent is named by many children at once.
+                foreach (var pair in children)
+                {
+                    HircBump(Hierarchy.ChildrenPerParent, $"children_{Math.Min(pair.Value, 16)}", 1);
+                    Hierarchy.ParentsWithSeveralChildren = pair.Value > 1
+                        ? checked(Hierarchy.ParentsWithSeveralChildren + 1)
+                        : Hierarchy.ParentsWithSeveralChildren;
+                }
             }
         }
 
@@ -5841,6 +5852,8 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> InternalTypes { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> LeafTypes { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> Depths { get; } = new(StringComparer.Ordinal);
+        public uint ParentsWithSeveralChildren { get; set; }
+        public Dictionary<string, uint> ChildrenPerParent { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether each constant in the shared framer beats every rival value, and on
