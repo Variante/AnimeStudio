@@ -622,6 +622,15 @@ namespace AnimeStudio.Endfield
                         referrerCounts,
                         referrerOf);
                 }
+                if (objectType is 19 or 20 or 21)
+                {
+                    var small = structure.SmallTypes;
+                    var smallBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    small.Bodies = checked(small.Bodies + 1);
+                    small.BodyBytes = checked(small.BodyBytes + (uint)smallBody.Length);
+                    HircBump(small.BodiesByType, $"type{objectType:X2}", 1);
+                    RecordSmallType(small, smallBody, objectType);
+                }
                 if (objectType == 9)
                 {
                     var census09 = structure.Type09;
@@ -1989,6 +1998,99 @@ namespace AnimeStudio.Endfield
 
         private const int Type17RunElementBytes = 6;
 
+        // A counted block: one byte of count, that many one-byte keys, then that many
+        // values of the given width. Keys and values are parallel runs, the same shape
+        // numeric type 0x16 uses.
+        private static bool TakeSmallBlock(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            int valueBytes,
+            out byte count)
+        {
+            count = 0;
+            if (cursor >= body.Length)
+            {
+                return false;
+            }
+            count = body[cursor];
+            cursor = checked(cursor + 1);
+            var span = checked(count * (1 + valueBytes));
+            if (span > body.Length - cursor)
+            {
+                return false;
+            }
+            cursor = checked(cursor + span);
+            return true;
+        }
+
+        private static void RecordSmallType(
+            EndfieldHircSmallTypeCensus census,
+            ReadOnlySpan<byte> body,
+            byte objectType)
+        {
+            void Fail(string category)
+            {
+                census.Failed = checked(census.Failed + 1);
+                HircBump(census.FailureCounts, category, 1);
+            }
+
+            var cursor = 0;
+            if (objectType == 21)
+            {
+                // Numeric type 0x15 shares the eight-byte header numeric types 0x10 and
+                // 0x11 use, then closes with eight further bytes.
+                if (body.Length < 8)
+                {
+                    Fail("short_header");
+                    return;
+                }
+                var size = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(4, 4));
+                if (size > (uint)(body.Length - 8))
+                {
+                    Fail("range_section");
+                    return;
+                }
+                cursor = checked(8 + (int)size);
+                if (!HircTake(body, ref cursor, 8, out _, "type21Tail"))
+                {
+                    Fail("truncated_type21Tail");
+                    return;
+                }
+            }
+            else
+            {
+                // Numeric types 0x13 and 0x14: a block of four-byte values, a block of
+                // eight-byte values, then two bytes.
+                if (!TakeSmallBlock(body, ref cursor, 4, out _))
+                {
+                    Fail("range_firstBlock");
+                    return;
+                }
+                if (!TakeSmallBlock(body, ref cursor, 8, out var secondCount))
+                {
+                    Fail("range_secondBlock");
+                    return;
+                }
+                if (secondCount > 0)
+                {
+                    census.BodiesWithSecondBlock = checked(census.BodiesWithSecondBlock + 1);
+                    census.SecondBlockEntries = checked(census.SecondBlockEntries + secondCount);
+                }
+                if (!HircTake(body, ref cursor, 2, out _, "smallTypeTail"))
+                {
+                    Fail("truncated_smallTypeTail");
+                    return;
+                }
+            }
+            if (cursor != body.Length)
+            {
+                Fail("trailing_bytes");
+                return;
+            }
+            census.Exact = checked(census.Exact + 1);
+            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
+        }
+
         private static void RecordType09(
             EndfieldHircType09Census census,
             ReadOnlySpan<byte> body,
@@ -2774,6 +2876,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
+        public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -2854,6 +2957,24 @@ namespace AnimeStudio.Endfield
     // When that second count is zero the body ends with one more byte and is consumed
     // exactly. When it is not zero it introduces records whose shape is not
     // established, so those bodies are fenced rather than framed.
+    // Numeric types 0x13, 0x14 and 0x15. These corpora are tiny -- four, nine and five
+    // bodies -- so the witness counts matter as much as the pass count and are
+    // published beside it. A layout that consumes four bodies exactly is a weak claim
+    // on its own; what makes the eight-byte value width more than a fit is that some
+    // bodies actually carry a nonempty second block, and those are counted here.
+    public sealed class EndfieldHircSmallTypeCensus
+    {
+        public uint Bodies { get; set; }
+        public uint Exact { get; set; }
+        public uint Failed { get; set; }
+        public uint ExactBytes { get; set; }
+        public uint BodyBytes { get; set; }
+        public uint BodiesWithSecondBlock { get; set; }
+        public uint SecondBlockEntries { get; set; }
+        public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircType09Census
     {
         public uint Bodies { get; set; }

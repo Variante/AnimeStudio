@@ -26,6 +26,7 @@ internal static class EndfieldAkpkTests
         TestType22BodyFramesReuseGroupI();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
+        TestSmallTypesFrameExactly();
         TestMalformedHircFailsClosed();
         TestSoundPayloadAndMetadata();
         TestUnsupportedVersionFailsClosed();
@@ -588,6 +589,71 @@ internal static class EndfieldAkpkTests
 
 
 
+
+
+    private static void TestSmallTypesFrameExactly()
+    {
+        static byte[] TwoBlocks(byte first, byte second)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(first);
+            writer.Write(new byte[first]);              // keys
+            writer.Write(new byte[first * 4]);          // four-byte values
+            writer.Write(second);
+            writer.Write(new byte[second]);             // keys
+            writer.Write(new byte[second * 8]);         // eight-byte values
+            writer.Write(new byte[2]);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        var pair = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+            ((byte)0x13, 0x7801U, TwoBlocks(3, 0)),
+            ((byte)0x14, 0x7802U, TwoBlocks(7, 2))))).BnkStructures[0];
+        if (pair.SmallTypes.Exact != 2 || pair.SmallTypes.Failed != 0
+            || pair.SmallTypes.BodiesWithSecondBlock != 1
+            || pair.SmallTypes.SecondBlockEntries != 2
+            || pair.SmallTypes.BodiesByType["type13"] != 1
+            || pair.SmallTypes.BodiesByType["type14"] != 1)
+        {
+            throw new InvalidOperationException("small types did not frame exactly");
+        }
+
+        // The second block's values are eight bytes, not four. A four-byte reading
+        // would leave bytes over, so this is what pins the width.
+        var wrongWidth = TwoBlocks(1, 1);
+        if (EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+                ((byte)0x13, 0x7803U, wrongWidth[..^4])))).BnkStructures[0]
+                .SmallTypes.Exact != 0)
+        {
+            throw new InvalidOperationException("small types accepted a four-byte second value");
+        }
+
+        // Numeric type 0x15 uses the 0x10/0x11 header plus eight bytes.
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, true))
+        {
+            writer.Write((ushort)7);
+            writer.Write((ushort)0xAE);
+            writer.Write(12U);
+            writer.Write(new byte[12]);
+            writer.Write(new byte[8]);
+        }
+        var header = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+            ((byte)0x15, 0x7804U, stream.ToArray())))).BnkStructures[0];
+        if (header.SmallTypes.Exact != 1 || header.SmallTypes.BodiesByType["type15"] != 1)
+        {
+            throw new InvalidOperationException("type 0x15 did not frame exactly");
+        }
+
+        if (!EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+                ((byte)0x13, 0x7805U, TwoBlocks(1, 1).Concat(new byte[] { 0 }).ToArray()))))
+                .BnkStructures[0].SmallTypes.FailureCounts.ContainsKey("trailing_bytes"))
+        {
+            throw new InvalidOperationException("small types accepted trailing bytes");
+        }
+    }
 
     private static void TestType17FramesOrFencesTheTiedWidth()
     {
