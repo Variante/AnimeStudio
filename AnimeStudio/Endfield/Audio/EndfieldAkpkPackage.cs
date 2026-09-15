@@ -32,6 +32,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType03TargetCensus Type03Targets { get; } = new();
         public EndfieldHircType08TailWordCensus Type08TailWords { get; } = new();
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
+        public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -112,6 +113,7 @@ namespace AnimeStudio.Endfield
             package.CountNamedBanksAndMedia();
             package.ClassifyType03Targets();
             package.ClassifyType08TailWords();
+            package.ClassifyMusicReferences();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -270,6 +272,67 @@ namespace AnimeStudio.Endfield
                                 census.SecondWordTargetTypeCounts, $"type{controlType:X2}", 1);
                         }
                     }
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// Decide which words in a music body name objects the package ships.
+        /// </summary>
+        /// <remarks>
+        /// The music types resist framing, so their references cannot be read from a
+        /// known offset. What can be done is to offer every word and let the id space
+        /// decide: a package declares on the order of a thousand objects against a
+        /// 32-bit range, so chance resolutions across the whole corpus are expected in
+        /// the low single digits. Anything above that is real, and the target types are
+        /// counted so the relationships, not just the counts, are visible.
+        ///
+        /// Bodies are counted by how many references they carry, because "every body
+        /// carries at least one" is a much stronger statement than a total.
+        /// </remarks>
+        private void ClassifyMusicReferences()
+        {
+            var everything = new HashSet<uint>();
+            var typeOf = new Dictionary<uint, byte>();
+            foreach (var structure in BnkStructures)
+            {
+                everything.UnionWith(structure.DeclaredObjectIds);
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
+            }
+            MusicReferences.PackagePopulation = checked((uint)everything.Count);
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var (objectType, words) in structure.MusicBodyWords)
+                {
+                    MusicReferences.Bodies = checked(MusicReferences.Bodies + 1);
+                    MusicReferences.WordsOffered = checked(MusicReferences.WordsOffered + (uint)words.Length);
+                    var hits = 0U;
+                    foreach (var word in words)
+                    {
+                        if (!everything.Contains(word))
+                        {
+                            continue;
+                        }
+                        hits = checked(hits + 1);
+                        if (typeOf.TryGetValue(word, out var targetType))
+                        {
+                            HircBump(
+                                MusicReferences.EdgeCounts,
+                                $"type{objectType:X2}_to_type{targetType:X2}",
+                                1);
+                        }
+                    }
+                    MusicReferences.References = checked(MusicReferences.References + hits);
+                    if (hits == 0)
+                    {
+                        MusicReferences.BodiesWithNoReference =
+                            checked(MusicReferences.BodiesWithNoReference + 1);
+                    }
+                    HircBump(MusicReferences.ReferencesPerBody, $"refs_{Math.Min(hits, 8)}", 1);
                 }
             }
         }
@@ -1013,6 +1076,10 @@ namespace AnimeStudio.Endfield
                 {
                     var head = structure.MusicHeadReferences;
                     head.Bodies = checked(head.Bodies + 1);
+                    CollectMusicBodyWords(
+                        structure.MusicBodyWords,
+                        objectType,
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
                     CensusMusicTailWords(
                         head,
                         payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)),
@@ -2470,6 +2537,38 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x08's tail is anchored by a nine-byte constant that every body
         // carries. It is treated as a landmark, not as data: a body whose bytes do not
         // match it here is refused rather than framed with an offset that fits.
+        /// <summary>
+        /// Keep every distinct nonzero 32-bit word a music body contains.
+        /// </summary>
+        /// <remarks>
+        /// Offered at every byte offset, not every fourth: these types are not framed,
+        /// so nothing says a reference is aligned. Object ids are sparse against the
+        /// 32-bit range, so offering more candidates costs a little more chance and
+        /// buys every reference the body actually carries.
+        /// </remarks>
+        private static void CollectMusicBodyWords(
+            List<(byte Type, uint[] Words)> sink,
+            byte objectType,
+            ReadOnlySpan<byte> body)
+        {
+            if (body.Length < 4)
+            {
+                return;
+            }
+            var words = new HashSet<uint>();
+            for (var at = 0; at + 4 <= body.Length; at++)
+            {
+                var word = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4));
+                if (word != 0)
+                {
+                    words.Add(word);
+                }
+            }
+            var flat = new uint[words.Count];
+            words.CopyTo(flat);
+            sink.Add((objectType, flat));
+        }
+
         // Distances from the end of a music body at which a 32-bit word carries a name
         // hash. Counted from the end because these types' heads are variable-length:
         // across the corpus only three byte positions from the front take a single
@@ -3854,6 +3953,11 @@ namespace AnimeStudio.Endfield
         // package's whole object set is known.
         public List<(uint First, uint Second)> Type08TailWords { get; } = new();
         public List<(uint First, uint Second)> Type12TailWords { get; } = new();
+        // (music type, distinct nonzero words) per body, classified once the package's
+        // whole object set is known. The music types are not framed, so a reference
+        // cannot be read from a known offset; every word is offered instead and the
+        // sparseness of the id space decides which are real.
+        public List<(byte Type, uint[] Words)> MusicBodyWords { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4036,6 +4140,18 @@ namespace AnimeStudio.Endfield
         public uint Null { get; set; }
         public uint Unresolved { get; set; }
         public uint TooShort { get; set; }
+    }
+
+    // Which words in a music body name objects the package ships, and what they name.
+    public sealed class EndfieldHircMusicReferenceCensus
+    {
+        public uint Bodies { get; set; }
+        public uint PackagePopulation { get; set; }
+        public uint WordsOffered { get; set; }
+        public uint References { get; set; }
+        public uint BodiesWithNoReference { get; set; }
+        public Dictionary<string, uint> ReferencesPerBody { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> EdgeCounts { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether the words in numeric type 0x08's tail head name package objects. The
