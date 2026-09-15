@@ -401,7 +401,8 @@ namespace AnimeStudio.Endfield
             }
             foreach (var structure in BnkStructures)
             {
-                foreach (var (predicted, fixedWord, plus, minus, discriminant) in structure.Type0AHeadPredictions)
+                foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord)
+                         in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -426,6 +427,15 @@ namespace AnimeStudio.Endfield
                     Score("fixedOffset", fixedWord);
                     Score("predictedPlusFour", plus);
                     Score("predictedMinusFour", minus);
+                    if (discriminant)
+                    {
+                        HircBump(
+                            Type0AHead.HeadWordTargets,
+                            everything.Contains(headWord) && typeOf.TryGetValue(headWord, out var headType)
+                                ? $"type{headType:X2}"
+                                : "nothing",
+                            1);
+                    }
                 }
             }
         }
@@ -2645,6 +2655,9 @@ namespace AnimeStudio.Endfield
         // Byte 17 says whether the rule applies. Where it is zero the rule places the
         // reference in 3,744 of 3,745 bodies that have one; where it is not, in 6 of 144.
         internal const int Type0AHeadDiscriminantOffset = 17;
+        // The other reference every numeric type 0x0A body carries, inside its fixed
+        // head. It resolves in every conditioned body and only ever to 0x0C or 0x0D.
+        internal const int Type0AHeadWordOffset = 9;
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2655,7 +2668,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2676,7 +2689,8 @@ namespace AnimeStudio.Endfield
                 Read(body, Type0AHeadFixedBytes),
                 Read(body, at + 4),
                 Read(body, at - 4),
-                body.Length > Type0AHeadDiscriminantOffset && body[Type0AHeadDiscriminantOffset] == 0));
+                body.Length > Type0AHeadDiscriminantOffset && body[Type0AHeadDiscriminantOffset] == 0,
+                Read(body, Type0AHeadWordOffset)));
         }
 
         /// <summary>
@@ -4112,7 +4126,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4304,6 +4318,7 @@ namespace AnimeStudio.Endfield
         public uint BodiesWhereTheRuleApplies { get; set; }
         public Dictionary<string, uint> NamesTheSourceType { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> NamesTheSourceTypeWhereTheRuleApplies { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> HeadWordTargets { get; } = new(StringComparer.Ordinal);
     }
 
     // Which words in a music body name objects the package ships, and what they name.
