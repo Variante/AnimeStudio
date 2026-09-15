@@ -1160,6 +1160,120 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Census numeric type 0x0C's counted reference array.
+        /// </summary>
+        /// <remarks>
+        /// The count sits at `32 + 5 * body[14]` and is followed by that many 32-bit
+        /// object ids. Over the type's 742 bodies, 721 have an array in which **every**
+        /// entry resolves to an object in the same bank, with lengths spread from 1 to
+        /// 9 and beyond rather than piling on one value.
+        ///
+        /// Two separate discriminations, because the base and the step are settled by
+        /// different evidence. The base is settled by resolution: at 32 every array
+        /// resolves and at 30, 31, 33, 34, 36 and 40 essentially none does. The step
+        /// is settled by coverage: a step of 5 finds an array in 704 bodies where 0, 4,
+        /// 6 and 8 find one in 564, and the 140 extra are exactly the bodies whose
+        /// selector byte is nonzero. A step that did not match the data would not
+        /// reach more bodies, it would reach the same ones and fail on them.
+        ///
+        /// The array is not everything this type references -- most bodies carry more
+        /// ids after it -- so this locates one field rather than framing the type.
+        /// </remarks>
+        private static void CensusType0CArray(
+            EndfieldHircType0CArrayCensus census,
+            ReadOnlySpan<byte> body,
+            Dictionary<uint, byte> bankObjectTypes)
+        {
+            census.Bodies = checked(census.Bodies + 1);
+            if (body.Length <= Type0CArraySelectorOffset)
+            {
+                census.TooShort = checked(census.TooShort + 1);
+                return;
+            }
+            var selector = body[Type0CArraySelectorOffset];
+            if (selector > Type0CArrayMaximumSelector)
+            {
+                census.SelectorOutOfRange = checked(census.SelectorOutOfRange + 1);
+                return;
+            }
+            HircBump(census.SelectorValues, $"selector_{selector}", 1);
+            var at = checked(Type0CArrayBaseOffset + Type0CArrayStepBytes * selector);
+            if (at + 4 > body.Length)
+            {
+                census.CountPastTheEnd = checked(census.CountPastTheEnd + 1);
+                return;
+            }
+            var count = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4));
+            if (count == 0 || count > Type0CArrayMaximumLength)
+            {
+                census.CountOutOfRange = checked(census.CountOutOfRange + 1);
+                return;
+            }
+            var start = checked(at + 4);
+            if (checked(start + 4 * (int)count) > body.Length)
+            {
+                census.ArrayPastTheEnd = checked(census.ArrayPastTheEnd + 1);
+                return;
+            }
+            census.ArraysTested = checked(census.ArraysTested + 1);
+            var resolved = true;
+            for (var i = 0; i < count; i++)
+            {
+                var id = BinaryPrimitives.ReadUInt32LittleEndian(
+                    body.Slice(checked(start + 4 * i), 4));
+                if (!bankObjectTypes.TryGetValue(id, out var target))
+                {
+                    resolved = false;
+                    break;
+                }
+                HircBump(census.TargetTypes, $"type{target:X2}", 1);
+            }
+            if (resolved)
+            {
+                census.ArraysFullyResolving = checked(census.ArraysFullyResolving + 1);
+                HircBump(census.ArrayLengths, $"entries_{Math.Min(count, 9)}", 1);
+            }
+
+            // Every rival base, scored the same way, so the offset is discriminated
+            // rather than asserted.
+            foreach (var rival in Type0CArrayRivalBases)
+            {
+                var ra = checked(rival + Type0CArrayStepBytes * selector);
+                if (ra + 4 > body.Length)
+                {
+                    continue;
+                }
+                // Counted as attempted here, before the plausibility checks, so that a
+                // rival failing to produce even a usable count registers as a failure
+                // rather than as "not tested". Every rival base fails at exactly this
+                // point, which is a stronger result than one that fails later.
+                census.RivalArraysTested = checked(census.RivalArraysTested + 1);
+                var rc = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(ra, 4));
+                if (rc == 0 || rc > Type0CArrayMaximumLength
+                    || checked(ra + 4 + 4 * (int)rc) > body.Length)
+                {
+                    continue;
+                }
+                var ok = true;
+                for (var i = 0; i < rc; i++)
+                {
+                    if (!bankObjectTypes.ContainsKey(BinaryPrimitives.ReadUInt32LittleEndian(
+                            body.Slice(checked(ra + 4 + 4 * i), 4))))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok)
+                {
+                    census.RivalArraysFullyResolving =
+                        checked(census.RivalArraysFullyResolving + 1);
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1951,6 +2065,10 @@ namespace AnimeStudio.Endfield
                         // bank, because object ids repeat across banks and a relation
                         // resolved corpus-wide is a different relation.
                         var parentBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                        if (objectType == 12)
+                        {
+                            CensusType0CArray(structure.Type0CArray, parentBody, bankObjectTypes);
+                        }
                         structure.Type0CParents[objectId] = (
                             objectType,
                             parentBody.Length >= Type0CParentOffset + 4
@@ -3153,6 +3271,20 @@ namespace AnimeStudio.Endfield
         // the end these types look entirely unlocated. At offset 9: 0x0A names an
         // object in 97% of its bodies, 0x0C in 96%, 0x0D in 95%.
         internal const int Type0CParentOffset = 9;
+        // Numeric type 0x0C carries a counted array of references whose count sits at
+        // 32 + 5 * body[14]. The selector byte counts five-byte optional fields, the
+        // same five-byte step the element trailer and the entry widths use.
+        internal const int Type0CArrayBaseOffset = 32;
+        internal const int Type0CArrayStepBytes = 5;
+        internal const int Type0CArraySelectorOffset = 14;
+        internal const byte Type0CArrayMaximumSelector = 8;
+        internal const uint Type0CArrayMaximumLength = 64;
+        // Scored against neighbouring bases and against other steps. The base is
+        // decisive on its own -- 704 arrays resolve fully at 32 and none at 30, 31,
+        // 33, 34, 36 or 40. The step is decisive on coverage: 5 reaches 704 bodies
+        // where 0, 4, 6 and 8 reach 564, and the 140 it adds are exactly the bodies
+        // whose selector is nonzero.
+        internal static readonly int[] Type0CArrayRivalBases = { 28, 30, 31, 33, 34, 36, 40 };
         // The parent field: an object naming the object that owns it, at a fixed front
         // offset. Found by sweeping front offsets and asking which carry a reference in
         // most bodies, then keeping only those whose target names the child back.
@@ -6201,6 +6333,7 @@ namespace AnimeStudio.Endfield
         // actually live in.
         public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
         public Dictionary<uint, (byte Type, uint Parent)> Type0CParents { get; } = new();
+        public EndfieldHircType0CArrayCensus Type0CArray { get; } = new();
         // objectId -> the object its parent field names, for every type that has one.
         public Dictionary<uint, uint> ParentFields { get; } = new();
         public EndfieldHircParentFieldCensus ParentField { get; } = new();
@@ -6434,6 +6567,24 @@ namespace AnimeStudio.Endfield
         public uint ParentDeclaresNoChildren { get; set; }
         public Dictionary<string, uint> EdgeTypes { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> DisagreementTypes { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Numeric type 0x0C's counted reference array, at 32 + 5 * body[14].
+    public sealed class EndfieldHircType0CArrayCensus
+    {
+        public uint Bodies { get; set; }
+        public uint TooShort { get; set; }
+        public uint SelectorOutOfRange { get; set; }
+        public uint CountPastTheEnd { get; set; }
+        public uint CountOutOfRange { get; set; }
+        public uint ArrayPastTheEnd { get; set; }
+        public uint ArraysTested { get; set; }
+        public uint ArraysFullyResolving { get; set; }
+        public uint RivalArraysTested { get; set; }
+        public uint RivalArraysFullyResolving { get; set; }
+        public Dictionary<string, uint> SelectorValues { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ArrayLengths { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> TargetTypes { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0C's parent relation, read at a fixed front offset.

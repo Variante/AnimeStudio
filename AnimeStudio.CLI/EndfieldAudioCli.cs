@@ -261,6 +261,22 @@ namespace AnimeStudio.CLI
                                 ["edgeTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.ParentField.EdgeTypes)),
                                 ["disagreementTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.ParentField.DisagreementTypes)),
                             },
+                            ["hircType0CArray"] = new Dictionary<string, object?>
+                            {
+                                ["bodies"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.Bodies),
+                                ["tooShort"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.TooShort),
+                                ["selectorOutOfRange"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.SelectorOutOfRange),
+                                ["countPastTheEnd"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.CountPastTheEnd),
+                                ["countOutOfRange"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.CountOutOfRange),
+                                ["arrayPastTheEnd"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.ArrayPastTheEnd),
+                                ["arraysTested"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.ArraysTested),
+                                ["arraysFullyResolving"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.ArraysFullyResolving),
+                                ["rivalArraysTested"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.RivalArraysTested),
+                                ["rivalArraysFullyResolving"] = package.BnkStructures.Sum(b => (long)b.Type0CArray.RivalArraysFullyResolving),
+                                ["selectorValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.SelectorValues)),
+                                ["arrayLengths"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.ArrayLengths)),
+                                ["targetTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type0CArray.TargetTypes)),
+                            },
                             ["hircType0CHierarchy"] = new Dictionary<string, object?>
                             {
                                 ["banks"] = package.Type0CHierarchy.Banks,
