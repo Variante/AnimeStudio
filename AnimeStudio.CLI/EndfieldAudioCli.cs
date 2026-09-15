@@ -214,6 +214,8 @@ namespace AnimeStudio.CLI
                                 ["tailFloats"] = package.Type0AHead.TailFloats,
                                 ["tailFloatsInBand"] = package.Type0AHead.TailFloatsInBand,
                                 ["tailFloatsWhole"] = package.Type0AHead.TailFloatsWhole,
+                                ["neighbourFloats"] = package.Type0AHead.NeighbourFloats,
+                                ["neighbourFloatsWhole"] = package.Type0AHead.NeighbourFloatsWhole,
                                 ["elementTotal"] = (long)package.Type0AElements.Total,
                                 ["elementLeadingByteNotZero"] = (long)package.Type0AElements.LeadingByteNotZero,
                                 ["elementPadNotZero"] = (long)package.Type0AElements.PadNotZero,
