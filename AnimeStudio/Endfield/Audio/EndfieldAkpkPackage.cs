@@ -2418,6 +2418,10 @@ namespace AnimeStudio.Endfield
         // (2, 0, -96.0) in 8 and (2, 500, -96.0) in 1, and numeric type 0x12 carries
         // (0, 0, -96.3) in all of its. A magic does not vary in one 32-bit slot.
         internal const int SharedMiddleBlockBytes = 9;
+        // After the middle block: a 32-bit count and that many eighteen-byte
+        // elements. A bound so a corrupt count cannot make the reader walk the body.
+        internal const int SharedMiddleRunElementBytes = 18;
+        internal const uint SharedMiddleRunMaximum = 64;
 
         /// <summary>
         /// Frame the body layout numeric HIRC types 0x08 and 0x12 share.
@@ -2505,14 +2509,28 @@ namespace AnimeStudio.Endfield
                 selectors,
                 $"middleBlock_{middle[0]:X2}_{BinaryPrimitives.ReadUInt32LittleEndian(middle.Slice(1, 4))}",
                 1);
-            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterTheMiddleBlock"))
+            // A 32-bit count, then that many eighteen-byte elements. It reads as a
+            // constant zero in 396 of the 412 bodies of both types, which is why it was
+            // one; the sixteen that declare 1, 2, 3 or 7 are what show it is a count,
+            // and the width was solved for by asking which one lets each of them close.
+            if (!HircTake(body, ref cursor, 4, out failure, "middleRunCount"))
             {
                 return failure;
             }
-            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4)) != 0)
+            var middleRun = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
+            if (middleRun > SharedMiddleRunMaximum)
             {
-                return HircFrameOutcome("failed", "word_after_the_middle_block_is_not_zero", cursor - 4, 0, 0);
+                return HircFrameOutcome(
+                    "failed", "range_middle_run", cursor - 4, (int)SharedMiddleRunMaximum, (int)middleRun);
             }
+            var middleSpan = checked((int)middleRun * SharedMiddleRunElementBytes);
+            if (middleSpan > body.Length - cursor)
+            {
+                return HircFrameOutcome(
+                    "failed", "range_middle_run", cursor - 4, body.Length - cursor, middleSpan);
+            }
+            cursor = checked(cursor + middleSpan);
+            HircBump(groups, "middleRunElements", checked((uint)middleRun));
             if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "entryCount"))
             {
                 return failure;

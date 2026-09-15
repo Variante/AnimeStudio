@@ -877,7 +877,7 @@ internal static class EndfieldAkpkTests
         static byte[] Build(byte[] keys, byte secondKey, int secondWidth, byte entries,
                             byte secondCount = 1, uint afterSignature = 0,
                             int trailer = 5, byte[]? signature = null,
-                            byte[]? trailerBytes = null)
+                            byte[]? trailerBytes = null, byte[]? afterSignatureBytes = null)
         {
             using var stream = new MemoryStream();
             using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
@@ -893,6 +893,10 @@ internal static class EndfieldAkpkTests
             writer.Write(new byte[secondWidth]);
             writer.Write(signature ?? new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 });
             writer.Write(afterSignature);
+            if (afterSignatureBytes != null)
+            {
+                writer.Write(afterSignatureBytes);
+            }
             writer.Write(entries);
             if (entries != 0)
             {
@@ -948,10 +952,20 @@ internal static class EndfieldAkpkTests
 
         // Each of the remaining refusals must be reported under its own reason: a
         // single pooled failure would hide which part of the layout the body broke.
-        var badWord = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, afterSignature: 7));
-        if (badWord.FailureCounts["word_after_the_middle_block_is_not_zero"] != 1)
+        // The word after the middle block is a count, not a constant. It reads as
+        // zero in 396 of the 412 bodies of both types, which is exactly why it looked
+        // like one; a body declaring elements must frame, not fail.
+        var middleRun = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0, afterSignature: 2, afterSignatureBytes: new byte[36]));
+        if (middleRun.ExactCount != 1 || middleRun.GroupCounts["middleRunElements"] != 2)
         {
-            throw new InvalidOperationException("type 0x08 framed a nonzero word after the middle block");
+            throw new InvalidOperationException("type 0x08 refused a nonempty middle run");
+        }
+        // A count that cannot fit is refused rather than clamped to the bytes present.
+        var wildRun = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, afterSignature: 9));
+        if (wildRun.FailureCounts["range_middle_run"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 accepted an impossible middle run");
         }
         // A body that neither ends on the five zero bytes nor carries a whole tail
         // block is refused under the tail block's own reason, not the trailer's: which
