@@ -1822,6 +1822,24 @@ namespace AnimeStudio.Endfield
                 // puts it at offset 9, nonzero at offset 5. The offset is computed from
                 // that byte, never searched for, and an unobserved discriminant is
                 // counted as unknown rather than guessed either way.
+                foreach (var (parentType, parentOffset) in ParentFieldOffsets)
+                {
+                    if (parentType != objectType)
+                    {
+                        continue;
+                    }
+                    var pb = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
+                    if (pb.Length >= parentOffset + 4)
+                    {
+                        var named = BinaryPrimitives.ReadUInt32LittleEndian(
+                            pb.Slice(parentOffset, 4));
+                        if (named != 0)
+                        {
+                            structure.ParentFields[objectId] = named;
+                        }
+                    }
+                    break;
+                }
                 if (objectType is 10 or 12 or 13)
                 {
                     var head = structure.MusicHeadReferences;
@@ -1978,6 +1996,45 @@ namespace AnimeStudio.Endfield
             foreach (var pair in bankObjectTypes)
             {
                 structure.WalkObjectTypes[pair.Key] = pair.Value;
+            }
+            // The strongest cross-check this format allows. Every type with a parent
+            // field names one object there; the reference graph, read independently
+            // from entirely different bytes, has each parent naming its children. If
+            // the two are inverse, both readings are right about the same relation --
+            // and if they ever disagree, one of them has drifted.
+            foreach (var pair in structure.ParentFields)
+            {
+                if (!bankObjectTypes.ContainsKey(pair.Value))
+                {
+                    structure.ParentField.NamesSomethingOutsideTheBank =
+                        checked(structure.ParentField.NamesSomethingOutsideTheBank + 1);
+                    continue;
+                }
+                if (!bankEdges.TryGetValue(pair.Value, out var siblings))
+                {
+                    structure.ParentField.ParentDeclaresNoChildren =
+                        checked(structure.ParentField.ParentDeclaresNoChildren + 1);
+                    continue;
+                }
+                structure.ParentField.Checkable = checked(structure.ParentField.Checkable + 1);
+                if (siblings.Contains(pair.Key))
+                {
+                    structure.ParentField.ParentNamesTheChildBack =
+                        checked(structure.ParentField.ParentNamesTheChildBack + 1);
+                }
+                else
+                {
+                    structure.ParentField.ParentDoesNotNameTheChild =
+                        checked(structure.ParentField.ParentDoesNotNameTheChild + 1);
+                    HircBump(
+                        structure.ParentField.DisagreementTypes,
+                        $"type{bankObjectTypes[pair.Key]:X2}_under_type{bankObjectTypes[pair.Value]:X2}",
+                        1);
+                }
+                HircBump(
+                    structure.ParentField.EdgeTypes,
+                    $"type{bankObjectTypes[pair.Key]:X2}_to_type{bankObjectTypes[pair.Value]:X2}",
+                    1);
             }
             foreach (var pair in bankEdges)
             {
@@ -3005,6 +3062,22 @@ namespace AnimeStudio.Endfield
         // the end these types look entirely unlocated. At offset 9: 0x0A names an
         // object in 97% of its bodies, 0x0C in 96%, 0x0D in 95%.
         internal const int Type0CParentOffset = 9;
+        // The parent field: an object naming the object that owns it, at a fixed front
+        // offset. Found by sweeping front offsets and asking which carry a reference in
+        // most bodies, then keeping only those whose target names the child back.
+        //
+        // Two offsets the sweep also turned up are NOT parents and are excluded, which
+        // the inverse test is what established:
+        //   * 0x04 at offset 1 names a 0x03, and the reference graph has 0x04 naming
+        //     0x03 too -- the same direction, so it is that edge and not its inverse.
+        //     22,317 of its 22,335 cases disagreed.
+        //   * The music types at offset 9 are the head reference the reader already
+        //     censuses as musicHeadReferences (7,084 at offset 9, 242 at offset 5 by
+        //     byte 2). Also downward, also not a parent.
+        internal static readonly (byte Type, int Offset)[] ParentFieldOffsets =
+        {
+            (2, 22), (5, 8), (6, 8), (7, 8), (9, 8),
+        };
         internal const int Type11EntryHeaderBytes = 48;
         internal const int Type11EntryElementCountOffset = 44;
         // An element ends with a trailer whose FIRST byte selects its own length: zero
@@ -5960,6 +6033,9 @@ namespace AnimeStudio.Endfield
         // actually live in.
         public List<(uint Id, byte Type, uint[] Words)> MusicSources { get; } = new();
         public Dictionary<uint, (byte Type, uint Parent)> Type0CParents { get; } = new();
+        // objectId -> the object its parent field names, for every type that has one.
+        public Dictionary<uint, uint> ParentFields { get; } = new();
+        public EndfieldHircParentFieldCensus ParentField { get; } = new();
         // Numeric types 0x08 and 0x12's bodies, kept so the constants in the shared
         // framer can be scored against their alternatives rather than asserted. All
         // 412 of them together are about 32 KB.
@@ -6177,6 +6253,18 @@ namespace AnimeStudio.Endfield
         public uint EdgesBetweenScannedObjects { get; set; }
         public uint MutualEdges { get; set; }
         public Dictionary<string, uint> MutualEdgeKinds { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Whether the parent field and the reference graph are inverse relations.
+    public sealed class EndfieldHircParentFieldCensus
+    {
+        public uint Checkable { get; set; }
+        public uint ParentNamesTheChildBack { get; set; }
+        public uint ParentDoesNotNameTheChild { get; set; }
+        public uint NamesSomethingOutsideTheBank { get; set; }
+        public uint ParentDeclaresNoChildren { get; set; }
+        public Dictionary<string, uint> EdgeTypes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> DisagreementTypes { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0C's parent relation, read at a fixed front offset.

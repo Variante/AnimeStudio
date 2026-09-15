@@ -246,6 +246,16 @@ namespace AnimeStudio.CLI
                                 ["anchorSelectsOneTrailer"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorSelectsOneTrailer)),
                                 ["anchorLeavesWholeRecords"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorLeavesWholeRecords)),
                             },
+                            ["hircParentField"] = new Dictionary<string, object?>
+                            {
+                                ["checkable"] = package.BnkStructures.Sum(b => (long)b.ParentField.Checkable),
+                                ["parentNamesTheChildBack"] = package.BnkStructures.Sum(b => (long)b.ParentField.ParentNamesTheChildBack),
+                                ["parentDoesNotNameTheChild"] = package.BnkStructures.Sum(b => (long)b.ParentField.ParentDoesNotNameTheChild),
+                                ["namesSomethingOutsideTheBank"] = package.BnkStructures.Sum(b => (long)b.ParentField.NamesSomethingOutsideTheBank),
+                                ["parentDeclaresNoChildren"] = package.BnkStructures.Sum(b => (long)b.ParentField.ParentDeclaresNoChildren),
+                                ["edgeTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.ParentField.EdgeTypes)),
+                                ["disagreementTypes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.ParentField.DisagreementTypes)),
+                            },
                             ["hircType0CHierarchy"] = new Dictionary<string, object?>
                             {
                                 ["banks"] = package.Type0CHierarchy.Banks,
