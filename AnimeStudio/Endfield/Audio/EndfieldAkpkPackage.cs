@@ -109,6 +109,7 @@ namespace AnimeStudio.Endfield
             package.JoinType2SourcesToMedia();
             package.CountNamedBanksAndMedia();
             package.ClassifyType03Targets();
+            package.WalkNamedReachAcrossPackage();
             return package;
         }
 
@@ -232,6 +233,54 @@ namespace AnimeStudio.Endfield
                     }
                 }
             }
+        }
+
+
+        // The walk runs over every bank in the package at once. Doing it per bank
+        // abandoned any edge that pointed at a sibling bank, which the type 0x03
+        // classification showed is a real and common relation rather than a dead end.
+        // Edges leaving the *package* are still counted and not followed: this reader
+        // cannot see the other packages.
+        private void WalkNamedReachAcrossPackage()
+        {
+            var hashes = NamedIdentityHashes;
+            if (hashes == null || hashes.Count == 0 || BnkStructures.Count == 0)
+            {
+                return;
+            }
+            var types = new Dictionary<uint, byte>();
+            var edges = new Dictionary<uint, List<uint>>();
+            var sources = new Dictionary<uint, uint>();
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    types[pair.Key] = pair.Value;
+                }
+                foreach (var pair in structure.WalkEdges)
+                {
+                    edges[pair.Key] = pair.Value;
+                }
+                foreach (var pair in structure.WalkSourceIds)
+                {
+                    sources[pair.Key] = pair.Value;
+                }
+            }
+            foreach (var structure in BnkStructures)
+            {
+                var census = structure.NamedReachCensus;
+                census.MatchedObjects = 0;
+                census.MatchedNamedType = 0;
+                census.ReachingASource = 0;
+                census.ReachingNoSource = 0;
+                census.ReachedSourceIds = 0;
+                census.WalkEdgesLeavingThePackage = 0;
+                census.MatchesByObjectType.Clear();
+                census.ReachedSourceIdsByIdentity.Clear();
+                census.ReachedSourceIdListByIdentity.Clear();
+            }
+            WalkHircNamedReach(
+                BnkStructures[0].NamedReachCensus, hashes, types, edges, sources);
         }
 
         private static uint ReadUInt32(BinaryReader reader, string field)
@@ -954,12 +1003,18 @@ namespace AnimeStudio.Endfield
             structure.ReferenceCensus.DistinctDuplicateObjectIds = checked(
                 structure.ReferenceCensus.DistinctDuplicateObjectIds + (uint)duplicateObjectIds.Count);
             MeasureHircReferenceShape(structure.ReferenceCensus, referrerOf);
-            WalkHircNamedReach(
-                structure.NamedReachCensus,
-                namedIdentityHashes,
-                bankObjectTypes,
-                bankEdges,
-                bankSourceIds);
+            foreach (var pair in bankObjectTypes)
+            {
+                structure.WalkObjectTypes[pair.Key] = pair.Value;
+            }
+            foreach (var pair in bankEdges)
+            {
+                structure.WalkEdges[pair.Key] = pair.Value;
+            }
+            foreach (var pair in bankSourceIds)
+            {
+                structure.WalkSourceIds[pair.Key] = pair.Value;
+            }
 
             if (cursor != bodyEnd)
             {
@@ -1396,8 +1451,8 @@ namespace AnimeStudio.Endfield
                     {
                         if (!bankObjectTypes.ContainsKey(reference))
                         {
-                            census.WalkEdgesLeavingTheBank =
-                                checked(census.WalkEdgesLeavingTheBank + 1);
+                            census.WalkEdgesLeavingThePackage =
+                                checked(census.WalkEdgesLeavingThePackage + 1);
                             continue;
                         }
                         if (!seen.Add(reference))
@@ -3032,6 +3087,10 @@ namespace AnimeStudio.Endfield
         // package's full object set is known.
         public List<(byte Action, uint Target)> Type03Targets { get; } = new();
         public HashSet<uint> DeclaredObjectIds { get; } = new();
+        // Retained for the package-wide named-reach walk.
+        public Dictionary<uint, byte> WalkObjectTypes { get; } = new();
+        public Dictionary<uint, List<uint>> WalkEdges { get; } = new();
+        public Dictionary<uint, uint> WalkSourceIds { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -3239,7 +3298,7 @@ namespace AnimeStudio.Endfield
         public uint ReachingASource { get; set; }
         public uint ReachingNoSource { get; set; }
         public uint ReachedSourceIds { get; set; }
-        public uint WalkEdgesLeavingTheBank { get; set; }
+        public uint WalkEdgesLeavingThePackage { get; set; }
         // Populations other than HIRC objects that the caller's hashes might name.
         // Reported so the same coincidence test can be applied to them.
         public uint BanksMatched { get; set; }

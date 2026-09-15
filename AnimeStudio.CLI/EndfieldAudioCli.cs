@@ -616,7 +616,7 @@ namespace AnimeStudio.CLI
                 ["reachingASource"] = rows.Sum(row => (long)row.ReachingASource),
                 ["reachingNoSource"] = rows.Sum(row => (long)row.ReachingNoSource),
                 ["reachedSourceIds"] = rows.Sum(row => (long)row.ReachedSourceIds),
-                ["walkEdgesLeavingTheBank"] = rows.Sum(row => (long)row.WalkEdgesLeavingTheBank),
+                ["walkEdgesLeavingThePackage"] = rows.Sum(row => (long)row.WalkEdgesLeavingThePackage),
                 ["matchesByObjectType"] = rows
                     .SelectMany(row => row.MatchesByObjectType)
                     .GroupBy(pair => pair.Key, StringComparer.Ordinal)
