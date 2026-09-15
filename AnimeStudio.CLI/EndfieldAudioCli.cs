@@ -695,10 +695,11 @@ namespace AnimeStudio.CLI
             IEnumerable<EndfieldBnkStructure> structures)
         {
             var bodies = 0U; var resolved = 0U; var unresolved = 0U; var zero = 0U;
-            var unknown = 0U; var tooShort = 0U;
+            var unknown = 0U; var tooShort = 0U; var unknownHead = 0U;
             var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
             var offsets = new Dictionary<string, uint>(StringComparer.Ordinal);
             var discriminants = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var headShapes = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var structure in structures)
             {
                 var head = structure.MusicHeadReferences;
@@ -708,6 +709,7 @@ namespace AnimeStudio.CLI
                 zero = checked(zero + head.Zero);
                 unknown = checked(unknown + head.UnknownDiscriminant);
                 tooShort = checked(tooShort + head.TooShort);
+                unknownHead = checked(unknownHead + head.UnknownHeadShape);
                 foreach (var pair in head.BodiesByType)
                 {
                     byType.TryGetValue(pair.Key, out var existing);
@@ -723,6 +725,11 @@ namespace AnimeStudio.CLI
                     discriminants.TryGetValue(pair.Key, out var existing);
                     discriminants[pair.Key] = checked(existing + pair.Value);
                 }
+                foreach (var pair in head.HeadShapeCounts)
+                {
+                    headShapes.TryGetValue(pair.Key, out var existing);
+                    headShapes[pair.Key] = checked(existing + pair.Value);
+                }
             }
             return new Dictionary<string, object?>
             {
@@ -731,10 +738,12 @@ namespace AnimeStudio.CLI
                 ["unresolved"] = unresolved,
                 ["zero"] = zero,
                 ["unknownDiscriminant"] = unknown,
+                ["unknownHeadShape"] = unknownHead,
                 ["tooShort"] = tooShort,
                 ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["offsetCounts"] = offsets.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["discriminantCounts"] = discriminants.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["headShapeCounts"] = headShapes.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
         }
 

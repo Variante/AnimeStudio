@@ -665,7 +665,7 @@ namespace AnimeStudio.Endfield
                 // puts it at offset 9, nonzero at offset 5. The offset is computed from
                 // that byte, never searched for, and an unobserved discriminant is
                 // counted as unknown rather than guessed either way.
-                if (objectType is 10 or 13)
+                if (objectType is 10 or 12 or 13)
                 {
                     var head = structure.MusicHeadReferences;
                     head.Bodies = checked(head.Bodies + 1);
@@ -675,8 +675,14 @@ namespace AnimeStudio.Endfield
                     {
                         head.TooShort = checked(head.TooShort + 1);
                     }
+                    else if (musicBody[0] != 0)
+                    {
+                        HircBump(head.HeadShapeCounts, $"head_{musicBody[0]:X2}", 1);
+                        head.UnknownHeadShape = checked(head.UnknownHeadShape + 1);
+                    }
                     else
                     {
+                        HircBump(head.HeadShapeCounts, $"head_{musicBody[0]:X2}", 1);
                         var discriminant = musicBody[2];
                         HircBump(head.DiscriminantCounts, $"byte2_{discriminant:X2}", 1);
                         if (discriminant > 2)
@@ -2589,10 +2595,15 @@ namespace AnimeStudio.Endfield
         public uint Unresolved { get; set; }
         public uint Zero { get; set; }
         public uint UnknownDiscriminant { get; set; }
+        // Bodies whose first byte is not 0. Only numeric type 0x0C has any, and their
+        // head is a different shape, so they are excluded from the claim and counted
+        // here rather than quietly shrinking the denominator.
+        public uint UnknownHeadShape { get; set; }
         public uint TooShort { get; set; }
         public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> OffsetCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> DiscriminantCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> HeadShapeCounts { get; } = new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircNamedReachCensus

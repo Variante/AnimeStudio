@@ -708,6 +708,22 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("music head lost an unresolved reference");
         }
 
+        // Numeric type 0x0C shares the head, but some of its bodies open with a
+        // different first byte. Those are outside the claim and must be counted as
+        // such rather than read with the wrong rule.
+        var otherShape = BuildMusicBody(0, target);
+        otherShape[0] = 6;
+        var shaped = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
+            ((byte)0x02, target, targetBody),
+            ((byte)0x0C, 0x7308U, otherShape)))).BnkStructures[0];
+        if (shaped.MusicHeadReferences.UnknownHeadShape != 1
+            || shaped.MusicHeadReferences.Resolved != 0
+            || shaped.MusicHeadReferences.HeadShapeCounts["head_06"] != 1
+            || shaped.MusicHeadReferences.BodiesByType["type0C"] != 1)
+        {
+            throw new InvalidOperationException("music head read an unestablished head shape");
+        }
+
         // A body too short to hold the selected word is counted, not skipped.
         var tiny = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7300, BuildBnk(
             ((byte)0x02, target, targetBody),
