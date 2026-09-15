@@ -2128,6 +2128,69 @@ namespace AnimeStudio.Endfield
         internal const uint Type11MaximumRecords = 64;
         // The trailing 32-bit word every numeric type 0x0B body carries.
         internal const uint Type11TerminatorValue = 100;
+        // Inside a tail entry: a 32-bit selector at offset 56, a record count at 60
+        // when that selector is nonzero, and twelve-byte records from offset 64.
+        internal const int Type11EntrySelectorOffset = 56;
+        internal const int Type11EntryRecordCountOffset = 60;
+        internal const int Type11EntryRecordOffset = 64;
+        internal const int Type11EntryRecordBytes = 12;
+        internal const uint Type11EntryMaximumRecords = 64;
+
+        /// <summary>
+        /// Census the twelve-byte records inside a numeric type 0x0B tail entry.
+        /// </summary>
+        /// <remarks>
+        /// The entry is not framed and this does not frame it. What it does is read the
+        /// one structure inside it that is recognisable: the same twelve-byte record --
+        /// two floats and an interpolation code -- that numeric types 0x08 and 0x12
+        /// carry in their tails.
+        ///
+        /// The discriminator is the code. Read at a wrong offset it would be arbitrary
+        /// 32-bit noise; here it must stay in a small range, and that is what separates
+        /// this from an arithmetic coincidence. Entries whose count is unusable or
+        /// whose records would run past the end are counted under their own outcome
+        /// rather than skipped.
+        /// </remarks>
+        private static void CensusType11EntryRecords(
+            EndfieldHircType11SourceCensus census,
+            ReadOnlySpan<byte> entry)
+        {
+            census.EntriesInspected = checked(census.EntriesInspected + 1);
+            if (entry.Length < Type11EntryRecordOffset)
+            {
+                census.EntriesWhoseCountIsNotUsable = checked(census.EntriesWhoseCountIsNotUsable + 1);
+                return;
+            }
+            var selector = BinaryPrimitives.ReadUInt32LittleEndian(
+                entry.Slice(Type11EntrySelectorOffset, 4));
+            if (selector == 0)
+            {
+                census.EntriesWithNoRecords = checked(census.EntriesWithNoRecords + 1);
+                return;
+            }
+            var records = BinaryPrimitives.ReadUInt32LittleEndian(
+                entry.Slice(Type11EntryRecordCountOffset, 4));
+            if (records == 0 || records > Type11EntryMaximumRecords)
+            {
+                census.EntriesWhoseCountIsNotUsable = checked(census.EntriesWhoseCountIsNotUsable + 1);
+                return;
+            }
+            var span = checked((int)records * Type11EntryRecordBytes);
+            if (Type11EntryRecordOffset + span > entry.Length)
+            {
+                census.EntriesWhoseRecordsRunPastTheEnd =
+                    checked(census.EntriesWhoseRecordsRunPastTheEnd + 1);
+                return;
+            }
+            census.EntriesWhoseRecordsFit = checked(census.EntriesWhoseRecordsFit + 1);
+            census.CurveRecords = checked(census.CurveRecords + records);
+            for (var i = 0; i < records; i++)
+            {
+                var code = BinaryPrimitives.ReadUInt32LittleEndian(
+                    entry.Slice(Type11EntryRecordOffset + i * Type11EntryRecordBytes + 8, 4));
+                HircBump(census.InterpolationCounts, $"interp_{code}", 1);
+            }
+        }
         // Between the source run and that terminator sits a 32-bit entry count. The
         // entries are variable-width and their interiors are not read; only the second
         // word of each is, because it echoes one of the body's own declared source ids.
@@ -2186,6 +2249,14 @@ namespace AnimeStudio.Endfield
             else if (echoes > declared)
             {
                 sources.TailEchoesExceedTheCount = checked(sources.TailEchoesExceedTheCount + 1);
+            }
+            if (declared == 1)
+            {
+                // With one entry the entry's extent is unambiguous: everything between
+                // the count and the terminator. Multi-entry bodies are not inspected,
+                // because the entries are variable-width and where the first one ends
+                // is exactly what is not known.
+                CensusType11EntryRecords(sources, body.Slice(first, terminatorAt - first));
             }
             if (declared == 0)
             {
@@ -3976,6 +4047,15 @@ namespace AnimeStudio.Endfield
         public uint TailEchoesExceedTheCount { get; set; }
         public uint FirstTailEntryNamesADeclaredSource { get; set; }
         public uint FirstTailEntryTooShort { get; set; }
+        // The twelve-byte records inside a tail entry: two floats and an
+        // interpolation code, the same shape numeric types 0x08 and 0x12 carry.
+        public uint EntriesInspected { get; set; }
+        public uint EntriesWithNoRecords { get; set; }
+        public uint EntriesWhoseRecordsFit { get; set; }
+        public uint EntriesWhoseCountIsNotUsable { get; set; }
+        public uint EntriesWhoseRecordsRunPastTheEnd { get; set; }
+        public uint CurveRecords { get; set; }
+        public Dictionary<string, uint> InterpolationCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> TailEntryCountCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> FirstTailEntryLeadingWordCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> PluginIdCounts { get; } = new(StringComparer.Ordinal);

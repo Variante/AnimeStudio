@@ -946,12 +946,26 @@ namespace AnimeStudio.CLI
             var tailCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
             var leadWords = new Dictionary<string, uint>(StringComparer.Ordinal);
             var withTail = 0U; var noTail = 0U; var tailOutOfRange = 0U;
+            var inspected = 0U; var noRecords = 0U; var recordsFit = 0U;
+            var countUnusable = 0U; var recordsPastEnd = 0U; var curveRecords = 0U;
+            var interps = new Dictionary<string, uint>(StringComparer.Ordinal);
             var tailDeclared = 0U; var tailEchoed = 0U; var tailMatches = 0U;
             var tailExceeds = 0U; var firstNames = 0U; var firstShort = 0U;
             foreach (var structure in structures)
             {
                 var census = structure.Type11Sources;
                 withTail = checked(withTail + census.BodiesWithATail);
+                inspected = checked(inspected + census.EntriesInspected);
+                noRecords = checked(noRecords + census.EntriesWithNoRecords);
+                recordsFit = checked(recordsFit + census.EntriesWhoseRecordsFit);
+                countUnusable = checked(countUnusable + census.EntriesWhoseCountIsNotUsable);
+                recordsPastEnd = checked(recordsPastEnd + census.EntriesWhoseRecordsRunPastTheEnd);
+                curveRecords = checked(curveRecords + census.CurveRecords);
+                foreach (var pair in census.InterpolationCounts)
+                {
+                    interps.TryGetValue(pair.Key, out var existing);
+                    interps[pair.Key] = checked(existing + pair.Value);
+                }
                 noTail = checked(noTail + census.NoTailAfterTheRun);
                 tailOutOfRange = checked(tailOutOfRange + census.TailCountOutOfRange);
                 tailDeclared = checked(tailDeclared + census.TailEntriesDeclared);
@@ -1018,6 +1032,13 @@ namespace AnimeStudio.CLI
                 ["tailEchoesExceedTheCount"] = tailExceeds,
                 ["firstTailEntryNamesADeclaredSource"] = firstNames,
                 ["firstTailEntryTooShort"] = firstShort,
+                ["entriesInspected"] = inspected,
+                ["entriesWithNoRecords"] = noRecords,
+                ["entriesWhoseRecordsFit"] = recordsFit,
+                ["entriesWhoseCountIsNotUsable"] = countUnusable,
+                ["entriesWhoseRecordsRunPastTheEnd"] = recordsPastEnd,
+                ["curveRecords"] = curveRecords,
+                ["interpolationCounts"] = interps.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["tailEntryCountCounts"] = tailCounts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["firstTailEntryLeadingWordCounts"] = leadWords.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
