@@ -702,15 +702,17 @@ namespace AnimeStudio.CLI
         private static Dictionary<string, object?> BuildType17Summary(
             IEnumerable<EndfieldBnkStructure> structures)
         {
-            var bodies = 0U; var exact = 0U; var tied = 0U; var failed = 0U;
+            var bodies = 0U; var exact = 0U; var fenced = 0U; var failed = 0U;
             var exactBytes = 0U; var bodyBytes = 0U; var run = 0U; var entries = 0U;
             var failures = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var reasons = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var structure in structures)
             {
                 var census = structure.Type17;
                 bodies = checked(bodies + census.Bodies);
                 exact = checked(exact + census.Exact);
-                tied = checked(tied + census.TiedOptionalBlock);
+                fenced = checked(fenced + census.Fenced);
                 failed = checked(failed + census.Failed);
                 exactBytes = checked(exactBytes + census.ExactBytes);
                 bodyBytes = checked(bodyBytes + census.BodyBytes);
@@ -721,12 +723,24 @@ namespace AnimeStudio.CLI
                     failures.TryGetValue(pair.Key, out var existing);
                     failures[pair.Key] = checked(existing + pair.Value);
                 }
+                foreach (var pair in census.FenceReasons)
+                {
+                    reasons.TryGetValue(pair.Key, out var existing);
+                    reasons[pair.Key] = checked(existing + pair.Value);
+                }
+                foreach (var pair in census.BodiesByType)
+                {
+                    byType.TryGetValue(pair.Key, out var existing);
+                    byType[pair.Key] = checked(existing + pair.Value);
+                }
             }
             return new Dictionary<string, object?>
             {
                 ["bodies"] = bodies,
                 ["exact"] = exact,
-                ["tiedOptionalBlock"] = tied,
+                ["fenced"] = fenced,
+                ["fenceReasons"] = reasons.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
+                ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["failed"] = failed,
                 ["exactBytes"] = exactBytes,
                 ["bodyBytes"] = bodyBytes,

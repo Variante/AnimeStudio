@@ -614,7 +614,8 @@ internal static class EndfieldAkpkTests
         var exact = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
             ((byte)0x11, 0x7701U, Build(0, 2, 8))))).BnkStructures[0];
         if (exact.Type17.Exact != 1 || exact.Type17.RunElements != 2
-            || exact.Type17.Failed != 0 || exact.Type17.TiedOptionalBlock != 0)
+            || exact.Type17.Failed != 0 || exact.Type17.Fenced != 0
+            || exact.Type17.BodiesByType["type11"] != 1)
         {
             throw new InvalidOperationException("type 0x11 did not frame a clear body");
         }
@@ -624,10 +625,42 @@ internal static class EndfieldAkpkTests
         // failure, which the counters have to keep distinct.
         var tied = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
             ((byte)0x11, 0x7702U, Build(1, 0, 8))))).BnkStructures[0];
-        if (tied.Type17.TiedOptionalBlock != 1 || tied.Type17.Exact != 0
-            || tied.Type17.Failed != 0)
+        if (tied.Type17.Fenced != 1 || tied.Type17.Exact != 0
+            || tied.Type17.Failed != 0
+            || tied.Type17.FenceReasons["tiedOptionalBlockWidth"] != 1)
         {
             throw new InvalidOperationException("type 0x11 mishandled the tied width");
+        }
+
+
+        // Type 0x10 shares the grammar, so it goes through the same reader; only its
+        // 0x7F variant is fenced, under its own reason rather than the tied-width one.
+        var shared = Build(0, 2, 8);
+        var sharedOk = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+            ((byte)0x10, 0x7705U, shared)))).BnkStructures[0];
+        if (sharedOk.Type17.Exact != 1 || sharedOk.Type17.BodiesByType["type10"] != 1)
+        {
+            throw new InvalidOperationException("type 0x10 did not reuse the 0x11 grammar");
+        }
+
+        var variant = Build(0, 2, 8);
+        variant[2] = 0x7F;
+        var fenced = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+            ((byte)0x10, 0x7706U, variant)))).BnkStructures[0];
+        if (fenced.Type17.Fenced != 1 || fenced.Type17.Exact != 0
+            || fenced.Type17.FenceReasons["type10_variant7F"] != 1)
+        {
+            throw new InvalidOperationException("type 0x10 did not fence its 0x7F variant");
+        }
+
+        // The same third byte on type 0x11 must not be fenced: the variant belongs to
+        // 0x10 alone, and a rule applied to the wrong type would silently lose bodies.
+        var notAVariant = Build(0, 2, 8);
+        notAVariant[2] = 0x7F;
+        if (EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7700, BuildBnk(
+                ((byte)0x11, 0x7707U, notAVariant)))).BnkStructures[0].Type17.Exact != 1)
+        {
+            throw new InvalidOperationException("type 0x11 was fenced by a type 0x10 rule");
         }
 
         var overrun = Build(0, 1, 8);

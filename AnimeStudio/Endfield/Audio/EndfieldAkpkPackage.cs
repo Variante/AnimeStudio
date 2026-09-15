@@ -630,13 +630,14 @@ namespace AnimeStudio.Endfield
                     census09.BodyBytes = checked(census09.BodyBytes + (uint)body09.Length);
                     RecordType09(census09, body09, structure.Version);
                 }
-                if (objectType == 17)
+                if (objectType is 16 or 17)
                 {
                     var census17 = structure.Type17;
                     var body17 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     census17.Bodies = checked(census17.Bodies + 1);
                     census17.BodyBytes = checked(census17.BodyBytes + (uint)body17.Length);
-                    RecordType17(census17, body17);
+                    HircBump(census17.BodiesByType, $"type{objectType:X2}", 1);
+                    RecordType17(census17, body17, objectType);
                 }
                 // Numeric type 0x08's leading word: null, or one same-bank object.
                 if (objectType == 8)
@@ -2052,8 +2053,23 @@ namespace AnimeStudio.Endfield
             census.RunEntries = checked(census.RunEntries + entryCount);
         }
 
-        private static void RecordType17(EndfieldHircType17Census census, ReadOnlySpan<byte> body)
+        // Numeric type 0x10 bodies whose third byte is 0x7F end in something group I
+        // does not describe -- it fails to parse there at every offset tried. They are
+        // fenced under their own reason rather than counted as a failure of the grammar
+        // the other bodies satisfy.
+        private const byte Type16UnestablishedVariant = 0x7F;
+
+        private static void RecordType17(
+            EndfieldHircType17Census census,
+            ReadOnlySpan<byte> body,
+            byte objectType)
         {
+            void Fence(string reason)
+            {
+                census.Fenced = checked(census.Fenced + 1);
+                HircBump(census.FenceReasons, reason, 1);
+            }
+
             void Fail(string category)
             {
                 census.Failed = checked(census.Failed + 1);
@@ -2063,6 +2079,11 @@ namespace AnimeStudio.Endfield
             if (body.Length < 8)
             {
                 Fail("short_header");
+                return;
+            }
+            if (objectType == 16 && body[2] == Type16UnestablishedVariant)
+            {
+                Fence("type10_variant7F");
                 return;
             }
             var size = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(4, 4));
@@ -2096,7 +2117,7 @@ namespace AnimeStudio.Endfield
             {
                 // Two block widths fit every flagged body and nothing distinguishes
                 // them, so this body is not framed rather than framed by guess.
-                census.TiedOptionalBlock = checked(census.TiedOptionalBlock + 1);
+                Fence("tiedOptionalBlockWidth");
                 return;
             }
             if (cursor + 2 > body.Length)
@@ -2818,9 +2839,9 @@ namespace AnimeStudio.Endfield
     // null or the identity of an object in the same bank -- never a non-null value
     // that names nothing. Null is a real outcome here, not a failure, so it is
     // counted separately instead of being folded into either side.
-    // Numeric type 0x11: an eight-byte header whose second word sizes an opaque
-    // section, one byte, the node frame's group I structure, a flag, and a counted
-    // run of six-byte elements.
+    // Numeric types 0x11 and 0x10 share one grammar: an eight-byte header whose
+    // second word sizes an opaque section, one byte, the node frame's group I
+    // structure, a flag, and a counted run of six-byte elements.
     //
     // The flag gates an optional block whose width this corpus cannot determine.
     // Two widths, 21 and 27, consume every flagged body exactly -- they are the same
@@ -2850,7 +2871,9 @@ namespace AnimeStudio.Endfield
     {
         public uint Bodies { get; set; }
         public uint Exact { get; set; }
-        public uint TiedOptionalBlock { get; set; }
+        public uint Fenced { get; set; }
+        public Dictionary<string, uint> FenceReasons { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
         public uint Failed { get; set; }
         public uint ExactBytes { get; set; }
         public uint BodyBytes { get; set; }
