@@ -622,6 +622,10 @@ namespace AnimeStudio.CLI
                         group => group.Key,
                         group => group.Max(pair => (long)pair.Value),
                         StringComparer.Ordinal),
+                ["banksMatched"] = rows.Sum(row => (long)row.BanksMatched),
+                ["banksSeen"] = rows.Sum(row => (long)row.BanksSeen),
+                ["mediaMatched"] = rows.Sum(row => (long)row.MediaMatched),
+                ["mediaSeen"] = rows.Sum(row => (long)row.MediaSeen),
                 ["reachedSourceIdListByIdentity"] = rows
                     .SelectMany(row => row.ReachedSourceIdListByIdentity)
                     .GroupBy(pair => pair.Key, StringComparer.Ordinal)

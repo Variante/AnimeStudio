@@ -106,6 +106,7 @@ namespace AnimeStudio.Endfield
             var externalsStart = checked(soundsStart + checked((int)soundsSectorSize));
             package.ExternalCount = package.ParseSector(reader, externalsStart, externalsSectorSize, isSounds: true, isExternals: true);
             package.JoinType2SourcesToMedia();
+            package.CountNamedBanksAndMedia();
             return package;
         }
 
@@ -137,6 +138,52 @@ namespace AnimeStudio.Endfield
                     {
                         ids.Add(sourceId);
                     }
+                }
+            }
+        }
+
+
+        // Bank ids and media ids are separate id populations from HIRC objects. The
+        // caller's hash set is tested against them here so the same coincidence
+        // arithmetic can judge whether either is named.
+        private void CountNamedBanksAndMedia()
+        {
+            var hashes = NamedIdentityHashes;
+            if (hashes == null || hashes.Count == 0)
+            {
+                return;
+            }
+            var banks = new HashSet<uint>();
+            foreach (var structure in BnkStructures)
+            {
+                banks.Add(checked((uint)(structure.BankId & 0xFFFFFFFF)));
+            }
+            foreach (var structure in BnkStructures)
+            {
+                structure.NamedReachCensus.BanksSeen = 0;
+                structure.NamedReachCensus.BanksMatched = 0;
+                structure.NamedReachCensus.MediaSeen = 0;
+                structure.NamedReachCensus.MediaMatched = 0;
+            }
+            var first = BnkStructures.Count > 0 ? BnkStructures[0].NamedReachCensus : null;
+            if (first == null)
+            {
+                return;
+            }
+            foreach (var bank in banks)
+            {
+                first.BanksSeen = checked(first.BanksSeen + 1);
+                if (hashes.Contains(bank))
+                {
+                    first.BanksMatched = checked(first.BanksMatched + 1);
+                }
+            }
+            foreach (var media in MediaJoin.MediaIds)
+            {
+                first.MediaSeen = checked(first.MediaSeen + 1);
+                if (hashes.Contains(media))
+                {
+                    first.MediaMatched = checked(first.MediaMatched + 1);
                 }
             }
         }
@@ -3120,6 +3167,12 @@ namespace AnimeStudio.Endfield
         public uint ReachingNoSource { get; set; }
         public uint ReachedSourceIds { get; set; }
         public uint WalkEdgesLeavingTheBank { get; set; }
+        // Populations other than HIRC objects that the caller's hashes might name.
+        // Reported so the same coincidence test can be applied to them.
+        public uint BanksMatched { get; set; }
+        public uint BanksSeen { get; set; }
+        public uint MediaMatched { get; set; }
+        public uint MediaSeen { get; set; }
         public Dictionary<string, uint> MatchesByObjectType { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ReachedSourceIdsByIdentity { get; } = new(StringComparer.Ordinal);
         // The reached ids themselves, not just how many. There are few enough of them
