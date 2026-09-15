@@ -30,6 +30,7 @@ namespace AnimeStudio.Endfield
         public List<EndfieldBnkStructure> BnkStructures { get; } = new();
         public EndfieldHircMediaJoinCensus MediaJoin { get; } = new();
         public EndfieldHircType03TargetCensus Type03Targets { get; } = new();
+        public EndfieldHircType08TailWordCensus Type08TailWords { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -109,6 +110,7 @@ namespace AnimeStudio.Endfield
             package.JoinType2SourcesToMedia();
             package.CountNamedBanksAndMedia();
             package.ClassifyType03Targets();
+            package.ClassifyType08TailWords();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -195,6 +197,75 @@ namespace AnimeStudio.Endfield
         // Runs once every bank in the package is parsed, because "another bank" is
         // only answerable then. A target outside the package is reported as such
         // rather than as unresolved: this reader cannot see the other packages.
+        /// <summary>
+        /// Decide whether the words in numeric type 0x08's tail head are references.
+        /// </summary>
+        /// <remarks>
+        /// Two words are classified, not one. The second exists only as a control: if
+        /// the first word's hits were an artefact of reading a 32-bit value at an
+        /// arbitrary offset, the second would hit at the same rate. Object ids are
+        /// sparse against the 32-bit range -- a package declares on the order of a
+        /// thousand -- so chance hits are expected far below one across the whole
+        /// corpus, and any hit at all is informative.
+        ///
+        /// Targets are also counted by the numeric type they land on, because a
+        /// reference that always names the same type says more than one that scatters.
+        /// </remarks>
+        private void ClassifyType08TailWords()
+        {
+            var perBank = new Dictionary<ulong, HashSet<uint>>();
+            var everything = new HashSet<uint>();
+            var typeOf = new Dictionary<uint, byte>();
+            foreach (var structure in BnkStructures)
+            {
+                perBank[structure.BankId] = structure.DeclaredObjectIds;
+                everything.UnionWith(structure.DeclaredObjectIds);
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
+            }
+            Type08TailWords.PackagePopulation = checked((uint)everything.Count);
+            foreach (var structure in BnkStructures)
+            {
+                var own = perBank[structure.BankId];
+                foreach (var (first, second) in structure.Type08TailWords)
+                {
+                    Type08TailWords.Heads = checked(Type08TailWords.Heads + 1);
+                    if (own.Contains(first))
+                    {
+                        Type08TailWords.FirstWordSameBank =
+                            checked(Type08TailWords.FirstWordSameBank + 1);
+                    }
+                    else if (everything.Contains(first))
+                    {
+                        Type08TailWords.FirstWordOtherBankInPackage =
+                            checked(Type08TailWords.FirstWordOtherBankInPackage + 1);
+                    }
+                    else
+                    {
+                        Type08TailWords.FirstWordOutsidePackage =
+                            checked(Type08TailWords.FirstWordOutsidePackage + 1);
+                    }
+                    if (everything.Contains(first) && typeOf.TryGetValue(first, out var targetType))
+                    {
+                        HircBump(Type08TailWords.FirstWordTargetTypeCounts, $"type{targetType:X2}", 1);
+                    }
+                    if (everything.Contains(second))
+                    {
+                        Type08TailWords.SecondWordResolves =
+                            checked(Type08TailWords.SecondWordResolves + 1);
+                        if (typeOf.TryGetValue(second, out var controlType))
+                        {
+                            HircBump(
+                                Type08TailWords.SecondWordTargetTypeCounts, $"type{controlType:X2}", 1);
+                        }
+                    }
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -832,7 +903,7 @@ namespace AnimeStudio.Endfield
                     var head08 = structure.Type08Head;
                     head08.Bodies = checked(head08.Bodies + 1);
                     var head08Body = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                    CensusType08Tail(structure.Type08Tail, head08Body);
+                    CensusType08Tail(structure.Type08Tail, structure.Type08TailWords, head08Body);
                     if (head08Body.Length < 4)
                     {
                         head08.TooShort = checked(head08.TooShort + 1);
@@ -2520,8 +2591,15 @@ namespace AnimeStudio.Endfield
         /// third field: across the corpus it takes a handful of small values, which
         /// arbitrary bytes read at a wrong offset would not do.
         /// </remarks>
+        // The width of the unframed bytes between the entry run and the records in
+        // every tail where a word at these offsets could be tested at all.
+        internal const int Type08TailHeadBytes = 15;
+        internal const int Type08TailFirstWordOffset = 3;
+        internal const int Type08TailSecondWordOffset = 10;
+
         private static void CensusType08Tail(
             EndfieldHircType08TailCensus census,
+            List<(uint First, uint Second)> candidates,
             ReadOnlySpan<byte> body)
         {
             census.Bodies = checked(census.Bodies + 1);
@@ -2580,6 +2658,20 @@ namespace AnimeStudio.Endfield
                 HircBump(census.ThirdFieldCounts, $"code_{code}", 1);
             }
             census.UnexplainedHeadBytes = checked(census.UnexplainedHeadBytes + (uint)start);
+            // The bytes before the records are not framed, but in most located tails
+            // they are exactly this wide, and two 32-bit words sit at fixed places in
+            // them. Both are collected: the second is the control, and it is what
+            // stops the first one's hits from being read as an artefact of the offset.
+            var headBytes = start - 2;
+            if (headBytes != Type08TailHeadBytes)
+            {
+                census.HeadIsNotTheObservedWidth = checked(census.HeadIsNotTheObservedWidth + 1);
+                return;
+            }
+            census.HeadsOfTheObservedWidth = checked(census.HeadsOfTheObservedWidth + 1);
+            candidates.Add((
+                BinaryPrimitives.ReadUInt32LittleEndian(tail.Slice(Type08TailFirstWordOffset, 4)),
+                BinaryPrimitives.ReadUInt32LittleEndian(tail.Slice(Type08TailSecondWordOffset, 4))));
         }
 
         private const int Type17RunElementBytes = 6;
@@ -3462,6 +3554,9 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType08TailCensus Type08Tail { get; } = new();
+        // (firstWord, secondWord) from each located tail head, classified once the
+        // package's whole object set is known.
+        public List<(uint First, uint Second)> Type08TailWords { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -3646,6 +3741,20 @@ namespace AnimeStudio.Endfield
         public uint TooShort { get; set; }
     }
 
+    // Whether the words in numeric type 0x08's tail head name package objects. The
+    // second word is the control for the first.
+    public sealed class EndfieldHircType08TailWordCensus
+    {
+        public uint Heads { get; set; }
+        public uint PackagePopulation { get; set; }
+        public uint FirstWordSameBank { get; set; }
+        public uint FirstWordOtherBankInPackage { get; set; }
+        public uint FirstWordOutsidePackage { get; set; }
+        public uint SecondWordResolves { get; set; }
+        public Dictionary<string, uint> FirstWordTargetTypeCounts { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> SecondWordTargetTypeCounts { get; } = new(StringComparer.Ordinal);
+    }
+
     // What numeric type 0x08's framer fences. The tail is not framed; only its
     // trailing counted run is located, and only when the count is unambiguous.
     public sealed class EndfieldHircType08TailCensus
@@ -3660,6 +3769,8 @@ namespace AnimeStudio.Endfield
         public uint TailsWithAUniqueCount { get; set; }
         public uint Records { get; set; }
         public uint UnexplainedHeadBytes { get; set; }
+        public uint HeadsOfTheObservedWidth { get; set; }
+        public uint HeadIsNotTheObservedWidth { get; set; }
         public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ThirdFieldCounts { get; } = new(StringComparer.Ordinal);
     }

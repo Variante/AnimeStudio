@@ -190,6 +190,17 @@ namespace AnimeStudio.CLI
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
                             ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
+                            ["hircType08TailWords"] = new Dictionary<string, object?>
+                            {
+                                ["heads"] = package.Type08TailWords.Heads,
+                                ["packagePopulation"] = package.Type08TailWords.PackagePopulation,
+                                ["firstWordSameBank"] = package.Type08TailWords.FirstWordSameBank,
+                                ["firstWordOtherBankInPackage"] = package.Type08TailWords.FirstWordOtherBankInPackage,
+                                ["firstWordOutsidePackage"] = package.Type08TailWords.FirstWordOutsidePackage,
+                                ["secondWordResolves"] = package.Type08TailWords.SecondWordResolves,
+                                ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
                             ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
@@ -859,6 +870,7 @@ namespace AnimeStudio.CLI
             var bodies = 0U; var notWalkable = 0U; var framed = 0U; var tails = 0U;
             var noZero = 0U; var noCount = 0U; var ambiguous = 0U; var unique = 0U;
             var records = 0U; var headBytes = 0U;
+            var observedWidth = 0U; var otherWidth = 0U;
             var counts = new Dictionary<string, uint>(StringComparer.Ordinal);
             var codes = new Dictionary<string, uint>(StringComparer.Ordinal);
             foreach (var structure in structures)
@@ -874,6 +886,8 @@ namespace AnimeStudio.CLI
                 unique = checked(unique + census.TailsWithAUniqueCount);
                 records = checked(records + census.Records);
                 headBytes = checked(headBytes + census.UnexplainedHeadBytes);
+                observedWidth = checked(observedWidth + census.HeadsOfTheObservedWidth);
+                otherWidth = checked(otherWidth + census.HeadIsNotTheObservedWidth);
                 foreach (var pair in census.RecordCountCounts)
                 {
                     counts.TryGetValue(pair.Key, out var existing);
@@ -897,6 +911,8 @@ namespace AnimeStudio.CLI
                 ["tailsWithAUniqueCount"] = unique,
                 ["records"] = records,
                 ["unexplainedHeadBytes"] = headBytes,
+                ["headsOfTheObservedWidth"] = observedWidth,
+                ["headIsNotTheObservedWidth"] = otherWidth,
                 ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["thirdFieldCounts"] = codes.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };

@@ -27,6 +27,7 @@ internal static class EndfieldAkpkTests
         TestType22BodyFramesReuseGroupI();
         TestType08BodiesFrameOrAreNamed();
         TestType08TailRecordsAreLocatedFromTheEnd();
+        TestType08TailHeadWordsAreClassifiedAgainstAControl();
         TestType08HeadWordIsNullOrResolved();
         TestType17FramesOrFencesTheTiedWidth();
         TestSmallTypesFrameExactly();
@@ -1027,6 +1028,74 @@ internal static class EndfieldAkpkTests
         if (ambiguous.CountIsAmbiguous != 1 || ambiguous.Records != 0)
         {
             throw new InvalidOperationException("type 0x08 tail accepted an ambiguous count");
+        }
+    }
+
+    private static void TestType08TailHeadWordsAreClassifiedAgainstAControl()
+    {
+        // A type 0x08 body whose tail head carries two 32-bit words, one of which can
+        // be made to name an object the same bank declares.
+        static byte[] Build(uint first, uint second)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+            writer.Write(0x1234U);
+            writer.Write((byte)1);
+            writer.Write((byte)0x1B);
+            writer.Write(0U);
+            writer.Write((byte)1);
+            writer.Write((byte)0x15);
+            writer.Write(new byte[11]);
+            writer.Write(new byte[] { 0x02, 0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 });
+            writer.Write(0U);
+            writer.Write((byte)0);
+            // The fifteen-byte head: three bytes, a word, three bytes, a word, a byte.
+            writer.Write(new byte[3]);
+            writer.Write(first);
+            writer.Write(new byte[3]);
+            writer.Write(second);
+            writer.Write((byte)2);
+            // The record count. The id above is chosen so no shorter run also fits:
+            // a second candidate length would make the tail ambiguous and uncounted.
+            writer.Write((byte)1);
+            writer.Write((byte)0);
+            writer.Write(0.0f);
+            writer.Write(1.0f);
+            writer.Write(4U);
+            writer.Write((ushort)0);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        // A sibling numeric type 0x12 object gives the first word something real to
+        // name; the second word names nothing, which is the control.
+        var named = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+            ((byte)0x08, 0x7801U, Build(0x11223344U, 0xDEADBEEFU)),
+            ((byte)0x12, 0x11223344U, new byte[8])))).Type08TailWords;
+        if (named.Heads != 1
+            || named.FirstWordSameBank != 1
+            || named.SecondWordResolves != 0
+            || named.FirstWordTargetTypeCounts["type12"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 tail head word was not classified");
+        }
+
+        // If the control also names an object the field under test proves nothing, so
+        // the census has to report that rather than let the first word stand alone.
+        var both = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+            ((byte)0x08, 0x7801U, Build(0x11223344U, 0x11223344U)),
+            ((byte)0x12, 0x11223344U, new byte[8])))).Type08TailWords;
+        if (both.SecondWordResolves != 1)
+        {
+            throw new InvalidOperationException("type 0x08 tail head control was not counted");
+        }
+
+        // A word naming nothing in the package is a real outcome, not a failure.
+        var outside = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(0x7800, BuildBnk(
+            ((byte)0x08, 0x7801U, Build(0xCAFEBABEU, 0xDEADBEEFU))))).Type08TailWords;
+        if (outside.FirstWordOutsidePackage != 1 || outside.FirstWordTargetTypeCounts.Count != 0)
+        {
+            throw new InvalidOperationException("type 0x08 tail head word outside the package was miscounted");
         }
     }
 
