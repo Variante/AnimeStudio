@@ -203,6 +203,22 @@ namespace AnimeStudio.CLI
                                 ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
+                            ["hircType11Elements"] = new Dictionary<string, object?>
+                            {
+                                ["bodies"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Bodies),
+                                ["notASingleEntry"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.NotASingleEntry),
+                                ["notASingleElement"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.NotASingleElement),
+                                ["elements"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Elements),
+                                ["trailerIsAmbiguous"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.TrailerIsAmbiguous),
+                                ["bodyIsNotWholeRecords"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.BodyIsNotWholeRecords),
+                                ["framed"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Framed),
+                                ["elementsWithRecords"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.ElementsWithRecords),
+                                ["countFieldAgrees"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.CountFieldAgrees),
+                                ["trailerForm"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.TrailerForm)),
+                                ["recordsPerElement"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.RecordsPerElement)),
+                                ["anchorSelectsOneTrailer"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorSelectsOneTrailer)),
+                                ["anchorLeavesWholeRecords"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorLeavesWholeRecords)),
+                            },
                             ["hircSharedConstants"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.SharedConstants.Bodies,
@@ -1235,6 +1251,16 @@ namespace AnimeStudio.CLI
                 ["nonExactExamples"] = examples,
             };
         }
+
+
+        private static Dictionary<string, long> MergeCensus(
+            IEnumerable<KeyValuePair<string, uint>> pairs) => pairs
+                .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Sum(pair => (long)pair.Value),
+                    StringComparer.Ordinal);
 
         private static Dictionary<string, object?> BuildType4U32VectorFrameSummary(
             IEnumerable<EndfieldBnkStructure> structures)

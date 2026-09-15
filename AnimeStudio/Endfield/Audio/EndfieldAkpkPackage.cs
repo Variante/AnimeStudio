@@ -1400,6 +1400,9 @@ namespace AnimeStudio.Endfield
                 // follows it is not established and is deliberately not touched.
                 if (objectType == 11)
                 {
+                    CensusType11Elements(
+                        structure.Type11Elements,
+                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
                     var sources = structure.Type11Sources;
                     sources.Bodies = checked(sources.Bodies + 1);
                     var sourceBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
@@ -2599,6 +2602,29 @@ namespace AnimeStudio.Endfield
         // counted vector of fixed-width anonymous references.
         internal const int Type14ElementBytes = 12;
         internal const int Type11SourceRecordBytes = 14;
+        // Numeric type 0x0B's entry area: a 32-bit entry count, then that many entries.
+        // Each entry opens with 48 header bytes whose word at 44 counts the elements
+        // that follow.
+        internal const int Type11EntryHeaderBytes = 48;
+        internal const int Type11EntryElementCountOffset = 44;
+        // An element ends with a trailer whose FIRST byte selects its own length: zero
+        // means nineteen bytes, one means twenty-four. What is left is a 17-byte head
+        // and a run of twelve-byte records -- the same twelve-byte record numeric types
+        // 0x08, 0x12 and 0x0B's curves already carry.
+        internal const int Type11ElementShortTrailerBytes = 19;
+        internal const int Type11ElementLongTrailerBytes = 24;
+        internal const int Type11ElementHeadBytes = 17;
+        internal const int Type11ElementRecordBytes = 12;
+        // The field that carries the record count in just over half the elements that
+        // have one. Censused, not trusted: it is not yet the rule.
+        internal const int Type11ElementCountOffset = 8;
+        // Anchors the chosen trailer lengths are scored against. A trailer pair is only
+        // established if the element bodies it leaves are congruent to the head length
+        // modulo the record size far more often than any rival pair manages.
+        internal static readonly (int Short, int Long)[] Type11TrailerRivals =
+        {
+            (17, 22), (18, 23), (19, 24), (20, 25), (21, 26), (19, 25), (18, 24),
+        };
         // A bound so a corrupt count cannot make the reader walk the whole body.
         internal const uint Type11MaximumRecords = 64;
         // The trailing 32-bit word every numeric type 0x0B body carries.
@@ -3942,6 +3968,127 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
+        /// <summary>
+        /// Census numeric type 0x0B's entry elements, and score the trailer anchor.
+        /// </summary>
+        /// <remarks>
+        /// Restricted to bodies carrying exactly one entry with exactly one element,
+        /// because only there is the element's width known without already having the
+        /// frame -- which is the thing under test. That is 3,891 of 4,325 bodies.
+        ///
+        /// The finding is the trailer: its first byte is zero in the short form and one
+        /// in the long, and the two forms differ by five bytes, which is the five-byte
+        /// step the entry widths have shown all along (84/89, 132/137, 168/173).
+        ///
+        /// The evidence is NOT that the trailer parses. Several rival anchors leave
+        /// just as many elements "clean" -- -18/-23 leaves more. The evidence is what
+        /// the anchor leaves behind: under -19/-24 the element bodies are 17 + 12k for
+        /// 3,594 elements, and under every rival pair for at most 32. A wrong anchor
+        /// leaves lengths with no structure, and that is what separates them.
+        ///
+        /// What is still NOT established, and is censused rather than claimed: which
+        /// field carries k. The word at element offset 8 equals it in 575 of the 1,103
+        /// elements that have a nonzero k, so it is part of the answer and not all of
+        /// it. Elements with k = 0 are excluded from that count -- they would agree
+        /// with any all-zero field for free.
+        /// </remarks>
+        private static void CensusType11Elements(
+            EndfieldHircType11ElementCensus census,
+            ReadOnlySpan<byte> body)
+        {
+            census.Bodies = checked(census.Bodies + 1);
+            if (body.Length < 9)
+            {
+                return;
+            }
+            var records = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(1, 4));
+            if (records > Type11MaximumRecords)
+            {
+                return;
+            }
+            var at = checked(5 + (int)records * Type11SourceRecordBytes);
+            if (at + 8 > body.Length)
+            {
+                return;
+            }
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(body.Length - 4, 4))
+                != Type11TerminatorValue)
+            {
+                return;
+            }
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4)) != 1)
+            {
+                census.NotASingleEntry = checked(census.NotASingleEntry + 1);
+                return;
+            }
+            var entry = body[(at + 4)..(body.Length - 4)];
+            if (entry.Length < Type11EntryHeaderBytes
+                || BinaryPrimitives.ReadUInt32LittleEndian(
+                    entry.Slice(Type11EntryElementCountOffset, 4)) != 1)
+            {
+                census.NotASingleElement = checked(census.NotASingleElement + 1);
+                return;
+            }
+            var element = entry[Type11EntryHeaderBytes..];
+            census.Elements = checked(census.Elements + 1);
+
+            // Every anchor pair is scored the same way, the chosen one included.
+            foreach (var (shortTrailer, longTrailer) in Type11TrailerRivals)
+            {
+                var label = $"trailer_{shortTrailer}_{longTrailer}";
+                var isShort = element.Length >= shortTrailer
+                    && element[element.Length - shortTrailer] == 0;
+                var isLong = element.Length >= longTrailer
+                    && element[element.Length - longTrailer] == 1;
+                if (isShort == isLong)
+                {
+                    continue;
+                }
+                HircBump(census.AnchorSelectsOneTrailer, label, 1);
+                var bodyBytes = element.Length - (isShort ? shortTrailer : longTrailer);
+                if (bodyBytes >= Type11ElementHeadBytes
+                    && (bodyBytes - Type11ElementHeadBytes) % Type11ElementRecordBytes == 0)
+                {
+                    HircBump(census.AnchorLeavesWholeRecords, label, 1);
+                }
+            }
+
+            var shortForm = element.Length >= Type11ElementShortTrailerBytes
+                && element[element.Length - Type11ElementShortTrailerBytes] == 0;
+            var longForm = element.Length >= Type11ElementLongTrailerBytes
+                && element[element.Length - Type11ElementLongTrailerBytes] == 1;
+            if (shortForm == longForm)
+            {
+                census.TrailerIsAmbiguous = checked(census.TrailerIsAmbiguous + 1);
+                return;
+            }
+            HircBump(census.TrailerForm, shortForm ? "short" : "long", 1);
+            var elementBody = element.Length
+                - (shortForm ? Type11ElementShortTrailerBytes : Type11ElementLongTrailerBytes);
+            if (elementBody < Type11ElementHeadBytes
+                || (elementBody - Type11ElementHeadBytes) % Type11ElementRecordBytes != 0)
+            {
+                census.BodyIsNotWholeRecords = checked(census.BodyIsNotWholeRecords + 1);
+                return;
+            }
+            var k = (elementBody - Type11ElementHeadBytes) / Type11ElementRecordBytes;
+            census.Framed = checked(census.Framed + 1);
+            HircBump(census.RecordsPerElement, $"records_{Math.Min(k, 16)}", 1);
+            if (k == 0)
+            {
+                // Excluded from the count-field score on purpose: an element with no
+                // records agrees with any zero field for free, and 2,491 of them would
+                // turn a half-right guess into a 3,066-strong result.
+                return;
+            }
+            census.ElementsWithRecords = checked(census.ElementsWithRecords + 1);
+            if (element.Length > Type11ElementCountOffset
+                && element[Type11ElementCountOffset] == k)
+            {
+                census.CountFieldAgrees = checked(census.CountFieldAgrees + 1);
+            }
+        }
+
         private const int Type17RunElementBytes = 6;
 
         // A counted block: one byte of count, that many one-byte keys, then that many
@@ -4821,6 +4968,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
         public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
+        public EndfieldHircType11ElementCensus Type11Elements { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType08TailCensus Type08Tail { get; } = new();
         public EndfieldHircType08TailCensus Type12Tail { get; } = new();
@@ -5052,6 +5200,27 @@ namespace AnimeStudio.Endfield
         // be decided after the packages are summed.
         public Dictionary<string, uint> ZeroTrailerByCandidate { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ClosesByCandidate { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Numeric type 0x0B's entry elements: how they end, and what that leaves.
+    public sealed class EndfieldHircType11ElementCensus
+    {
+        public uint Bodies { get; set; }
+        public uint NotASingleEntry { get; set; }
+        public uint NotASingleElement { get; set; }
+        public uint Elements { get; set; }
+        public uint TrailerIsAmbiguous { get; set; }
+        public uint BodyIsNotWholeRecords { get; set; }
+        public uint Framed { get; set; }
+        public uint ElementsWithRecords { get; set; }
+        public uint CountFieldAgrees { get; set; }
+        public Dictionary<string, uint> TrailerForm { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RecordsPerElement { get; } = new(StringComparer.Ordinal);
+        // Per rival anchor pair: how many elements it picks one trailer for, and how
+        // many of those it leaves a whole number of records behind. The second is the
+        // test; the first is the control that shows the second is not just closure.
+        public Dictionary<string, uint> AnchorSelectsOneTrailer { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> AnchorLeavesWholeRecords { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether numeric type 0x0A's head-length rule puts the reference where it says.
