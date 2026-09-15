@@ -246,6 +246,20 @@ namespace AnimeStudio.CLI
                                 ["anchorSelectsOneTrailer"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorSelectsOneTrailer)),
                                 ["anchorLeavesWholeRecords"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorLeavesWholeRecords)),
                             },
+                            ["hircHierarchy"] = new Dictionary<string, object?>
+                            {
+                                ["banks"] = package.Hierarchy.Banks,
+                                ["objects"] = package.Hierarchy.Objects,
+                                ["cycles"] = package.Hierarchy.Cycles,
+                                ["rootsWithNoParent"] = package.Hierarchy.RootsWithNoParent,
+                                ["rootsNamingOutsideTheBank"] = package.Hierarchy.RootsNamingOutsideTheBank,
+                                ["rootsPerBank"] = package.Hierarchy.RootsPerBank.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["rootTypes"] = package.Hierarchy.RootTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["outsideBankTypes"] = package.Hierarchy.OutsideBankTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["internalTypes"] = package.Hierarchy.InternalTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["leafTypes"] = package.Hierarchy.LeafTypes.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["depths"] = package.Hierarchy.Depths.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircSharedConstants"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.SharedConstants.Bodies,

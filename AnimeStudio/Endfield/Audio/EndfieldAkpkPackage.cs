@@ -35,6 +35,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
+        public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircType0AElementCensus Type0AElements { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
@@ -119,6 +120,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyMusicReferences();
             package.ClassifyType0AHeadPredictions();
             package.ClassifySharedFrameConstants();
+            package.ClassifySharedHierarchy();
             package.WalkNamedReachAcrossPackage();
             return package;
         }
@@ -719,6 +721,104 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Walk the parent relation numeric types 0x08 and 0x12 declare, per bank.
+        /// </summary>
+        /// <remarks>
+        /// This is the first structure in this format above the level of a byte
+        /// layout, so it is measured rather than assumed. Each object's leading word
+        /// names another object; following it gives a relation, and the questions
+        /// worth asking of a relation are whether it is acyclic, how many roots each
+        /// bank has, and whether the two types sit in different places in it.
+        ///
+        /// Built per bank on purpose. Object ids repeat across banks, and a graph
+        /// built on the deduplicated ids merges trees that are not connected -- doing
+        /// that made the corpus look like three trees over 278 objects instead of 121
+        /// trees over 412.
+        ///
+        /// Nothing here says what the relation means. It says it is a forest, that
+        /// almost every bank contributes exactly one tree, and that numeric type 0x12
+        /// is a leaf in all but two of its 251 objects.
+        /// </remarks>
+        private void ClassifySharedHierarchy()
+        {
+            foreach (var structure in BnkStructures)
+            {
+                var objects = structure.SharedParents;
+                if (objects.Count == 0)
+                {
+                    continue;
+                }
+                Hierarchy.Banks = checked(Hierarchy.Banks + 1);
+                var children = new Dictionary<uint, uint>();
+                foreach (var pair in objects)
+                {
+                    if (pair.Value.Parent != 0 && objects.ContainsKey(pair.Value.Parent))
+                    {
+                        children.TryGetValue(pair.Value.Parent, out var seen);
+                        children[pair.Value.Parent] = checked(seen + 1);
+                    }
+                }
+                var roots = 0U;
+                foreach (var pair in objects)
+                {
+                    var (type, parent) = pair.Value;
+                    Hierarchy.Objects = checked(Hierarchy.Objects + 1);
+                    var inBank = parent != 0 && objects.ContainsKey(parent);
+                    if (!inBank)
+                    {
+                        roots = checked(roots + 1);
+                        // Two very different things, and conflating them cost a wrong
+                        // gate: an object with NO parent is a root of the relation,
+                        // while an object naming a parent that is simply not in this
+                        // bank is a root only of this bank's fragment of it.
+                        if (parent == 0)
+                        {
+                            Hierarchy.RootsWithNoParent = checked(Hierarchy.RootsWithNoParent + 1);
+                            HircBump(Hierarchy.RootTypes, $"type{type:X2}", 1);
+                        }
+                        else
+                        {
+                            Hierarchy.RootsNamingOutsideTheBank =
+                                checked(Hierarchy.RootsNamingOutsideTheBank + 1);
+                            HircBump(Hierarchy.OutsideBankTypes, $"type{type:X2}", 1);
+                        }
+                    }
+                    HircBump(
+                        children.ContainsKey(pair.Key) ? Hierarchy.InternalTypes : Hierarchy.LeafTypes,
+                        $"type{type:X2}",
+                        1);
+
+                    // Depth, and the cycle check that makes the depth meaningful.
+                    var seenIds = new HashSet<uint>();
+                    var cursor = pair.Key;
+                    var depth = 0;
+                    while (true)
+                    {
+                        var next = objects[cursor].Parent;
+                        if (next == 0 || !objects.ContainsKey(next))
+                        {
+                            break;
+                        }
+                        if (!seenIds.Add(next))
+                        {
+                            Hierarchy.Cycles = checked(Hierarchy.Cycles + 1);
+                            depth = -1;
+                            break;
+                        }
+                        cursor = next;
+                        depth = checked(depth + 1);
+                    }
+                    if (depth >= 0)
+                    {
+                        HircBump(Hierarchy.Depths, $"depth_{Math.Min(depth, 12)}", 1);
+                    }
+                }
+                HircBump(Hierarchy.RootsPerBank, $"roots_{Math.Min(roots, 8)}", 1);
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1311,6 +1411,14 @@ namespace AnimeStudio.Endfield
                     if (objectType is 8 or 18)
                     {
                         structure.SharedBodies.Add(bodySpan.ToArray());
+                        // The leading word is this object's parent. Kept per bank,
+                        // because object ids repeat across banks and a graph built on
+                        // the deduplicated ids is a different graph.
+                        structure.SharedParents[objectId] = (
+                            objectType,
+                            bodySpan.Length >= 4
+                                ? BinaryPrimitives.ReadUInt32LittleEndian(bodySpan.Slice(0, 4))
+                                : 0u);
                     }
                     RecordHircBodyFrame(census, frame, bodySpan, bankId, ordinal, objectId);
                     if (frame.Status == "exact" && frame.References is { Count: > 0 })
@@ -5516,6 +5624,8 @@ namespace AnimeStudio.Endfield
         // framer can be scored against their alternatives rather than asserted. All
         // 412 of them together are about 32 KB.
         public List<byte[]> SharedBodies { get; } = new();
+        // objectId -> (numeric type, the id its leading word names). One map per bank.
+        public Dictionary<uint, (byte Type, uint Parent)> SharedParents { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
@@ -5715,6 +5825,22 @@ namespace AnimeStudio.Endfield
         public uint LeadingByteNotZero { get; set; }
         public uint PadNotZero { get; set; }
         public Dictionary<string, uint> ValueCounts { get; } = new(StringComparer.Ordinal);
+    }
+
+    // The parent relation numeric types 0x08 and 0x12 declare, measured per bank.
+    public sealed class EndfieldHircHierarchyCensus
+    {
+        public uint Banks { get; set; }
+        public uint Objects { get; set; }
+        public uint Cycles { get; set; }
+        public uint RootsWithNoParent { get; set; }
+        public uint RootsNamingOutsideTheBank { get; set; }
+        public Dictionary<string, uint> RootsPerBank { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> RootTypes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> OutsideBankTypes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> InternalTypes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> LeafTypes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> Depths { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether each constant in the shared framer beats every rival value, and on
