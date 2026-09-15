@@ -855,8 +855,8 @@ namespace AnimeStudio.Endfield
                         5 => FrameType5Body(bodySpan, structure.Version),
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
-                        8 => FrameType8Body(bodySpan, structure.Version),
-                        18 => FrameType12Body(bodySpan, structure.Version),
+                        8 => FrameSharedBody(bodySpan, structure.Version),
+                        18 => FrameSharedBody(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
                         22 => FrameType22Body(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
@@ -2406,26 +2406,40 @@ namespace AnimeStudio.Endfield
         private const int Type08EntryBytes = 6;
         private const int Type08TrailerBytes = 5;
 
+        // Numeric types 0x08 and 0x12 share one body layout, so they share one framer.
+        // Both second-list widths numeric type 0x08 uses plus the one numeric type
+        // 0x12 adds; a key outside the set is held unsupported rather than guessed.
+        internal const byte SharedSecondListKeyA = 0x0A;
+        internal const int SharedSecondListKeyABytes = 12;
+        // Between the second list and the zero word sit nine bytes. They were once
+        // matched against a constant, because numeric type 0x08's commonest bodies all
+        // carry the same ones. They are a field: read as a flag byte, a 32-bit value
+        // and a float, numeric type 0x08 carries (2, 1000, -96.0) in 148 bodies,
+        // (2, 0, -96.0) in 8 and (2, 500, -96.0) in 1, and numeric type 0x12 carries
+        // (0, 0, -96.3) in all of its. A magic does not vary in one 32-bit slot.
+        internal const int SharedMiddleBlockBytes = 9;
+
         /// <summary>
-        /// Frame numeric HIRC type 0x08.
+        /// Frame the body layout numeric HIRC types 0x08 and 0x12 share.
         /// </summary>
         /// <remarks>
-        /// Layout: a 32-bit reference, the counted key/value block numeric type 0x16
-        /// uses, a one-entry list whose key sizes its value, the nine-byte signature, a
-        /// zero word, a counted run of six-byte entries, and five zero bytes.
+        /// A 32-bit reference, the counted key/value block numeric type 0x16 uses, a
+        /// second list whose key sizes its value, the nine-byte middle block, a zero
+        /// word, a counted run of six-byte entries, and then either five zero bytes or
+        /// the shared tail block.
         ///
-        /// Two details are worth stating because they are what make the framing
-        /// testable rather than fitted. The one-entry list's key *predicts* its value
-        /// width, so a body carrying an unobserved key is refused instead of being
-        /// walked with a guessed width. And the entry run carries one extra byte when
-        /// its count is nonzero and nothing at all when the count is zero, which is
-        /// fixed by bodies that declare no entries rather than assumed.
+        /// Two details carry the framing rather than fit it. The second list's key
+        /// *predicts* its value width -- 0x15 at 11 bytes, 0x1D at 27 and 0x0A at 12 --
+        /// so a body with an unobserved key is refused instead of walked with a guessed
+        /// width. And the entry run carries one extra byte when its count is nonzero
+        /// and nothing at all when the count is zero, which the bodies declaring no
+        /// entries fix rather than leaving to assumption.
         ///
         /// The reference is read but not published as a frame reference: numeric type
         /// 0x08's leading word already has its own census, and counting it twice would
         /// inflate the reference graph.
         /// </remarks>
-        internal static EndfieldHircBodyFrameResult FrameType8Body(
+        internal static EndfieldHircBodyFrameResult FrameSharedBody(
             ReadOnlySpan<byte> body,
             uint? bankVersion)
         {
@@ -2461,10 +2475,6 @@ namespace AnimeStudio.Endfield
             {
                 return failure;
             }
-            if (secondCount != 1)
-            {
-                return HircFrameOutcome("failed", "second_list_is_not_one_entry", cursor - 1, 1, secondCount);
-            }
             if (!HircReadByte(body, ref cursor, out var secondKey, out failure, "secondListKey"))
             {
                 return failure;
@@ -2473,6 +2483,7 @@ namespace AnimeStudio.Endfield
             {
                 Type08SecondListShortKey => Type08SecondListShortBytes,
                 Type08SecondListLongKey => Type08SecondListLongBytes,
+                SharedSecondListKeyA => SharedSecondListKeyABytes,
                 _ => -1,
             };
             if (secondWidth < 0)
@@ -2480,42 +2491,39 @@ namespace AnimeStudio.Endfield
                 return HircFrameOutcome("unsupported", "unsupported_second_list_key", cursor - 1, 0, secondKey);
             }
             HircBump(selectors, $"secondListKey_{secondKey:X2}", 1);
+            HircBump(selectors, $"secondListCount_{secondCount}", 1);
             if (!HircTake(body, ref cursor, secondWidth, out failure, "secondListValue"))
             {
                 return failure;
             }
-
-            if (body.Length - cursor < Type08Signature.Length
-                || !body.Slice(cursor, Type08Signature.Length).SequenceEqual(Type08Signature))
-            {
-                return HircFrameOutcome("failed", "signature_not_where_expected", cursor, 0, 0);
-            }
-            cursor = checked(cursor + Type08Signature.Length);
-
-            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterSignature"))
+            if (!HircTake(body, ref cursor, SharedMiddleBlockBytes, out failure, "middleBlock"))
             {
                 return failure;
             }
-            var word = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
-            if (word != 0)
+            var middle = body.Slice(cursor - SharedMiddleBlockBytes, SharedMiddleBlockBytes);
+            HircBump(
+                selectors,
+                $"middleBlock_{middle[0]:X2}_{BinaryPrimitives.ReadUInt32LittleEndian(middle.Slice(1, 4))}",
+                1);
+            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterTheMiddleBlock"))
             {
-                return HircFrameOutcome("failed", "word_after_signature_is_not_zero", cursor - 4, 0, 0);
+                return failure;
             }
-
+            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4)) != 0)
+            {
+                return HircFrameOutcome("failed", "word_after_the_middle_block_is_not_zero", cursor - 4, 0, 0);
+            }
             if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "entryCount"))
             {
                 return failure;
             }
-            var span = entryCount == 0
-                ? 0
-                : checked(entryCount * Type08EntryBytes + 1);
+            var span = entryCount == 0 ? 0 : checked(entryCount * Type08EntryBytes + 1);
             if (span > body.Length - cursor)
             {
                 return HircFrameOutcome("failed", "range_entries", cursor - 1, body.Length - cursor, span);
             }
             cursor = checked(cursor + span);
             HircBump(groups, "entryRunElements", entryCount);
-
             if (body.Length - cursor != Type08TrailerBytes)
             {
                 // Bodies that do not end on the five zero bytes end on the shared tail
@@ -2577,7 +2585,7 @@ namespace AnimeStudio.Endfield
             {
                 Type08SecondListShortKey => Type08SecondListShortBytes,
                 Type08SecondListLongKey => Type08SecondListLongBytes,
-                Type12SecondListKeyA when !requireSignature => Type12SecondListKeyABytes,
+                SharedSecondListKeyA when !requireSignature => SharedSecondListKeyABytes,
                 _ => -1,
             };
             if (secondWidth < 0)
@@ -2713,134 +2721,6 @@ namespace AnimeStudio.Endfield
             candidates.Add((
                 BinaryPrimitives.ReadUInt32LittleEndian(tail.Slice(Type08TailFirstWordOffset, 4)),
                 BinaryPrimitives.ReadUInt32LittleEndian(tail.Slice(Type08TailSecondWordOffset, 4))));
-        }
-
-        // Numeric type 0x12 shares numeric type 0x08's layout. Where 0x08's nine bytes
-        // after the second list are always the same, 0x12's differ, so they are read
-        // as a byte, a word and a float rather than matched against a constant.
-        internal const int Type12MiddleBlockBytes = 9;
-        internal const byte Type12SecondListKeyA = 0x0A;
-        internal const int Type12SecondListKeyABytes = 12;
-
-        /// <summary>
-        /// Frame numeric HIRC type 0x12 with numeric type 0x08's layout.
-        /// </summary>
-        /// <remarks>
-        /// Reference, counted key/value block, a second list whose key sizes its value,
-        /// nine bytes, a zero word, the counted run of six-byte entries with its extra
-        /// byte when nonzero, and five zero bytes. Two of the three second-list keys and
-        /// their widths are the ones numeric type 0x08 already uses.
-        ///
-        /// The widths were solved for rather than guessed: everything after the second
-        /// list is deterministic, so each body was asked which width makes it close
-        /// exactly, and every body that closes has exactly one such width.
-        ///
-        /// What this deliberately does not decide: key 0x0A always arrives with a list
-        /// count of 3 and a twelve-byte value, so "the key decides the width" and "the
-        /// count multiplies a four-byte per-key width" predict the same bytes
-        /// everywhere in this corpus. The simpler rule is implemented and the ambiguity
-        /// is recorded rather than resolved.
-        /// </remarks>
-        internal static EndfieldHircBodyFrameResult FrameType12Body(
-            ReadOnlySpan<byte> body,
-            uint? bankVersion)
-        {
-            if (bankVersion != 150)
-            {
-                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
-            }
-
-            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var cursor = 0;
-            if (!HircTake(body, ref cursor, 4, out var failure, "reference"))
-            {
-                return failure;
-            }
-            if (!HircReadByte(body, ref cursor, out var propertyCount, out failure, "propertyCount"))
-            {
-                return failure;
-            }
-            if (propertyCount > (body.Length - cursor) / 5)
-            {
-                return HircFrameOutcome(
-                    "failed", "range_properties", cursor - 1, (body.Length - cursor) / 5, propertyCount);
-            }
-            for (var i = 0; i < propertyCount; i++)
-            {
-                HircBump(selectors, $"propertyKey_{body[cursor + i]:X2}", 1);
-            }
-            cursor = checked(cursor + propertyCount * 5);
-            HircBump(groups, "propertyEntries", propertyCount);
-
-            if (!HircReadByte(body, ref cursor, out var secondCount, out failure, "secondListCount"))
-            {
-                return failure;
-            }
-            if (!HircReadByte(body, ref cursor, out var secondKey, out failure, "secondListKey"))
-            {
-                return failure;
-            }
-            var secondWidth = secondKey switch
-            {
-                Type08SecondListShortKey => Type08SecondListShortBytes,
-                Type08SecondListLongKey => Type08SecondListLongBytes,
-                Type12SecondListKeyA => Type12SecondListKeyABytes,
-                _ => -1,
-            };
-            if (secondWidth < 0)
-            {
-                return HircFrameOutcome("unsupported", "unsupported_second_list_key", cursor - 1, 0, secondKey);
-            }
-            HircBump(selectors, $"secondListKey_{secondKey:X2}", 1);
-            HircBump(selectors, $"secondListCount_{secondCount}", 1);
-            if (!HircTake(body, ref cursor, secondWidth, out failure, "secondListValue"))
-            {
-                return failure;
-            }
-            if (!HircTake(body, ref cursor, Type12MiddleBlockBytes, out failure, "middleBlock"))
-            {
-                return failure;
-            }
-            if (!HircTake(body, ref cursor, 4, out failure, "wordAfterTheMiddleBlock"))
-            {
-                return failure;
-            }
-            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4)) != 0)
-            {
-                return HircFrameOutcome("failed", "word_after_the_middle_block_is_not_zero", cursor - 4, 0, 0);
-            }
-            if (!HircReadByte(body, ref cursor, out var entryCount, out failure, "entryCount"))
-            {
-                return failure;
-            }
-            var span = entryCount == 0 ? 0 : checked(entryCount * Type08EntryBytes + 1);
-            if (span > body.Length - cursor)
-            {
-                return HircFrameOutcome("failed", "range_entries", cursor - 1, body.Length - cursor, span);
-            }
-            cursor = checked(cursor + span);
-            HircBump(groups, "entryRunElements", entryCount);
-            if (body.Length - cursor != Type08TrailerBytes)
-            {
-                // Bodies that do not end on the five zero bytes end on the shared tail
-                // block instead. Nothing is searched for: the block either starts here
-                // and finishes the body, or the body is refused.
-                if (FrameTailBlock(body, ref cursor, groups, selectors, out failure))
-                {
-                    return HircFrameExact(cursor, body.Length, groups, selectors, null);
-                }
-                return failure;
-            }
-            for (var i = cursor; i < body.Length; i++)
-            {
-                if (body[i] != 0)
-                {
-                    return HircFrameOutcome("failed", "trailer_is_not_zero", i, 0, body[i]);
-                }
-            }
-            cursor = body.Length;
-            return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
 
         // The tail block numeric types 0x08 and 0x12 share. Its head is fifteen bytes:

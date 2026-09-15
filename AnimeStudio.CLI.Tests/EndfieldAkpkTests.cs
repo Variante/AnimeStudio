@@ -933,17 +933,25 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("type 0x08 accepted an unobserved list key");
         }
 
+        // The nine bytes before the zero word are a field, not a signature: numeric
+        // type 0x08 carries three different 32-bit values there and numeric type 0x12 a
+        // fourth. A body whose nine bytes differ must frame, and the value must be
+        // published so the variation stays visible instead of being asserted away.
+        var otherMiddle = Frame(Build(
+            new byte[] { 0x1B }, 0x15, 11, 0,
+            signature: new byte[] { 0x02, 0xF4, 0x01, 0x00, 0x00, 0x00, 0x00, 0xC0, 0xC2 }));
+        if (otherMiddle.ExactCount != 1
+            || otherMiddle.SelectorCounts["middleBlock_02_500"] != 1)
+        {
+            throw new InvalidOperationException("type 0x08 refused a different middle block");
+        }
+
         // Each of the remaining refusals must be reported under its own reason: a
         // single pooled failure would hide which part of the layout the body broke.
-        var badSignature = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, signature: new byte[9]));
-        if (badSignature.FailureCounts["signature_not_where_expected"] != 1)
-        {
-            throw new InvalidOperationException("type 0x08 framed a body without the signature");
-        }
         var badWord = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, afterSignature: 7));
-        if (badWord.FailureCounts["word_after_signature_is_not_zero"] != 1)
+        if (badWord.FailureCounts["word_after_the_middle_block_is_not_zero"] != 1)
         {
-            throw new InvalidOperationException("type 0x08 framed a nonzero word after the signature");
+            throw new InvalidOperationException("type 0x08 framed a nonzero word after the middle block");
         }
         // A body that neither ends on the five zero bytes nor carries a whole tail
         // block is refused under the tail block's own reason, not the trailer's: which
@@ -981,10 +989,13 @@ internal static class EndfieldAkpkTests
         {
             throw new InvalidOperationException("type 0x08 framed an unobserved tail-block head");
         }
-        var badSecond = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, secondCount: 5));
-        if (badSecond.FailureCounts["second_list_is_not_one_entry"] != 1)
+        // The second list's count is published, not constrained. Numeric type 0x08's
+        // bodies all declare one and numeric type 0x12's declare three with key 0x0A,
+        // so a corpus where each type is uniform cannot make the count a rule.
+        var otherCount = Frame(Build(new byte[] { 0x1B }, 0x15, 11, 0, secondCount: 5));
+        if (otherCount.ExactCount != 1 || otherCount.SelectorCounts["secondListCount_5"] != 1)
         {
-            throw new InvalidOperationException("type 0x08 framed a multi-entry second list");
+            throw new InvalidOperationException("type 0x08 constrained its second-list count");
         }
     }
 
