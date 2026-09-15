@@ -165,6 +165,16 @@ namespace AnimeStudio.CLI
                             // different packages.
                             ["bnkBankIds"] = package.BnkStructures
                                 .Select(x => x.BankId).Distinct().OrderBy(x => x).ToArray(),
+                            // Objects per bank, so the audit can see the same bank
+                            // shipped in two packages. A per-package census cannot:
+                            // this is the fourth field in this format whose two sides
+                            // sit in different files.
+                            ["bnkBankObjectCounts"] = package.BnkStructures
+                                .GroupBy(x => x.BankId)
+                                .OrderBy(x => x.Key)
+                                .ToDictionary(
+                                    x => x.Key.ToString(),
+                                    x => x.Sum(y => (long)y.HircObjectCount)),
                             ["bnkSections"] = package.BnkStructures.Sum(x => x.Sections.Count),
                             ["envs"] = new Dictionary<string, object?>
                             {
