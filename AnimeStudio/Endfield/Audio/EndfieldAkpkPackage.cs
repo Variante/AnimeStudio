@@ -29,6 +29,7 @@ namespace AnimeStudio.Endfield
         public int ExternalCount { get; private set; }
         public List<EndfieldBnkStructure> BnkStructures { get; } = new();
         public EndfieldHircMediaJoinCensus MediaJoin { get; } = new();
+        public EndfieldHircType03TargetCensus Type03Targets { get; } = new();
         // Identities the caller wants walked. Empty by default, so the walk costs
         // nothing unless a consumer supplies them.
         public static HashSet<uint> NamedIdentityHashes { get; set; } = new();
@@ -107,6 +108,7 @@ namespace AnimeStudio.Endfield
             package.ExternalCount = package.ParseSector(reader, externalsStart, externalsSectorSize, isSounds: true, isExternals: true);
             package.JoinType2SourcesToMedia();
             package.CountNamedBanksAndMedia();
+            package.ClassifyType03Targets();
             return package;
         }
 
@@ -184,6 +186,50 @@ namespace AnimeStudio.Endfield
                 if (hashes.Contains(media))
                 {
                     first.MediaMatched = checked(first.MediaMatched + 1);
+                }
+            }
+        }
+
+
+        // Runs once every bank in the package is parsed, because "another bank" is
+        // only answerable then. A target outside the package is reported as such
+        // rather than as unresolved: this reader cannot see the other packages.
+        private void ClassifyType03Targets()
+        {
+            var perBank = new Dictionary<ulong, HashSet<uint>>();
+            var everything = new HashSet<uint>();
+            foreach (var structure in BnkStructures)
+            {
+                perBank[structure.BankId] = structure.DeclaredObjectIds;
+                everything.UnionWith(structure.DeclaredObjectIds);
+            }
+            foreach (var structure in BnkStructures)
+            {
+                var own = perBank[structure.BankId];
+                foreach (var (action, target) in structure.Type03Targets)
+                {
+                    Type03Targets.Objects = checked(Type03Targets.Objects + 1);
+                    var key = $"action_{action:X2}";
+                    if (target == 0)
+                    {
+                        Type03Targets.Zero = checked(Type03Targets.Zero + 1);
+                    }
+                    else if (own.Contains(target))
+                    {
+                        Type03Targets.SameBank = checked(Type03Targets.SameBank + 1);
+                        HircBump(Type03Targets.SameBankByActionByte, key, 1);
+                    }
+                    else if (everything.Contains(target))
+                    {
+                        Type03Targets.OtherBankInPackage =
+                            checked(Type03Targets.OtherBankInPackage + 1);
+                        HircBump(Type03Targets.OtherBankByActionByte, key, 1);
+                    }
+                    else
+                    {
+                        Type03Targets.OutsidePackage = checked(Type03Targets.OutsidePackage + 1);
+                        HircBump(Type03Targets.OutsideByActionByte, key, 1);
+                    }
                 }
             }
         }
@@ -873,8 +919,12 @@ namespace AnimeStudio.Endfield
                         bankEdges[objectId] = targets;
                     }
                 }
+                structure.DeclaredObjectIds.Add(objectId);
                 if (objectType == 3 && objectSize >= 10)
                 {
+                    structure.Type03Targets.Add((
+                        payload[checked(cursor + 9)],
+                        BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(checked(cursor + 11), 4))));
                     var target = BinaryPrimitives.ReadUInt32LittleEndian(
                         payload.AsSpan(checked(cursor + 11), 4));
                     bankEdges[objectId] = new List<uint> { target };
@@ -2978,6 +3028,10 @@ namespace AnimeStudio.Endfield
         // (plug-in id -> source ids) for numeric type 0x02, kept so the package can
         // join them against its own media entries once every sector is parsed.
         public Dictionary<uint, HashSet<uint>> Type2SourcesByPlugin { get; } = new();
+        // (action byte, target word) for numeric type 0x03, classified once the
+        // package's full object set is known.
+        public List<(byte Action, uint Target)> Type03Targets { get; } = new();
+        public HashSet<uint> DeclaredObjectIds { get; } = new();
         public EndfieldHircBodyCensus Type2Body { get; } = new();
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
@@ -3069,6 +3123,25 @@ namespace AnimeStudio.Endfield
     // always lives in a *different* package of the same corpus, so a same-package
     // join answers 12 of 75,958 and means nothing. The union belongs to whoever can
     // see every package, so this type carries the inputs and no verdict.
+    // Where the numeric type 0x03 target word lands.
+    //
+    // This is the one HIRC relation in this corpus that crosses a bank boundary. The
+    // gated reference vectors never do, and that was recorded as a property of the
+    // corpus; it is a property of those vectors. Actions are different, so the
+    // classification is counted here rather than folded into the reference graph.
+    public sealed class EndfieldHircType03TargetCensus
+    {
+        public uint Objects { get; set; }
+        public uint Zero { get; set; }
+        public uint SameBank { get; set; }
+        public uint OtherBankInPackage { get; set; }
+        public uint OutsidePackage { get; set; }
+        // Per action byte, so the caller can see whether it decides the outcome.
+        public Dictionary<string, uint> SameBankByActionByte { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> OtherBankByActionByte { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> OutsideByActionByte { get; } = new(StringComparer.Ordinal);
+    }
+
     public sealed class EndfieldHircMediaJoinCensus
     {
         public uint MediaEntries { get; set; }

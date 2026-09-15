@@ -195,6 +195,17 @@ namespace AnimeStudio.CLI
                             ["hircType17"] = BuildType17Summary(package.BnkStructures),
                             ["hircType09"] = BuildType09Summary(package.BnkStructures),
                             ["hircSmallTypes"] = BuildSmallTypeSummary(package.BnkStructures),
+                            ["hircType03Targets"] = new Dictionary<string, object?>
+                            {
+                                ["objects"] = package.Type03Targets.Objects,
+                                ["zero"] = package.Type03Targets.Zero,
+                                ["sameBank"] = package.Type03Targets.SameBank,
+                                ["otherBankInPackage"] = package.Type03Targets.OtherBankInPackage,
+                                ["outsidePackage"] = package.Type03Targets.OutsidePackage,
+                                ["sameBankByActionByte"] = package.Type03Targets.SameBankByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["otherBankByActionByte"] = package.Type03Targets.OtherBankByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["outsideByActionByte"] = package.Type03Targets.OutsideByActionByte.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircMediaJoin"] = new Dictionary<string, object?>
                             {
                                 ["mediaEntries"] = package.MediaJoin.MediaEntries,
