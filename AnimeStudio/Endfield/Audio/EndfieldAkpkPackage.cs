@@ -403,7 +403,8 @@ namespace AnimeStudio.Endfield
             foreach (var structure in BnkStructures)
             {
                 foreach (var (predicted, fixedWord, plus, minus, discriminant, headWord,
-                              leadBad, padBad, values, tailBytes) in structure.Type0AHeadPredictions)
+                              leadBad, padBad, values, tailBytes, tailFloat)
+                         in structure.Type0AHeadPredictions)
                 {
                     Type0AHead.Bodies = checked(Type0AHead.Bodies + 1);
                     if (discriminant)
@@ -451,6 +452,22 @@ namespace AnimeStudio.Endfield
                             && typeOf.TryGetValue(predicted, out var placed)
                             && placed == 11 ? "withReference_" : "withoutReference_") + tailBytes,
                         1);
+                    if (discriminant
+                        && everything.Contains(predicted)
+                        && typeOf.TryGetValue(predicted, out var forFloat)
+                        && forFloat == 11
+                        && float.IsFinite(tailFloat))
+                    {
+                        Type0AHead.TailFloats = checked(Type0AHead.TailFloats + 1);
+                        if (tailFloat >= Type0ATailFloatFloor && tailFloat <= Type0ATailFloatCeiling)
+                        {
+                            Type0AHead.TailFloatsInBand = checked(Type0AHead.TailFloatsInBand + 1);
+                        }
+                        if (tailFloat == MathF.Round(tailFloat))
+                        {
+                            Type0AHead.TailFloatsWhole = checked(Type0AHead.TailFloatsWhole + 1);
+                        }
+                    }
                     Score("predicted", predicted);
                     Score("fixedOffset", fixedWord);
                     Score("predictedPlusFour", plus);
@@ -2692,6 +2709,12 @@ namespace AnimeStudio.Endfield
         // Above this, byte 21 is not a count and a fixed block follows instead.
         internal const int Type0AHeadSecondCountCeiling = 16;
         internal const int Type0AHeadFixedBlockBytes = 16;
+        // Twenty bytes past the reference sits a float. Across the conditioned bodies
+        // it stays inside a narrow band and its commonest values are whole numbers,
+        // which is what this censuses; what it measures is not claimed here.
+        internal const int Type0ATailFloatOffset = 20;
+        internal const float Type0ATailFloatFloor = 50f;
+        internal const float Type0ATailFloatCeiling = 200f;
 
         /// <summary>
         /// Keep the word numeric type 0x0A's head-length rule predicts, and its controls.
@@ -2702,7 +2725,7 @@ namespace AnimeStudio.Endfield
         /// ask whether the position is the one the rule names or merely near it.
         /// </remarks>
         private static void CollectType0AHeadPrediction(
-            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes)> sink,
+            List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat)> sink,
             ReadOnlySpan<byte> body)
         {
             if (body.Length <= Type0AHeadCountOffset)
@@ -2772,7 +2795,11 @@ namespace AnimeStudio.Endfield
                 leadBad,
                 padBad,
                 values.ToArray(),
-                body.Length - at));
+                body.Length - at,
+                at + Type0ATailFloatOffset + 4 <= body.Length
+                    ? BinaryPrimitives.ReadSingleLittleEndian(
+                        body.Slice(at + Type0ATailFloatOffset, 4))
+                    : float.NaN));
         }
 
         /// <summary>
@@ -4208,7 +4235,7 @@ namespace AnimeStudio.Endfield
         public List<(byte Type, uint[] Words, int[] DistancesFromEnd)> MusicBodyWords { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
-        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes)> Type0AHeadPredictions { get; } = new();
+        public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
         public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
@@ -4411,6 +4438,9 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> NamesTheSourceTypeWhereTheRuleApplies { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> HeadWordTargets { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> TailBytesByOutcome { get; } = new(StringComparer.Ordinal);
+        public uint TailFloats { get; set; }
+        public uint TailFloatsInBand { get; set; }
+        public uint TailFloatsWhole { get; set; }
     }
 
     // Which words in a music body name objects the package ships, and what they name.
