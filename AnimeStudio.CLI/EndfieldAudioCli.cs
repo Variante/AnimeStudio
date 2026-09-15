@@ -278,6 +278,14 @@ namespace AnimeStudio.CLI
                                 ["zeroTrailerByCandidate"] = package.SharedConstants.ZeroTrailerByCandidate.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["closesByCandidate"] = package.SharedConstants.ClosesByCandidate.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                             },
+                            ["hircType0AEndAnchor"] = new Dictionary<string, object?>
+                            {
+                                ["bodies"] = package.Type0AEndAnchor.Bodies,
+                                ["anchorNamesTheTargetType"] = package.Type0AEndAnchor.AnchorNamesTheTargetType,
+                                ["controlsNameTheTargetType"] = package.Type0AEndAnchor.ControlsNameTheTargetType,
+                                ["anchorHits"] = package.Type0AEndAnchor.AnchorHits.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                                ["controlHits"] = package.Type0AEndAnchor.ControlHits.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
+                            },
                             ["hircType0AHead"] = new Dictionary<string, object?>
                             {
                                 ["bodies"] = package.Type0AHead.Bodies,

@@ -34,6 +34,7 @@ namespace AnimeStudio.Endfield
         public EndfieldHircType08TailWordCensus Type12TailWords { get; } = new();
         public EndfieldHircMusicReferenceCensus MusicReferences { get; } = new();
         public EndfieldHircType0AHeadCensus Type0AHead { get; } = new();
+        public EndfieldHircType0AEndAnchorCensus Type0AEndAnchor { get; } = new();
         public EndfieldHircSharedConstantCensus SharedConstants { get; } = new();
         public EndfieldHircHierarchyCensus Hierarchy { get; } = new();
         public EndfieldHircMusicMutualityCensus MusicMutuality { get; } = new();
@@ -120,6 +121,7 @@ namespace AnimeStudio.Endfield
             package.ClassifyType08TailWords();
             package.ClassifyMusicReferences();
             package.ClassifyType0AHeadPredictions();
+            package.ClassifyType0AEndAnchor();
             package.ClassifySharedFrameConstants();
             package.ClassifySharedHierarchy();
             package.ClassifyMusicMutuality();
@@ -911,6 +913,64 @@ namespace AnimeStudio.Endfield
         }
 
 
+        /// <summary>
+        /// Score numeric type 0x0A's end anchor against its neighbouring distances,
+        /// and say how much of the type the two rules together account for.
+        /// </summary>
+        /// <remarks>
+        /// The combined accounting is the point. The head rule places 3,875 of the
+        /// 4,158 bodies; the anchor places 25 more that it could not reach; 255 carry
+        /// no reference at all, which the tail length explains as an absent optional
+        /// field. That leaves **three** bodies with a reference neither rule finds.
+        ///
+        /// The anchor's own evidence is the control, not the hit count. A fixed
+        /// distance from the end will land on *something* in every body; what makes
+        /// -69 a rule is that the ten distances around it land on an object id in no
+        /// body at all.
+        /// </remarks>
+        private void ClassifyType0AEndAnchor()
+        {
+            var typeOf = new Dictionary<uint, byte>();
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var pair in structure.WalkObjectTypes)
+                {
+                    typeOf[pair.Key] = pair.Value;
+                }
+            }
+            foreach (var structure in BnkStructures)
+            {
+                foreach (var words in structure.Type0AEndAnchors)
+                {
+                    Type0AEndAnchor.Bodies = checked(Type0AEndAnchor.Bodies + 1);
+                    for (var i = 0; i < words.Length; i++)
+                    {
+                        var distance = Type0AEndAnchorDistance
+                            + (i - Type0AEndAnchorControlSpan);
+                        if (words[i] == 0
+                            || !typeOf.TryGetValue(words[i], out var target)
+                            || target != 11)
+                        {
+                            continue;
+                        }
+                        if (Array.IndexOf(Type0AEndAnchorDistances, distance) >= 0)
+                        {
+                            Type0AEndAnchor.AnchorNamesTheTargetType =
+                                checked(Type0AEndAnchor.AnchorNamesTheTargetType + 1);
+                            HircBump(Type0AEndAnchor.AnchorHits, $"minus_{distance}", 1);
+                        }
+                        else
+                        {
+                            Type0AEndAnchor.ControlsNameTheTargetType =
+                                checked(Type0AEndAnchor.ControlsNameTheTargetType + 1);
+                            HircBump(Type0AEndAnchor.ControlHits, $"minus_{distance}", 1);
+                        }
+                    }
+                }
+            }
+        }
+
+
         private void ClassifyType03Targets()
         {
             var perBank = new Dictionary<ulong, HashSet<uint>>();
@@ -1668,6 +1728,9 @@ namespace AnimeStudio.Endfield
                     head.Bodies = checked(head.Bodies + 1);
                     if (objectType == 10)
                     {
+                        CollectType0AEndAnchor(
+                            structure.Type0AEndAnchors,
+                            payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
                         CollectType0AHeadPrediction(
                             structure.Type0AHeadPredictions,
                             payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
@@ -3227,6 +3290,21 @@ namespace AnimeStudio.Endfield
         // Numeric type 0x0A's head: a fixed part, then that many five-byte elements,
         // then the reference. The count sits at byte 14 -- it equals (headLength - 36)
         // / 5 in every body of the dominant family, all 3,441 of them.
+        // Numeric type 0x0A also carries its reference at a fixed distance from the
+        // END. Where the head rule and this anchor both apply they agree; where the
+        // head rule cannot reach, the anchor still places 25 of the 28 bodies it
+        // leaves behind.
+        internal const int Type0AEndAnchorDistance = 69;
+        // The reference does not sit at ONE distance from the end; it sits at one of a
+        // small set. 69 carries 3,707 of the 4,158 bodies and 73 carries 288, and the
+        // head rule's own distance distribution shows the rest of the family -- 77, 82,
+        // 93, 125. Treating 73 as a control made it look like the anchor was leaking,
+        // when in fact it is a second anchor.
+        internal static readonly int[] Type0AEndAnchorDistances = { 69, 73 };
+        // Scored against every distance within five bytes, because a fixed offset
+        // that happens to land on a reference is not a rule until the neighbours are
+        // shown to land on nothing.
+        internal const int Type0AEndAnchorControlSpan = 5;
         internal const int Type0AHeadCountOffset = 14;
         internal const int Type0AHeadFixedBytes = 36;
         internal const int Type0AHeadElementBytes = 5;
@@ -3295,6 +3373,36 @@ namespace AnimeStudio.Endfield
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// Keep the words at and around numeric type 0x0A's end anchor.
+        /// </summary>
+        /// <remarks>
+        /// The head rule works from the front and needs three of the body's bytes to
+        /// be counts; where any of them is not, it predicts past the end or into the
+        /// wrong place. The anchor works from the back and needs nothing.
+        ///
+        /// Every distance within five bytes is collected so the anchors can be scored
+        /// against the distances that are not anchors. That control is what makes this
+        /// a rule: at -69 the word names a type 0x0B object in 3,707 bodies and at -73
+        /// in 288, while -64 through -68, -70, -71, -72, -74 and -75 name one in
+        /// **none**.
+        /// </remarks>
+        private static void CollectType0AEndAnchor(
+            List<uint[]> sink,
+            ReadOnlySpan<byte> body)
+        {
+            var span = Type0AEndAnchorControlSpan;
+            var words = new uint[span * 2 + 1];
+            for (var i = -span; i <= span; i++)
+            {
+                var at = body.Length - (Type0AEndAnchorDistance + i);
+                words[i + span] = at >= 0 && at + 4 <= body.Length
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4))
+                    : 0U;
+            }
+            sink.Add(words);
         }
 
         /// <summary>
@@ -5740,6 +5848,8 @@ namespace AnimeStudio.Endfield
         public Dictionary<uint, (byte Type, uint Parent)> SharedParents { get; } = new();
         // Per numeric type 0x0A body: the word the head-length rule predicts, and three
         // controls. Classified once the package's object set is known.
+        // Per numeric type 0x0A body: the words at the end anchor and its neighbours.
+        public List<uint[]> Type0AEndAnchors { get; } = new();
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
         public EndfieldHircType17Census Type17 { get; } = new();
         public EndfieldHircType09Census Type09 { get; } = new();
@@ -6036,6 +6146,16 @@ namespace AnimeStudio.Endfield
         public Dictionary<string, uint> FrameClosesWithRuns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RunsPerElement { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Numeric type 0x0A's reference measured from the end, and its neighbours.
+    public sealed class EndfieldHircType0AEndAnchorCensus
+    {
+        public uint Bodies { get; set; }
+        public uint AnchorNamesTheTargetType { get; set; }
+        public uint ControlsNameTheTargetType { get; set; }
+        public Dictionary<string, uint> AnchorHits { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, uint> ControlHits { get; } = new(StringComparer.Ordinal);
     }
 
     // Whether numeric type 0x0A's head-length rule puts the reference where it says.
