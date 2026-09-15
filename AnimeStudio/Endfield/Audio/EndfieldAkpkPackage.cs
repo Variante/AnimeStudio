@@ -2621,8 +2621,22 @@ namespace AnimeStudio.Endfield
         // that many runs, then a fixed twelve-byte block. A run is a twelve-byte
         // header whose byte at +7 counts the twelve-byte records that follow it.
         internal const int Type11ElementHeadBytes5 = 5;
-        internal const int Type11ElementRunHeaderBytes = 12;
+        // The run splits 11 + 12n + 1, not 12 + 12n. The total is the same either
+        // way, which is why the body frame closed the same 3,715 bodies under the
+        // wrong split -- and why the split had to be settled by what the records
+        // contain rather than by whether the walk closed. Under 11 every one of the
+        // 4,086 records carries an interpolation code of 0 to 9; under 12, or any
+        // other width, none does.
+        internal const int Type11ElementRunHeaderBytes = 11;
+        internal const int Type11ElementRunTrailingBytes = 1;
         internal const int Type11ElementRunCountOffset = 7;
+        // The curve record: two floats and a 32-bit interpolation code, the same
+        // record numeric types 0x08 and 0x12 carry in their tail units.
+        internal const int Type11CurveCodeOffset = 8;
+        internal const uint Type11CurveMaximumCode = 9;
+        // Header widths the code distribution is scored against, so the split is
+        // discriminated rather than asserted.
+        internal static readonly int[] Type11RunHeaderRivals = { 10, 11, 12, 13 };
         internal const int Type11ElementTrailingBlockBytes = 12;
         internal const int Type11ElementRunCountField = 0;
         internal const byte Type11ElementMaximumRuns = 16;
@@ -2632,18 +2646,18 @@ namespace AnimeStudio.Endfield
         internal static readonly (int Head, int RunHeader, int CountOffset, int Trailing)[]
             Type11ElementFrameRivals =
         {
-            (5, 12, 7, 12),
-            (5, 12, 7, 0),
-            (17, 12, 7, 0),
-            (5, 12, 11, 12),
-            (5, 12, 0, 12),
-            (5, 12, 3, 12),
             (5, 11, 7, 12),
-            (5, 13, 7, 12),
-            (5, 12, 7, 11),
-            (5, 12, 7, 13),
-            (6, 12, 6, 12),
-            (4, 12, 8, 12),
+            (5, 11, 7, 0),
+            (17, 11, 7, 0),
+            (5, 11, 11, 12),
+            (5, 11, 0, 12),
+            (5, 11, 3, 12),
+            (5, 10, 7, 12),
+            (5, 12, 7, 12),
+            (5, 11, 7, 11),
+            (5, 11, 7, 13),
+            (6, 11, 6, 12),
+            (4, 11, 8, 12),
         };
         // Anchors the chosen trailer lengths are scored against. A trailer pair is only
         // established if the element bodies it leaves are congruent to the head length
@@ -4182,7 +4196,7 @@ namespace AnimeStudio.Endfield
                     return false;
                 }
                 cursor = checked(cursor + runHeader);
-                var span = checked(count * Type11ElementRecordBytes);
+                var span = checked(count * Type11ElementRecordBytes + Type11ElementRunTrailingBytes);
                 if (span > bodyBytes - cursor)
                 {
                     return false;
@@ -4258,6 +4272,7 @@ namespace AnimeStudio.Endfield
             var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
             var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
             var headers = new List<byte[]>();
+            var curves = new List<byte[]>();
             var cursor = 0;
             if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
             {
@@ -4356,12 +4371,13 @@ namespace AnimeStudio.Endfield
                         }
                         cursor = checked(cursor + Type11ElementRunHeaderBytes);
                         var recordSpan = checked(records * Type11ElementRecordBytes);
-                        if (recordSpan > end - cursor)
+                        if (recordSpan + Type11ElementRunTrailingBytes > end - cursor)
                         {
                             return HircFrameOutcome(
                                 "failed", "range_run_records", cursor, end - cursor, recordSpan);
                         }
-                        cursor = checked(cursor + recordSpan);
+                        curves.Add(body.Slice(cursor, recordSpan).ToArray());
+                        cursor = checked(cursor + recordSpan + Type11ElementRunTrailingBytes);
                         HircBump(groups, "runRecords", records);
                     }
                     if (end - cursor < Type11ElementTrailingBlockBytes + 1)
@@ -4419,6 +4435,10 @@ namespace AnimeStudio.Endfield
             foreach (var header in headers)
             {
                 CensusType11EntryHeader(structureEntryHeaders, header);
+            }
+            foreach (var region in curves)
+            {
+                CensusType11Curves(structureEntryHeaders, region);
             }
             return HircFrameExact(cursor, body.Length, groups, selectors, null);
         }
@@ -4531,6 +4551,69 @@ namespace AnimeStudio.Endfield
                 if (IsSmallFraction(value))
                 {
                     census.FractionsAreSmall = checked(census.FractionsAreSmall + 1);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Census the interpolation codes of numeric type 0x0B's curve records.
+        /// </summary>
+        /// <remarks>
+        /// This is what settles the run's internal split, because the run's *length*
+        /// does not: 11 + 12n + 1 and 12 + 12n are the same number of bytes, so the
+        /// body frame closes the same 3,715 bodies under either. What differs is what
+        /// the records contain. Under the 11-byte header every record carries a code
+        /// in 0..9; under 12 none does, and the floats are noise.
+        ///
+        /// The rival header widths are scored the same way so the split is
+        /// discriminated rather than asserted, and the contiguity of the code range is
+        /// the discriminator: a 32-bit word read at a wrong offset is not a small
+        /// integer, let alone one drawn from a contiguous ten-value set.
+        /// </remarks>
+        private static void CensusType11Curves(
+            EndfieldHircType11EntryHeaderCensus? census,
+            ReadOnlySpan<byte> region)
+        {
+            if (census is null || region.Length == 0 || region.Length % Type11ElementRecordBytes != 0)
+            {
+                return;
+            }
+            var count = region.Length / Type11ElementRecordBytes;
+            for (var i = 0; i < count; i++)
+            {
+                var record = region.Slice(i * Type11ElementRecordBytes, Type11ElementRecordBytes);
+                census.CurveRecords = checked(census.CurveRecords + 1);
+                var code = BinaryPrimitives.ReadUInt32LittleEndian(
+                    record.Slice(Type11CurveCodeOffset, 4));
+                if (code <= Type11CurveMaximumCode)
+                {
+                    census.CurveCodesInRange = checked(census.CurveCodesInRange + 1);
+                    HircBump(census.CurveCodes, $"code_{code}", 1);
+                }
+            }
+            // The control: read the same region as though the header had been one byte
+            // wider or narrower. Only the chosen split can produce codes in range,
+            // because the others slice the record across its float boundary.
+            foreach (var rival in Type11RunHeaderRivals)
+            {
+                if (rival == Type11ElementRunHeaderBytes)
+                {
+                    continue;
+                }
+                var shift = rival - Type11ElementRunHeaderBytes;
+                for (var i = 0; i < count; i++)
+                {
+                    var at = i * Type11ElementRecordBytes + Type11CurveCodeOffset + shift;
+                    if (at < 0 || at + 4 > region.Length)
+                    {
+                        continue;
+                    }
+                    census.CurveControlsTested = checked(census.CurveControlsTested + 1);
+                    var code = BinaryPrimitives.ReadUInt32LittleEndian(region.Slice(at, 4));
+                    if (code <= Type11CurveMaximumCode)
+                    {
+                        census.CurveControlsInRange = checked(census.CurveControlsInRange + 1);
+                    }
                 }
             }
         }
@@ -5667,6 +5750,12 @@ namespace AnimeStudio.Endfield
         // How many elements each entry declares. Censused because it is 1 in every
         // entry the frame closes, which is what makes the "count" reading untested.
         public Dictionary<string, uint> ElementCountValues { get; } = new(StringComparer.Ordinal);
+        // The curve records the element runs carry, and their interpolation codes.
+        public uint CurveRecords { get; set; }
+        public uint CurveCodesInRange { get; set; }
+        public uint CurveControlsTested { get; set; }
+        public uint CurveControlsInRange { get; set; }
+        public Dictionary<string, uint> CurveCodes { get; } = new(StringComparer.Ordinal);
     }
 
     // Numeric type 0x0B's entry elements: how they end, and what that leaves.
