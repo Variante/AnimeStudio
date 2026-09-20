@@ -33,16 +33,19 @@ namespace AnimeStudio.CLI
 
         public sealed class ExportAssetsResult
         {
-            public ExportAssetsResult(int requestedCount, int exportedCount, int errorCount)
+            public ExportAssetsResult(int requestedCount, int exportedCount, int errorCount, int excludedCount = 0)
             {
                 RequestedCount = requestedCount;
                 ExportedCount = exportedCount;
                 ErrorCount = errorCount;
+                ExcludedCount = excludedCount;
             }
 
             public int RequestedCount { get; }
             public int ExportedCount { get; }
             public int ErrorCount { get; }
+            /// <summary>Requested objects the exact-only gate left out on purpose.</summary>
+            public int ExcludedCount { get; }
         }
 
         public static Dictionary<ulong, string> Paths {  get; set; } = new Dictionary<ulong, string>();
@@ -435,13 +438,27 @@ namespace AnimeStudio.CLI
             }
             if (assetItem.Text == "")
             {
-                assetItem.Text = assetItem.TypeString + assetItem.UniqueID;
+                assetItem.Text = UnnamedAssetText(asset, assetItem);
             }
 
             if (exportable)
             {
                 exportableAssets.Add(assetItem);
             }
+        }
+
+        // An unnamed object is named by what it is, never by load order, so the
+        // same object keeps the same file name across runs and exports. The
+        // `_p<PathID>` suffix the exporter appends keeps the names distinct.
+        private static string UnnamedAssetText(Object asset, AssetItem assetItem)
+        {
+            if (asset is MonoBehaviour m_MonoBehaviour
+                && m_MonoBehaviour.m_Script.TryGet(out var m_Script)
+                && !string.IsNullOrEmpty(m_Script.m_ClassName))
+            {
+                return m_Script.m_ClassName;
+            }
+            return assetItem.TypeString;
         }
 
         private static string ExportAssetIdentityKey(AssetItem asset)
@@ -481,9 +498,47 @@ namespace AnimeStudio.CLI
             return unique;
         }
 
+        // Bundle slots ("<normalized chunk path>|<bundle offset>") whose objects
+        // stay loaded, so references into them still resolve, but are not
+        // exported: bundles a newer VFS manifest replaced or deleted.
+        public static HashSet<string> ExportSkipSourceSlots { get; set; }
+
+        public static string SourceSlotKey(string chunkPath, long offset)
+        {
+            var normalized = Path.GetFullPath(chunkPath ?? string.Empty).ToUpperInvariant();
+            return normalized + "|" + offset.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static List<AssetItem> WithoutSkippedSources(List<AssetItem> assets)
+        {
+            if (ExportSkipSourceSlots == null || ExportSkipSourceSlots.Count == 0)
+            {
+                return assets;
+            }
+            var kept = new List<AssetItem>(assets.Count);
+            foreach (var asset in assets)
+            {
+                var sourceFile = asset.SourceFile;
+                if (sourceFile != null
+                    && !string.IsNullOrEmpty(sourceFile.originalPath)
+                    && ExportSkipSourceSlots.Contains(SourceSlotKey(sourceFile.originalPath, sourceFile.offset)))
+                {
+                    continue;
+                }
+                kept.Add(asset);
+            }
+            var skipped = assets.Count - kept.Count;
+            if (skipped > 0)
+            {
+                Logger.Info($"Skipped {skipped} export asset(s) from superseded bundle slots.");
+            }
+            return kept;
+        }
+
         public static ExportAssetsResult ExportAssets(string savePath, List<AssetItem> toExportAssets, AssetGroupOption assetGroupOption, ExportType exportType)
         {
-            var uniqueExportAssets = DeduplicateExportAssets(toExportAssets);
+            var excludedAtStart = ExactOnlyGate.ExcludedCount;
+            var uniqueExportAssets = DeduplicateExportAssets(WithoutSkippedSources(toExportAssets));
             int toExportCount = uniqueExportAssets.Count;
             int exportedCount = 0;
             int errorCount = 0;
@@ -571,7 +626,12 @@ namespace AnimeStudio.CLI
             }
 
             Logger.Info(statusText);
-            return new ExportAssetsResult(toExportCount, exportedCount, errorCount);
+            return new ExportAssetsResult(
+                toExportCount,
+                exportedCount,
+                errorCount,
+                (int)(ExactOnlyGate.ExcludedCount - excludedAtStart)
+            );
         }
 
         public static void ExportAssetsMap(string savePath, List<AssetEntry> toExportAssets, string exportListName, ExportListType exportListType)

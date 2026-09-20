@@ -983,6 +983,14 @@ namespace AnimeStudio.CLI
                             "metadataOnly",
                             $"{decodeException.GetType().Name}: {decodeException.Message}"
                         );
+                        if (ExactOnlyGate.Enabled)
+                        {
+                            ExactOnlyGate.RecordExclusion(
+                                item,
+                                $"metadataOnly: {decodeException.GetType().Name}: {decodeException.Message}"
+                            );
+                            return false;
+                        }
                         var fallbackText = JsonConvert.SerializeObject(fallback, Formatting.Indented);
                         File.WriteAllText(exportFullPath, fallbackText);
                         return true;
@@ -1142,6 +1150,16 @@ namespace AnimeStudio.CLI
                     decodeIsPartial ? "partial" : "decoded",
                     decodeError
                 );
+                if (ExactOnlyGate.Enabled && decodeIsPartial)
+                {
+                    ExactOnlyGate.RecordExclusion(item, $"partial: {decodeError}");
+                    return false;
+                }
+                var undecodedStubs = ExactOnlyGate.Apply(type);
+                if (undecodedStubs > 0)
+                {
+                    meta["undecodedStubCount"] = undecodedStubs;
+                }
                 type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
                 File.WriteAllText(exportFullPath, str);
@@ -21917,10 +21935,12 @@ namespace AnimeStudio.CLI
                 {
                     File.Delete(fullPath);
                 }
+                ExportManifestJsonlWriter.Current?.RecordOutput(item, fullPath);
                 return true;
             }
             if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
             {
+                ExportManifestJsonlWriter.Current?.RecordOutput(item, fullPath);
                 return true;
             }
             if (Properties.Settings.Default.allowDuplicates)
@@ -21930,6 +21950,7 @@ namespace AnimeStudio.CLI
                     fullPath = Path.Combine(dir, $"{pathIdFileName} ({i}){extension}");
                     if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
                     {
+                        ExportManifestJsonlWriter.Current?.RecordOutput(item, fullPath);
                         return true;
                     }
                 }
@@ -22196,6 +22217,11 @@ namespace AnimeStudio.CLI
                 }
                 else
                 {
+                    if (ExactOnlyGate.Enabled)
+                    {
+                        ExactOnlyGate.RecordExclusion(item, "noTypeTree: no dedicated reader and no serialized TypeTree");
+                        return false;
+                    }
                     var rawData = item.Asset.GetRawData();
                     var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
                     var dump = item.Asset.Dump();
@@ -22226,6 +22252,17 @@ namespace AnimeStudio.CLI
                 ObjectIndexJsonlWriter.Current?.WriteObject(item, payload, objectMetadata);
             }
 
+            if (!(item.Asset is MonoScript))
+            {
+                var undecodedStubs = ExactOnlyGate.Apply(payload);
+                if (undecodedStubs > 0
+                    && payload is IDictionary stubbedPayload
+                    && stubbedPayload.Contains("$animestudio")
+                    && stubbedPayload["$animestudio"] is IDictionary stubbedMetadata)
+                {
+                    stubbedMetadata["undecodedStubCount"] = undecodedStubs;
+                }
+            }
             var str = JsonConvert.SerializeObject(payload, Formatting.Indented, settings);
             File.WriteAllText(exportFullPath, str);
             return true;

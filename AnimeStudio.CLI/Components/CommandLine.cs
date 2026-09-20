@@ -45,6 +45,10 @@ namespace AnimeStudio.CLI
                 optionsBinder.ManagedReferenceDiagnosticTypes,
                 optionsBinder.ManagedReferenceDiagnosticsIncludeExactMatches,
                 optionsBinder.RendererIndexJsonl,
+                optionsBinder.ExportManifestJsonl,
+                optionsBinder.CabMapDir,
+                optionsBinder.SkipSourcesFile,
+                optionsBinder.AllowPartialJson,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Texture2DNativePayload,
                 optionsBinder.Input,
@@ -88,6 +92,10 @@ namespace AnimeStudio.CLI
         public Regex[] ManagedReferenceDiagnosticTypes { get; set; }
         public bool ManagedReferenceDiagnosticsIncludeExactMatches { get; set; }
         public FileInfo RendererIndexJsonl { get; set; }
+        public FileInfo ExportManifestJsonl { get; set; }
+        public DirectoryInfo CabMapDir { get; set; }
+        public FileInfo SkipSourcesFile { get; set; }
+        public bool AllowPartialJson { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public bool Texture2DNativePayload { get; set; }
         public FileInfo Input { get; set; }
@@ -120,6 +128,10 @@ namespace AnimeStudio.CLI
         public readonly Option<Regex[]> ManagedReferenceDiagnosticTypes;
         public readonly Option<bool> ManagedReferenceDiagnosticsIncludeExactMatches;
         public readonly Option<FileInfo> RendererIndexJsonl;
+        public readonly Option<FileInfo> ExportManifestJsonl;
+        public readonly Option<DirectoryInfo> CabMapDir;
+        public readonly Option<FileInfo> SkipSourcesFile;
+        public readonly Option<bool> AllowPartialJson;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Option<bool> Texture2DNativePayload;
         public readonly Argument<FileInfo> Input;
@@ -161,6 +173,10 @@ namespace AnimeStudio.CLI
                 "--managed_reference_diagnostics_include_exact_matches",
                 "Include exact decoded references matching --managed_reference_diagnostic_types; requires at least one type filter.");
             RendererIndexJsonl = new Option<FileInfo>("--renderer_index_jsonl", "Write exact serialized GameObject renderer Mesh/Material PPtr relationships as JSONL.");
+            AllowPartialJson = new Option<bool>("--allow_partial_json", "Diagnostics only: also write partially decoded object JSON and keep $inferred/$partial content.");
+            SkipSourcesFile = new Option<FileInfo>("--skip_sources_file", "JSON array of {Source, Offset} bundle slots to load for reference resolution but not export.");
+            CabMapDir = new Option<DirectoryInfo>("--cab_map_dir", "Folder that holds CABMap *.bin files. Defaults to ./Maps under the working directory.");
+            ExportManifestJsonl = new Option<FileInfo>("--export_manifest_jsonl", "Write one JSONL row per exported path with the serialized file, VFS chunk, and bundle offset that produced it.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Texture2DNativePayload = new Option<bool>(
                 "--texture2d_native_payload",
@@ -326,6 +342,10 @@ namespace AnimeStudio.CLI
             ManagedReferenceDiagnosticTypes = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticTypes),
             ManagedReferenceDiagnosticsIncludeExactMatches = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticsIncludeExactMatches),
             RendererIndexJsonl = bindingContext.ParseResult.GetValueForOption(RendererIndexJsonl),
+            ExportManifestJsonl = bindingContext.ParseResult.GetValueForOption(ExportManifestJsonl),
+            CabMapDir = bindingContext.ParseResult.GetValueForOption(CabMapDir),
+            SkipSourcesFile = bindingContext.ParseResult.GetValueForOption(SkipSourcesFile),
+            AllowPartialJson = bindingContext.ParseResult.GetValueForOption(AllowPartialJson),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Texture2DNativePayload = bindingContext.ParseResult.GetValueForOption(Texture2DNativePayload),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),

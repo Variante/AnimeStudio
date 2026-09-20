@@ -61,6 +61,20 @@ namespace AnimeStudio.CLI
                 Logger.FileLogging = Settings.Default.enableFileLogging;
                 AssetsHelper.Minimal = Settings.Default.minimalAssetMap;
                 AssetsHelper.SetUnityVersion(o.UnityVersion);
+                if (o.CabMapDir != null)
+                {
+                    AssetsHelper.MapName = Path.GetFullPath(o.CabMapDir.FullName);
+                }
+                ExactOnlyGate.Enabled = !o.AllowPartialJson;
+                if (o.SkipSourcesFile != null)
+                {
+                    var slots = JsonConvert.DeserializeObject<List<SkipSourceSlot>>(File.ReadAllText(o.SkipSourcesFile.FullName))
+                        ?? throw new InvalidDataException($"--skip_sources_file {o.SkipSourcesFile.FullName} is not a JSON array");
+                    Studio.ExportSkipSourceSlots = new HashSet<string>(
+                        slots.Select(slot => Studio.SourceSlotKey(slot.Source, slot.Offset)),
+                        StringComparer.Ordinal
+                    );
+                }
                 Studio.MonoBehaviourTypeTreePriorityMode = o.MonoBehaviourTypeTreePriority;
                 Exporter.ExportTexture2DNativePayloads = o.Texture2DNativePayload;
 
@@ -125,6 +139,7 @@ namespace AnimeStudio.CLI
                     o.ManagedReferenceDiagnosticsIncludeExactMatches
                 );
                 using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
+                using var exportManifest = ExportManifestJsonlWriter.Open(o.ExportManifestJsonl, o.Output);
 
                 if (o.Key != default)
                 {
@@ -174,6 +189,7 @@ namespace AnimeStudio.CLI
                 objectIndex?.Complete(indexComplete);
                 managedReferenceDiagnostics?.Complete(indexComplete);
                 rendererIndex?.Complete(indexComplete);
+                exportManifest?.Complete(indexComplete);
                 if (Properties.Settings.Default.scrapeMonos)
                 {
                     File.WriteAllLines("./Maps/PathStrings_Sorted.txt", PathStrings.Distinct().OrderBy(p => p));
@@ -490,7 +506,9 @@ namespace AnimeStudio.CLI
                         var exportScope = LoadTiming.Measure(LoadTiming.Id.ExportAssets);
                         var result = ExportAssets(target.Output.FullName, targetAssets, o.GroupAssetsType, target.ExportType);
                         exportScope.Dispose();
-                        var skippedCount = result.RequestedCount - result.ExportedCount;
+                        // Exact-only exclusions are recorded in the export manifest and
+                        // are not missing objects; anything else missing is.
+                        var skippedCount = result.RequestedCount - result.ExportedCount - result.ExcludedCount;
                         var incompleteIndex = ObjectIndexJsonlWriter.Current != null && skippedCount > 0;
                         if (result.ErrorCount > 0 || incompleteIndex)
                         {

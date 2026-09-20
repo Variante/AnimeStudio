@@ -18,7 +18,9 @@ namespace AnimeStudio
 {
     public static class AssetsHelper
     {
-        public const string MapName = "Maps";
+        // Folder holding CABMap *.bin files. Relative to the working directory
+        // unless a caller (the CLI --cab_map_dir option) sets an absolute path.
+        public static string MapName { get; set; } = "Maps";
 
         public static bool Minimal = true;
         public static CancellationTokenSource tokenSource = new CancellationTokenSource();
