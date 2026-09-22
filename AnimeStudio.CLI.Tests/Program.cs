@@ -33,6 +33,7 @@ static class Program
         TestExactCameraControlLockEnemyPayloads();
         TestExactAbilitySystemForEnemyPartPayload();
         TestExactEnemyPartsRootPayload();
+        TestExactOnlyGateMarkerDetection();
         TestManagedReferenceRegistryValidation();
         TestManagedReferenceRegistryTypeTreeGate();
         TestValidationFailureRegistryRecovery();
@@ -2591,6 +2592,42 @@ static class Program
             true,
             Exporter.TryValidateManagedReferenceRegistry(nullSentinel, out _),
             "null sentinel registry");
+    }
+
+    private static void TestExactOnlyGateMarkerDetection()
+    {
+        // The managed-reference decoders upgrade a result that ExactOnlyGate
+        // would stub. They must ask the gate itself: an earlier private marker
+        // list checked only $heuristic/$unparsed/$partial, so a node marked
+        // $inferred was reported exact, never upgraded, and then removed by the
+        // gate -- the export kept nothing for it.
+        foreach (var marker in new[] { "$inferred", "$partial", "$unparsed", "$heuristic", "$unknown" })
+        {
+            var marked = new OrderedDictionary { { marker, true }, { "offset", 0 } };
+            AssertEqual(
+                true,
+                ExactOnlyGate.ContainsNonExactMarker(marked),
+                $"gate detects {marker}");
+        }
+
+        var exact = new OrderedDictionary { { "$decoded", true }, { "value", 1 } };
+        AssertEqual(false, ExactOnlyGate.ContainsNonExactMarker(exact), "gate leaves exact nodes alone");
+
+        var falseMarker = new OrderedDictionary { { "$inferred", false } };
+        AssertEqual(
+            false,
+            ExactOnlyGate.ContainsNonExactMarker(falseMarker),
+            "a marker set to false is not a marker");
+
+        var nested = new OrderedDictionary
+        {
+            { "$decoded", true },
+            { "items", new List<OrderedDictionary> { exact, new OrderedDictionary { { "$inferred", true } } } },
+        };
+        AssertEqual(
+            true,
+            ExactOnlyGate.ContainsNonExactMarker(nested),
+            "gate detects a marker nested under a list");
     }
 
     private static void TestManagedReferenceRegistryTypeTreeGate()

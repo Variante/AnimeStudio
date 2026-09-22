@@ -89,6 +89,45 @@ namespace AnimeStudio.CLI
             }
         }
 
+        /// <summary>
+        /// Whether this node, or anything under it, is one the gate would stub.
+        ///
+        /// Callers that want to replace non-exact content before the gate runs
+        /// must ask with this, not with their own marker list: a private list
+        /// that drifts from <see cref="NonExactMarkers"/> silently stops
+        /// matching what the gate actually removes.
+        /// </summary>
+        public static bool ContainsNonExactMarker(object node)
+        {
+            switch (node)
+            {
+                case IDictionary dictionary:
+                    if (IsNonExact(dictionary))
+                    {
+                        return true;
+                    }
+                    foreach (var value in dictionary.Values.Cast<object>())
+                    {
+                        if (ContainsNonExactMarker(value))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                case IList list when !(node is string):
+                    foreach (var value in list.Cast<object>())
+                    {
+                        if (ContainsNonExactMarker(value))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
         private static bool IsNonExact(IDictionary dictionary)
         {
             foreach (var marker in NonExactMarkers)

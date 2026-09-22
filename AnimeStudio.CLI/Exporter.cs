@@ -1,5 +1,6 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
+using Newtonsoft.Json.Linq;
 using System.Buffers.Binary;
 using System;
 using System.Collections;
@@ -2227,7 +2228,76 @@ namespace AnimeStudio.CLI
             };
         }
 
+        /// <summary>
+        /// Decode one managed-reference payload, upgrading a non-exact result.
+        ///
+        /// The guarded readers below are hand-written and several of them recover
+        /// a layout only partly, marking the parts they guessed. A marked result is
+        /// then removed outright by <see cref="ExactOnlyGate"/>, so the export keeps
+        /// nothing at all for that reference. When the file ships a serialized
+        /// managed-reference TypeTree for the same type, that TypeTree is exact and
+        /// names every field, so it is strictly better evidence than a marked
+        /// result and replaces it here.
+        ///
+        /// The upgrade is additive on purpose. An already exact result is never
+        /// touched, which keeps every consumer of the existing decoders reading the
+        /// same keys, and the TypeTree route stays fail-closed: it needs a unique
+        /// RefTypes match and must consume the bounded payload exactly.
+        /// </summary>
         private static OrderedDictionary BuildManagedReferenceData(
+            ManagedReferenceHeader header,
+            byte[] rawData,
+            int offset,
+            int length,
+            IReadOnlyDictionary<long, ManagedReferenceHeader> recoveredByRid,
+            ref int remainingStringHintBudget,
+            ref int remainingRidLinkBudget,
+            SerializedFile serializedFile = null
+        )
+        {
+            var decoded = BuildManagedReferenceDataFromDecoders(
+                header,
+                rawData,
+                offset,
+                length,
+                recoveredByRid,
+                ref remainingStringHintBudget,
+                ref remainingRidLinkBudget,
+                serializedFile);
+
+            if (!ExactOnlyGate.ContainsNonExactMarker(decoded))
+            {
+                return decoded;
+            }
+
+            if (!TryDecodeSerializedManagedReferenceTypeTree(
+                    serializedFile,
+                    header,
+                    rawData,
+                    offset,
+                    length,
+                    out var exactData,
+                    out var upgradeFailure)
+                || ExactOnlyGate.ContainsNonExactMarker(exactData))
+            {
+                // Say why the upgrade did not happen. Without this the marked
+                // result is removed by the gate and the export shows an empty
+                // stub with no indication of what was tried.
+                if (decoded != null)
+                {
+                    decoded["exactTypeTreeUpgradeFailure"] = string.IsNullOrEmpty(upgradeFailure)
+                        ? "no unique serialized managed-reference TypeTree for this type"
+                        : upgradeFailure;
+                }
+                return decoded;
+            }
+
+            exactData["supersededNonExactDecode"] =
+                "an exact serialized managed-reference TypeTree replaced a marked decoder result";
+            return exactData;
+        }
+
+        private static OrderedDictionary BuildManagedReferenceDataFromDecoders(
             ManagedReferenceHeader header,
             byte[] rawData,
             int offset,
@@ -22242,6 +22312,43 @@ namespace AnimeStudio.CLI
                             ["pathId"] = item.m_PathID,
                         };
                 }
+            }
+            else
+            {
+                // A typed asset class (Material, TextAsset,
+                // AnimatorOverrideController) serializes straight through
+                // Newtonsoft, which left it with no provenance at all: no
+                // source CAB, no source root, not even a PathID outside the
+                // filename. That is not a tidiness gap. A cross-file PPtr is
+                // resolvable only from the *referrer's* container, because
+                // m_FileID indexes that container's dependency list, so a
+                // Material without one cannot have its texture references
+                // resolved or checked -- and 97.7% of the export's 243,124
+                // material-to-texture references are cross-file.
+                //
+                // The payload is converted through JObject rather than
+                // rebuilt, so the asset's own serialized shape and member
+                // order are whatever Newtonsoft would already have written;
+                // only the metadata key is added, and it is added first to
+                // match every other type that carries one.
+                var rawData = item.Asset.GetRawData();
+                var rawSidecar = ExportJsonRawSidecarIfRequested(exportFullPath, rawData);
+                var wrapped = new OrderedDictionary
+                {
+                    { "$animestudio", BuildObjectExportMetadata(
+                        item,
+                        rawData,
+                        exportTypeTree,
+                        typeTreeSource,
+                        rawSidecar,
+                        null
+                    ) },
+                };
+                foreach (var property in JObject.FromObject(item.Asset, JsonSerializer.Create(settings)).Properties())
+                {
+                    wrapped[property.Name] = property.Value;
+                }
+                payload = wrapped;
             }
 
             if (!(item.Asset is MonoScript)
