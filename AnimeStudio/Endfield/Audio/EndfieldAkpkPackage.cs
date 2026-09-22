@@ -2808,7 +2808,7 @@ namespace AnimeStudio.Endfield
                         objectId,
                         structure);
                 }
-                if (objectType is 2 or 5 or 6 or 7 or 8 or 11 or 14 or 18 or 22)
+                if (objectType is 2 or 5 or 6 or 7 or 8 or 9 or 10 or 11 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or 21 or 22)
                 {
                     var bodySpan = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
                     // Both switches are exhaustive on purpose: widening the guard above
@@ -2820,10 +2820,20 @@ namespace AnimeStudio.Endfield
                         5 => structure.Type5Body,
                         6 => structure.Type6Body,
                         7 => structure.Type7Body,
+                        9 => structure.Type9Body,
+                        10 => structure.Type0ABody,
+                        12 => structure.Type0CBody,
+                        13 => structure.Type0DBody,
                         8 => structure.Type08Body,
-                        11 => structure.Type11Body,
+                        11 => structure.Type0BBody,
                         18 => structure.Type12Body,
                         14 => structure.Type14Body,
+                        15 => structure.Type0FBody,
+                        16 => structure.Type10Body,
+                        17 => structure.Type11Body,
+                        19 => structure.Type13Body,
+                        20 => structure.Type14ModBody,
+                        21 => structure.Type15Body,
                         22 => structure.Type22Body,
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body census is not defined for type {objectType}"),
@@ -2834,11 +2844,21 @@ namespace AnimeStudio.Endfield
                         5 => FrameType5Body(bodySpan, structure.Version),
                         6 => FrameType6Body(bodySpan, structure.Version),
                         7 => FrameType7Body(bodySpan, structure.Version),
+                        9 => FrameType9Body(bodySpan, structure.Version),
+                        10 => FrameType0ABody(bodySpan, structure.Version),
+                        12 => FrameType0CBody(bodySpan, structure.Version),
+                        13 => FrameType0DBody(bodySpan, structure.Version),
                         8 => FrameSharedBody(bodySpan, structure.Version),
-                        11 => FrameType11Body(bodySpan, structure.Version, structure.Type11EntryHeaders),
+                        11 => FrameType0BBody(bodySpan, structure.Version),
                         18 => FrameSharedBody(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
-                        22 => FrameType22Body(bodySpan, structure.Version),
+                        15 => FrameType0FBody(bodySpan, structure.Version),
+                        16 => FrameFxBody(bodySpan, structure.Version, withDeviceSlots: false),
+                        17 => FrameFxBody(bodySpan, structure.Version, withDeviceSlots: false),
+                        19 => FrameModulatorBody(bodySpan, structure.Version),
+                        20 => FrameModulatorBody(bodySpan, structure.Version),
+                        21 => FrameFxBody(bodySpan, structure.Version, withDeviceSlots: true),
+                        22 => FrameModulatorBody(bodySpan, structure.Version),
                         _ => throw new InvalidDataException(
                             $"AKPK HIRC body framer is not defined for type {objectType}"),
                     };
@@ -2883,7 +2903,7 @@ namespace AnimeStudio.Endfield
                     {
                         var declared = BinaryPrimitives.ReadUInt32LittleEndian(
                             bodySpan.Slice(1, 4));
-                        if (declared > 0 && declared <= Type11MaximumRecords
+                        if (declared > 0 && declared <= SourceRecordMaximumCount
                             && checked(5 + (int)declared * SourceRecordBytes) <= bodySpan.Length)
                         {
                             var owned = new List<uint>();
@@ -2918,32 +2938,6 @@ namespace AnimeStudio.Endfield
                     CensusType08Tail(
                         structure.Type12Tail, structure.Type12TailWords, body12, requireSignature: false);
                 }
-                if (objectType is 19 or 20 or 21)
-                {
-                    var small = structure.SmallTypes;
-                    var smallBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                    small.Bodies = checked(small.Bodies + 1);
-                    small.BodyBytes = checked(small.BodyBytes + (uint)smallBody.Length);
-                    HircBump(small.BodiesByType, $"type{objectType:X2}", 1);
-                    RecordSmallType(small, smallBody, objectType);
-                }
-                if (objectType == 9)
-                {
-                    var census09 = structure.Type09;
-                    var body09 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                    census09.Bodies = checked(census09.Bodies + 1);
-                    census09.BodyBytes = checked(census09.BodyBytes + (uint)body09.Length);
-                    RecordType09(census09, body09, structure.Version);
-                }
-                if (objectType is 16 or 17)
-                {
-                    var census17 = structure.Type17;
-                    var body17 = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                    census17.Bodies = checked(census17.Bodies + 1);
-                    census17.BodyBytes = checked(census17.BodyBytes + (uint)body17.Length);
-                    HircBump(census17.BodiesByType, $"type{objectType:X2}", 1);
-                    RecordType17(census17, body17, objectType);
-                }
                 // Numeric type 0x08's leading word: null, or one same-bank object.
                 if (objectType == 8)
                 {
@@ -2970,67 +2964,6 @@ namespace AnimeStudio.Endfield
                         else
                         {
                             head08.Unresolved = checked(head08.Unresolved + 1);
-                        }
-                    }
-                }
-                // Numeric type 0x0B opens with one byte, a 32-bit record count, and that
-                // many fourteen-byte records: plug-in id, stream-type byte, source id,
-                // then five further bytes. Only the counted run is read here; what
-                // follows it is not established and is deliberately not touched.
-                if (objectType == 11)
-                {
-                    CensusType11Elements(
-                        structure.Type11Elements,
-                        payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4)));
-                    var sources = structure.Type11Sources;
-                    sources.Bodies = checked(sources.Bodies + 1);
-                    var sourceBody = payload.AsSpan(checked(cursor + 9), checked((int)objectSize - 4));
-                    if (sourceBody.Length >= 4)
-                    {
-                        var terminator = BinaryPrimitives.ReadUInt32LittleEndian(
-                            sourceBody.Slice(sourceBody.Length - 4, 4));
-                        HircBump(sources.TerminatorCounts, $"end_{terminator:X8}", 1);
-                        if (terminator == Type11TerminatorValue)
-                        {
-                            sources.EndsWithTerminator = checked(sources.EndsWithTerminator + 1);
-                        }
-                    }
-                    if (sourceBody.Length < 5)
-                    {
-                        sources.TooShort = checked(sources.TooShort + 1);
-                    }
-                    else
-                    {
-                        var recordCount = BinaryPrimitives.ReadUInt32LittleEndian(sourceBody.Slice(1, 4));
-                        HircBump(sources.RecordCountCounts, $"records_{recordCount}", 1);
-                        if (recordCount > Type11MaximumRecords
-                            || 5 + recordCount * Type11SourceRecordBytes > (uint)sourceBody.Length)
-                        {
-                            sources.RecordsOutOfRange = checked(sources.RecordsOutOfRange + 1);
-                        }
-                        else
-                        {
-                            if (recordCount > 0)
-                            {
-                                sources.BodiesWithRecords = checked(sources.BodiesWithRecords + 1);
-                            }
-                            var declaredIds = new HashSet<uint>();
-                            for (var record = 0U; record < recordCount; record++)
-                            {
-                                var at = checked(5 + (int)record * Type11SourceRecordBytes);
-                                var plugin = BinaryPrimitives.ReadUInt32LittleEndian(
-                                    sourceBody.Slice(at, 4));
-                                sources.Records = checked(sources.Records + 1);
-                                HircBump(sources.PluginIdCounts, $"plugin_{plugin:X8}", 1);
-                                HircBump(sources.StreamTypeCounts, $"streamType_{sourceBody[at + 4]:X2}", 1);
-                                declaredIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
-                                    sourceBody.Slice(at + 5, 4)));
-                            }
-                            CensusType11TailEntries(
-                                sources,
-                                sourceBody,
-                                checked(5 + (int)recordCount * Type11SourceRecordBytes),
-                                declaredIds);
                         }
                     }
                 }
@@ -4003,9 +3936,12 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors);
         }
 
-        // The nine anonymous groups are shared by every HIRC type whose body opens with
-        // this node frame. Extents are proven by whole-corpus exact closure; group
-        // letters carry no field ownership or meaning.
+        // The nine node groups are shared by every HIRC type whose body opens with
+        // this node frame. Extents are proven by whole-corpus exact closure, and the
+        // field names come from the Wwise 2023.1.17 SDK's own deserializer
+        // (CAkParameterNodeBase::SetNodeBaseParams and the readers it calls, read
+        // from the SDK's symbolized static library). The group letters are kept as
+        // the report keys so earlier reports stay diffable.
         private static bool FrameHircNodeGroups(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -4013,8 +3949,10 @@ namespace AnimeStudio.Endfield
             Dictionary<string, uint> selectors,
             out EndfieldHircBodyFrameResult failure)
         {
-            // Group A: one flag byte, one count byte, an optional shared mask byte and
-            // count fixed-width slots.
+            // Group A = NodeInitialFxParams (CAkParameterNode::SetInitialFxParams):
+            // u8 bIsOverrideParentFX, u8 uNumFx, then only when uNumFx > 0 one
+            // u8 bitsFXBypass, then uNumFx x { u8 uFXIndex, u32 fxID, u8 flags } with
+            // flags bit0 bypass, bit1 bIsShareSet, bit2 bIsRendered.
             if (!HircReadByte(body, ref cursor, out var groupAFlag, out failure, "groupAFlag"))
             {
                 return false;
@@ -4037,9 +3975,10 @@ namespace AnimeStudio.Endfield
             }
             HircBump(groups, "groupAEntries", groupACount);
 
-            // Group B: one flag byte and one count byte. No body in any framed HIRC type
-            // carries a nonempty vector, so its element width is unresolved and must fail
-            // closed rather than assume a width from an empty sample.
+            // Group B = NodeInitialMetadataParams (SetInitialMetadataParams):
+            // u8 bOverrideParentMetadata, u8 uNumFx, then uNumFx x { u8 uFXIndex,
+            // u32 fxID, u8 bIsShareSet }. No body in the current corpus carries a
+            // nonempty vector; the six-byte element is the SDK reader's, not a fit.
             if (!HircReadByte(body, ref cursor, out var groupBFlag, out failure, "groupBFlag"))
             {
                 return false;
@@ -4049,19 +3988,23 @@ namespace AnimeStudio.Endfield
             {
                 return false;
             }
-            if (groupBCount > 0)
+            if (!HircTake(body, ref cursor, groupBCount * 6, out failure, "groupBEntries"))
             {
-                failure = HircFrameOutcome(
-                    "unsupported", "unsupported_groupB_nonempty", cursor - 1, 0, groupBCount);
                 return false;
             }
+            HircBump(groups, "groupBEntries", groupBCount);
 
+            // u32 OverrideBusId (0 = none), u32 DirectParentID (0 = none), u8 byBitVector
+            // with bit0 bPriorityOverrideParent, bit1 bPriorityApplyDistFactor and the
+            // MIDI override bits above them. Kept opaque here: the reference graph is
+            // where the two ids are joined.
             if (!HircTake(body, ref cursor, 9, out failure, "anonymousScalars"))
             {
                 return false;
             }
 
-            // Group C: count, count one-byte keys, count four-byte values.
+            // Group C = NodeInitialParams PropBundle (CAkParameterNode::SetInitialParams):
+            // u8 cProps, cProps x u8 AkPropID, then cProps x u32 value, as two runs.
             if (!HircReadByte(body, ref cursor, out var groupCCount, out failure, "groupCCount"))
             {
                 return false;
@@ -4072,7 +4015,8 @@ namespace AnimeStudio.Endfield
             }
             HircBump(groups, "groupCEntries", groupCCount);
 
-            // Group D: count, count one-byte keys, count eight-byte values.
+            // Group D = the ranged PropBundle: u8 cProps, cProps x u8 AkPropID, then
+            // cProps x { f32 min, f32 max }.
             if (!HircReadByte(body, ref cursor, out var groupDCount, out failure, "groupDCount"))
             {
                 return false;
@@ -4091,6 +4035,11 @@ namespace AnimeStudio.Endfield
             {
                 return false;
             }
+            // Group G = AdvSettingsParams (CAkParameterNode::SetAdvSettingsParams):
+            // u8 byBitVector (bit0 bKillNewest, bit1 bUseVirtualBehavior, bit2
+            // bIgnoreParentMaxNumInst, bit3 bIsGlobalLimit, bit4 bVVoicesOptOverrideParent),
+            // u8 eVirtualQueueBehavior, u16 u16MaxNumInstance, u8 eBelowThresholdBehavior,
+            // u8 byBitVector2 (HDR envelope / loudness bits).
             if (!HircTake(body, ref cursor, 6, out failure, "groupG"))
             {
                 return false;
@@ -4291,8 +4240,10 @@ namespace AnimeStudio.Endfield
         internal const int Type14ElementBytes = 12;
         // The source record numeric types 0x02 and 0x0B share.
         internal const int SourceRecordBytes = 14;
+        // Bound on the counted source run a CAkMusicTrack body declares before
+        // its ids are offered to the walk; the lane framer has no such cap.
+        internal const uint SourceRecordMaximumCount = 64;
         internal const int SourceRecordIdOffset = 5;
-        internal const int Type11SourceRecordBytes = SourceRecordBytes;
         // Numeric type 0x0B's entry area: a 32-bit entry count, then that many entries.
         // Each entry opens with 48 header bytes whose word at 44 counts the elements
         // that follow.
@@ -4343,263 +4294,6 @@ namespace AnimeStudio.Endfield
         {
             (2, 22), (5, 8), (6, 8), (7, 8), (9, 8),
         };
-        // Every entry after the first begins FOUR BYTES BEFORE the previous entry's
-        // elements finish. Located by content, not by closure.
-        //
-        // Two checks identify a first entry header and both hold in 100% of them: its
-        // word at +4 is a source id the same body declares, and its word at +32 is a
-        // plausible float. At the place this reader used to put the second header,
-        // NEITHER holds -- 0 of 216 two-entry bodies. Scanning every offset from -32
-        // to +32 from the end of entry 1, exactly one passes either check: **-4**, in
-        // 168 of 216. No other offset passes even once.
-        //
-        // Scored over the whole corpus the step-back closes 4,115 bodies against 3,937
-        // without it, and every rival step -- 2, 6, 8, 12, 16 -- lands at 3,861 to
-        // 3,863, BELOW the baseline.
-        //
-        // Which side owns the four bytes is NOT determined. The element walk
-        // over-consumes by four in the last element of a non-final entry, or the entry
-        // header is four bytes longer than 48 and overlaps what the element walk read.
-        // The reader compensates where the evidence is, and says so rather than
-        // inventing a field.
-        // Twelve bytes per element that are ALWAYS zero, and were never checked.
-        //
-        // The element head is 5 bytes and only byte 0 was used, the run count. Bytes 1,
-        // 2 and 3 are zero in all 3,861 first elements that frame. The run header is 11
-        // bytes and only byte 7 was used, the record count; nine of the other ten are
-        // zero in all 1,479 run headers that frame, leaving only byte 3 varying.
-        //
-        // Enforcing them costs nothing -- 4,115 bodies frame either way -- so this is
-        // free strictness: twelve bytes an element that the reader used to accept
-        // whatever was in them. *A field that is always zero is still a field, and a
-        // parser that does not check it will happily walk through garbage.*
-        internal static readonly int[] Type11ElementHeadZeroOffsets = { 1, 2, 3 };
-        internal static readonly int[] Type11RunHeaderZeroOffsets =
-            { 0, 1, 2, 4, 5, 6, 8, 9, 10 };
-        internal const int Type11EntryStepBackBytes = 4;
-        internal const int Type11EntryGainOffset = 32;
-        internal const int Type11EntryGainControlOffset = 28;
-        internal const int Type11EntryGainSecondControlOffset = 36;
-        internal const int Type11EntryPairFirstOffset = 12;
-        internal const int Type11EntryPairSecondOffset = 20;
-        internal const int Type11EntryHeaderBytes = 48;
-        // The entry header's word at 4 is the source id, and it joins to the body's
-        // own 14-byte source records at record offset 5 -- an UNALIGNED offset, which
-        // is why testing the record's aligned words found no match at all.
-        internal const int Type11SourceRecordIdOffset = 5;
-        internal const int Type11EntryElementCountOffset = 44;
-        // An element ends with a trailer whose FIRST byte selects its own length: zero
-        // means nineteen bytes, one means twenty-four. What is left is a 17-byte head
-        // and a run of twelve-byte records -- the same twelve-byte record numeric types
-        // 0x08, 0x12 and 0x0B's curves already carry.
-        internal const int Type11ElementShortTrailerBytes = 19;
-        internal const int Type11ElementLongTrailerBytes = 24;
-        internal const int Type11ElementHeadBytes = 17;
-        internal const int Type11ElementRecordBytes = 12;
-        // The element's own frame: five head bytes whose first is the run count, then
-        // that many runs, then a fixed twelve-byte block. A run is a twelve-byte
-        // header whose byte at +7 counts the twelve-byte records that follow it.
-        internal const int Type11ElementHeadBytes5 = 5;
-        // The run splits 11 + 12n + 1, not 12 + 12n. The total is the same either
-        // way, which is why the body frame closed the same 3,715 bodies under the
-        // wrong split -- and why the split had to be settled by what the records
-        // contain rather than by whether the walk closed. Under 11 every one of the
-        // 4,086 records carries an interpolation code of 0 to 9; under 12, or any
-        // other width, none does.
-        internal const int Type11ElementRunHeaderBytes = 11;
-        internal const int Type11ElementRunTrailingBytes = 1;
-        internal const int Type11ElementRunCountOffset = 7;
-        // The curve record: two floats and a 32-bit interpolation code, the same
-        // record numeric types 0x08 and 0x12 carry in their tail units.
-        internal const int Type11CurveCodeOffset = 8;
-        internal const uint Type11CurveMaximumCode = 9;
-        // Header widths the code distribution is scored against, so the split is
-        // discriminated rather than asserted.
-        internal static readonly int[] Type11RunHeaderRivals = { 10, 11, 12, 13 };
-        internal const int Type11ElementTrailingBlockBytes = 12;
-        internal const int Type11ElementRunCountField = 0;
-        internal const byte Type11ElementMaximumRuns = 16;
-        internal const byte Type11ElementMaximumRecords = 64;
-        // Rival frames, scored the same way. Each is (head, runHeader, countOffset,
-        // trailingBlock); the first is the chosen one.
-        internal static readonly (int Head, int RunHeader, int CountOffset, int Trailing)[]
-            Type11ElementFrameRivals =
-        {
-            (5, 11, 7, 12),
-            (5, 11, 7, 0),
-            (17, 11, 7, 0),
-            (5, 11, 11, 12),
-            (5, 11, 0, 12),
-            (5, 11, 3, 12),
-            (5, 10, 7, 12),
-            (5, 12, 7, 12),
-            (5, 11, 7, 11),
-            (5, 11, 7, 13),
-            (6, 11, 6, 12),
-            (4, 11, 8, 12),
-        };
-        // Anchors the chosen trailer lengths are scored against. A trailer pair is only
-        // established if the element bodies it leaves are congruent to the head length
-        // modulo the record size far more often than any rival pair manages.
-        internal static readonly (int Short, int Long)[] Type11TrailerRivals =
-        {
-            (17, 22), (18, 23), (19, 24), (20, 25), (21, 26), (19, 25), (18, 24),
-        };
-        // A bound so a corrupt count cannot make the reader walk the whole body.
-        internal const uint Type11MaximumRecords = 64;
-        // The trailing 32-bit word every numeric type 0x0B body carries.
-        internal const uint Type11TerminatorValue = 100;
-        // Inside a tail entry: a 32-bit selector at offset 56, a record count at 60
-        // when that selector is nonzero, and twelve-byte records from offset 64.
-        internal const int Type11EntrySelectorOffset = 56;
-        internal const int Type11EntryRecordCountOffset = 60;
-        internal const int Type11EntryRecordOffset = 64;
-        internal const int Type11EntryRecordBytes = 12;
-        internal const uint Type11EntryMaximumRecords = 64;
-
-        /// <summary>
-        /// Census the twelve-byte records inside a numeric type 0x0B tail entry.
-        /// </summary>
-        /// <remarks>
-        /// The entry is not framed and this does not frame it. What it does is read the
-        /// one structure inside it that is recognisable: the same twelve-byte record --
-        /// two floats and an interpolation code -- that numeric types 0x08 and 0x12
-        /// carry in their tails.
-        ///
-        /// The discriminator is the code. Read at a wrong offset it would be arbitrary
-        /// 32-bit noise; here it must stay in a small range, and that is what separates
-        /// this from an arithmetic coincidence. Entries whose count is unusable or
-        /// whose records would run past the end are counted under their own outcome
-        /// rather than skipped.
-        /// </remarks>
-        private static void CensusType11EntryRecords(
-            EndfieldHircType11SourceCensus census,
-            ReadOnlySpan<byte> entry)
-        {
-            census.EntriesInspected = checked(census.EntriesInspected + 1);
-            if (entry.Length < Type11EntryRecordOffset)
-            {
-                census.EntriesWhoseCountIsNotUsable = checked(census.EntriesWhoseCountIsNotUsable + 1);
-                return;
-            }
-            var selector = BinaryPrimitives.ReadUInt32LittleEndian(
-                entry.Slice(Type11EntrySelectorOffset, 4));
-            if (selector == 0)
-            {
-                census.EntriesWithNoRecords = checked(census.EntriesWithNoRecords + 1);
-                return;
-            }
-            var records = BinaryPrimitives.ReadUInt32LittleEndian(
-                entry.Slice(Type11EntryRecordCountOffset, 4));
-            if (records == 0 || records > Type11EntryMaximumRecords)
-            {
-                census.EntriesWhoseCountIsNotUsable = checked(census.EntriesWhoseCountIsNotUsable + 1);
-                return;
-            }
-            var span = checked((int)records * Type11EntryRecordBytes);
-            if (Type11EntryRecordOffset + span > entry.Length)
-            {
-                census.EntriesWhoseRecordsRunPastTheEnd =
-                    checked(census.EntriesWhoseRecordsRunPastTheEnd + 1);
-                return;
-            }
-            census.EntriesWhoseRecordsFit = checked(census.EntriesWhoseRecordsFit + 1);
-            census.CurveRecords = checked(census.CurveRecords + records);
-            for (var i = 0; i < records; i++)
-            {
-                var code = BinaryPrimitives.ReadUInt32LittleEndian(
-                    entry.Slice(Type11EntryRecordOffset + i * Type11EntryRecordBytes + 8, 4));
-                HircBump(census.InterpolationCounts, $"interp_{code}", 1);
-            }
-        }
-        // Between the source run and that terminator sits a 32-bit entry count. The
-        // entries are variable-width and their interiors are not read; only the second
-        // word of each is, because it echoes one of the body's own declared source ids.
-        internal const uint Type11MaximumTailEntries = 64;
-        internal const int Type11TailEntrySourceOffset = 4;
-
-        /// <summary>
-        /// Census the counted run of tail entries that follows numeric type 0x0B's
-        /// source records.
-        /// </summary>
-        /// <remarks>
-        /// The entries are variable-width, so the run cannot be walked. What can be
-        /// checked is that the tail carries exactly as many echoes of the body's own
-        /// declared source ids as the count declares, on four-byte boundaries. Source
-        /// ids are sparse 32-bit values, so an echo is not something arbitrary bytes
-        /// produce: across the corpus no offset other than +4 into the first entry
-        /// echoes at all. Bodies declaring zero entries must carry zero echoes, which
-        /// is what stops the check from being satisfied by a body it cannot read.
-        /// </remarks>
-        private static void CensusType11TailEntries(
-            EndfieldHircType11SourceCensus sources,
-            ReadOnlySpan<byte> body,
-            int runEnd,
-            HashSet<uint> declaredIds)
-        {
-            var terminatorAt = body.Length - 4;
-            if (runEnd < 0 || terminatorAt < runEnd || checked(runEnd + 4) > terminatorAt)
-            {
-                sources.NoTailAfterTheRun = checked(sources.NoTailAfterTheRun + 1);
-                return;
-            }
-            var declared = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(runEnd, 4));
-            if (declared > Type11MaximumTailEntries)
-            {
-                sources.TailCountOutOfRange = checked(sources.TailCountOutOfRange + 1);
-                return;
-            }
-            sources.BodiesWithATail = checked(sources.BodiesWithATail + 1);
-            HircBump(sources.TailEntryCountCounts, $"tailEntries_{declared}", 1);
-            sources.TailEntriesDeclared = checked(sources.TailEntriesDeclared + declared);
-
-            var first = checked(runEnd + 4);
-            var echoes = 0U;
-            for (var at = first; at + 4 <= terminatorAt; at += 4)
-            {
-                if (declaredIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4))))
-                {
-                    echoes = checked(echoes + 1);
-                }
-            }
-            sources.TailEntriesEchoed = checked(sources.TailEntriesEchoed + Math.Min(echoes, declared));
-            if (echoes == declared)
-            {
-                sources.TailEchoesMatchTheCount = checked(sources.TailEchoesMatchTheCount + 1);
-            }
-            else if (echoes > declared)
-            {
-                sources.TailEchoesExceedTheCount = checked(sources.TailEchoesExceedTheCount + 1);
-            }
-            if (declared == 1)
-            {
-                // With one entry the entry's extent is unambiguous: everything between
-                // the count and the terminator. Multi-entry bodies are not inspected,
-                // because the entries are variable-width and where the first one ends
-                // is exactly what is not known.
-                CensusType11EntryRecords(sources, body.Slice(first, terminatorAt - first));
-            }
-            if (declared == 0)
-            {
-                return;
-            }
-            var sourceAt = checked(first + Type11TailEntrySourceOffset);
-            if (checked(sourceAt + 4) > terminatorAt)
-            {
-                sources.FirstTailEntryTooShort = checked(sources.FirstTailEntryTooShort + 1);
-                return;
-            }
-            HircBump(
-                sources.FirstTailEntryLeadingWordCounts,
-                $"lead_{BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(first, 4)):X8}",
-                1);
-            if (declaredIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(sourceAt, 4))))
-            {
-                sources.FirstTailEntryNamesADeclaredSource =
-                    checked(sources.FirstTailEntryNamesADeclaredSource + 1);
-            }
-        }
-
         internal static EndfieldHircBodyFrameResult FrameType7Body(
             ReadOnlySpan<byte> body,
             uint? bankVersion)
@@ -4638,6 +4332,803 @@ namespace AnimeStudio.Endfield
                 return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
             }
             return HircFrameExact(cursor, body.Length, groups, selectors, references);
+        }
+
+
+        // Numeric HIRC type 0x09 is CAkLayerCntr. Read from the SDK deserializer
+        // (CAkLayerCntr::SetInitialValues, then CAkLayer::SetInitialValues per layer):
+        // the shared node frame, u32 ulNumChilds x u32 childID, u32 ulNumLayers x
+        // { u32 ulLayerID, InitialRTPC, u32 rtpcID, u8 rtpcType, u32 ulNumAssoc x
+        // { u32 ulAssociatedChildID, u32 ulCurveSize x { f32 from, f32 to, u32
+        // interpolation } } }, then u8 bIsContinuousValidation. A layer's InitialRTPC
+        // is the same structure as group I -- it is the same engine template -- so it
+        // is framed by the group I reader and counted under the group I keys. The
+        // child vector is the same parent-to-child relation numeric type 0x07 carries,
+        // so it joins the reference graph; the per-layer associated child ids repeat
+        // those children and stay out of it.
+        internal static EndfieldHircBodyFrameResult FrameType9Body(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var childCount, out failure, "childCount"))
+            {
+                return failure;
+            }
+            if (childCount > (uint)((body.Length - cursor) / 4))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_childEntries", cursor - 4, (body.Length - cursor) / 4, childCount);
+            }
+            var references = new List<uint>(checked((int)childCount));
+            for (var i = 0U; i < childCount; i++)
+            {
+                references.Add(BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4)));
+                cursor = checked(cursor + 4);
+            }
+            HircBump(groups, "childEntries", childCount);
+
+            if (!HircReadUInt32(body, ref cursor, out var layerCount, out failure, "layerCount"))
+            {
+                return failure;
+            }
+            // A layer is at least its id, an empty curve count, the RTPC id and type,
+            // and an empty association count.
+            if (layerCount > (uint)((body.Length - cursor) / 15))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_layerEntries", cursor - 4, (body.Length - cursor) / 15, layerCount);
+            }
+            HircBump(groups, "layerEntries", layerCount);
+            HircBump(groups, "layerAssocEntries", 0);
+            HircBump(groups, "layerAssocPoints", 0);
+            for (var layer = 0U; layer < layerCount; layer++)
+            {
+                if (!HircTake(body, ref cursor, 4, out failure, "layerId"))
+                {
+                    return failure;
+                }
+                if (!FrameHircGroupI(body, ref cursor, groups, selectors, out failure))
+                {
+                    return failure;
+                }
+                if (!HircTake(body, ref cursor, 5, out failure, "layerRtpc"))
+                {
+                    return failure;
+                }
+                if (!HircReadUInt32(body, ref cursor, out var assocCount, out failure, "layerAssocCount"))
+                {
+                    return failure;
+                }
+                if (assocCount > (uint)((body.Length - cursor) / 8))
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_layerAssocEntries", cursor - 4, (body.Length - cursor) / 8, assocCount);
+                }
+                HircBump(groups, "layerAssocEntries", assocCount);
+                for (var assoc = 0U; assoc < assocCount; assoc++)
+                {
+                    if (!HircTake(body, ref cursor, 4, out failure, "layerAssocChild"))
+                    {
+                        return failure;
+                    }
+                    if (!HircReadUInt32(body, ref cursor, out var pointCount, out failure, "layerAssocPointCount"))
+                    {
+                        return failure;
+                    }
+                    if (pointCount > (uint)((body.Length - cursor) / 12))
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_layerAssocPoints", cursor - 4, (body.Length - cursor) / 12, pointCount);
+                    }
+                    cursor = checked(cursor + (int)pointCount * 12);
+                    HircBump(groups, "layerAssocPoints", pointCount);
+                }
+            }
+            if (!HircReadByte(body, ref cursor, out var tail, out failure, "type09Tail"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"type09Tail_{tail:X2}", 1);
+
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors, references);
+        }
+
+
+        // Music node parameters, read from the SDK's AkMusicEngine library
+        // (CAkMusicNode::SetMusicNodeParams): u8 uFlags, then the shared node frame,
+        // u32 ulNumChilds x u32 childID, AkMeterInfo (f64 fGridPeriod, f64 fGridOffset,
+        // f32 fTempo, u8 uTimeSigNumBeatsBar, u8 uTimeSigBeatValue, u8 bMeterInfoFlag),
+        // and u32 numStingers x { u32 TriggerID, u32 SegmentID, u32 SyncPlayAt, u32
+        // uCueFilterHash, s32 DontRepeatTime, u32 numSegmentLookAhead }. This is why
+        // the music types never opened with the node frame at offset 0: it sits one
+        // flag byte in.
+        private const int MusicMeterInfoBytes = 23;
+        private const int MusicStingerBytes = 24;
+        private const int MusicTransitionSourceRuleBytes = 21;
+        private const int MusicTransitionDestinationRuleBytes = 26;
+        private const int MusicTransitionObjectBytes = 30;
+        private const int MusicTransitionRuleMinimumBytes = 4 + 4
+            + MusicTransitionSourceRuleBytes + MusicTransitionDestinationRuleBytes + 1;
+
+        private static bool FrameMusicNodeParams(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            if (!HircReadByte(body, ref cursor, out var flags, out failure, "musicFlags"))
+            {
+                return false;
+            }
+            HircBump(selectors, $"musicFlags_{flags:X2}", 1);
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out failure))
+            {
+                return false;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var childCount, out failure, "childCount"))
+            {
+                return false;
+            }
+            if (childCount > (uint)((body.Length - cursor) / 4))
+            {
+                failure = HircFrameOutcome(
+                    "failed", "range_childEntries", cursor - 4, (body.Length - cursor) / 4, childCount);
+                return false;
+            }
+            cursor = checked(cursor + (int)childCount * 4);
+            HircBump(groups, "childEntries", childCount);
+            if (!HircTake(body, ref cursor, MusicMeterInfoBytes, out failure, "meterInfo"))
+            {
+                return false;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var stingerCount, out failure, "stingerCount"))
+            {
+                return false;
+            }
+            if (stingerCount > (uint)((body.Length - cursor) / MusicStingerBytes))
+            {
+                failure = HircFrameOutcome(
+                    "failed", "range_stingerEntries", cursor - 4,
+                    (body.Length - cursor) / MusicStingerBytes, stingerCount);
+                return false;
+            }
+            cursor = checked(cursor + (int)stingerCount * MusicStingerBytes);
+            HircBump(groups, "stingerEntries", stingerCount);
+            return true;
+        }
+
+        // Transition-aware music nodes (CAkMusicTransAware::SetMusicTransNodeParams):
+        // the music node parameters, then u32 numRules x { u32 numSrc x u32 srcID, u32
+        // numDst x u32 dstID, a 21-byte source rule (s32 transitionTime, u32 eFadeCurve,
+        // s32 iFadeOffset, u32 eSyncType, u32 uCueFilterHash, u8 bPlayPostExit), a
+        // 26-byte destination rule (s32 transitionTime, u32 eFadeCurve, s32 iFadeOffset,
+        // u32 uCueFilterHash, u32 uJumpToID, u16 eJumpToType, u16 eEntryType, u8
+        // bPlayPreEntry, u8 bDestMatchSourceCueName), u8 bAllocTransObjectFlag and,
+        // when that flag is nonzero, a 30-byte transition object (u32 segmentID, two
+        // fades of s32 transitionTime, u32 eFadeCurve, s32 iFadeOffset, u8 bPlayPreEntry,
+        // u8 bPlayPostExit) }.
+        private static bool FrameMusicTransNodeParams(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            if (!FrameMusicNodeParams(body, ref cursor, groups, selectors, out failure))
+            {
+                return false;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var ruleCount, out failure, "transitionRuleCount"))
+            {
+                return false;
+            }
+            if (ruleCount > (uint)((body.Length - cursor) / MusicTransitionRuleMinimumBytes))
+            {
+                failure = HircFrameOutcome(
+                    "failed", "range_transitionRuleEntries", cursor - 4,
+                    (body.Length - cursor) / MusicTransitionRuleMinimumBytes, ruleCount);
+                return false;
+            }
+            HircBump(groups, "transitionRuleEntries", ruleCount);
+            HircBump(groups, "transitionRuleSourceEntries", 0);
+            HircBump(groups, "transitionRuleDestinationEntries", 0);
+            HircBump(groups, "transitionObjectEntries", 0);
+            for (var rule = 0U; rule < ruleCount; rule++)
+            {
+                foreach (var side in new[] { "transitionRuleSourceEntries", "transitionRuleDestinationEntries" })
+                {
+                    if (!HircReadUInt32(body, ref cursor, out var idCount, out failure, side + "Count"))
+                    {
+                        return false;
+                    }
+                    if (idCount > (uint)((body.Length - cursor) / 4))
+                    {
+                        failure = HircFrameOutcome(
+                            "failed", "range_" + side, cursor - 4, (body.Length - cursor) / 4, idCount);
+                        return false;
+                    }
+                    cursor = checked(cursor + (int)idCount * 4);
+                    HircBump(groups, side, idCount);
+                }
+                if (!HircTake(body, ref cursor, MusicTransitionSourceRuleBytes, out failure, "transitionSourceRule"))
+                {
+                    return false;
+                }
+                if (!HircTake(body, ref cursor, MusicTransitionDestinationRuleBytes, out failure, "transitionDestinationRule"))
+                {
+                    return false;
+                }
+                if (!HircReadByte(body, ref cursor, out var allocFlag, out failure, "transitionObjectFlag"))
+                {
+                    return false;
+                }
+                HircBump(selectors, $"transitionObject_{allocFlag:X2}", 1);
+                if (allocFlag != 0)
+                {
+                    if (!HircTake(body, ref cursor, MusicTransitionObjectBytes, out failure, "transitionObject"))
+                    {
+                        return false;
+                    }
+                    HircBump(groups, "transitionObjectEntries", 1);
+                }
+            }
+            return true;
+        }
+
+        // Numeric HIRC type 0x0A is CAkMusicSegment (CAkMusicSegment::SetInitialValues):
+        // the music node parameters, f64 fDuration, and u32 ulNumMarkers x { u32 id,
+        // f64 fPosition, a NUL-terminated name }. The name is why no fixed stride ever
+        // framed this type from the corpus alone.
+        internal static EndfieldHircBodyFrameResult FrameType0ABody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameMusicNodeParams(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircTake(body, ref cursor, 8, out failure, "segmentDuration"))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var markerCount, out failure, "markerCount"))
+            {
+                return failure;
+            }
+            // A marker is at least its id, its position and an empty name's terminator.
+            if (markerCount > (uint)((body.Length - cursor) / 13))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_markerEntries", cursor - 4, (body.Length - cursor) / 13, markerCount);
+            }
+            HircBump(groups, "markerEntries", markerCount);
+            HircBump(groups, "markerNameBytes", 0);
+            for (var marker = 0U; marker < markerCount; marker++)
+            {
+                if (!HircTake(body, ref cursor, 12, out failure, "markerHead"))
+                {
+                    return failure;
+                }
+                var terminator = body[cursor..].IndexOf((byte)0);
+                if (terminator < 0)
+                {
+                    return HircFrameOutcome(
+                        "failed", "unterminated_markerName", cursor, 1, body.Length - cursor);
+                }
+                HircBump(groups, "markerNameBytes", (uint)terminator);
+                cursor = checked(cursor + terminator + 1);
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        // Numeric HIRC type 0x0B is CAkMusicTrack (CAkMusicTrack::SetInitialValues):
+        // u8 uFlags, u32 numSources x the same source record numeric type 0x02 carries
+        // (CAkBankMgr::LoadSource, with a length-prefixed parameter block for source
+        // plug-ins), u32 numPlaylistItem x 44 bytes (u32 trackID, u32 sourceID, u32
+        // eventID, f64 fPlayAt, f64 fBeginTrimOffset, f64 fEndTrimOffset, f64
+        // fSrcDuration), u32 numSubTrack only when that playlist is nonempty, u32
+        // numClipAutomationItem x { u32
+        // uClipIndex, u32 eAutoType, u32 uNumPoints x 12-byte points }, then the
+        // shared node frame, u8 eTrackType and, only for type 3 (switch), u8
+        // eGroupType, u32 uGroupID, u32 uDefaultSwitch, u32 numSwitchAssoc x u32 and
+        // a 32-byte transition block; finally s32 iLookAheadTime. The node frame sits
+        // after the media lists here, unlike every other node type.
+        internal static EndfieldHircBodyFrameResult FrameType0BBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircReadByte(body, ref cursor, out var flags, out var failure, "musicFlags"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"musicFlags_{flags:X2}", 1);
+            if (!HircReadUInt32(body, ref cursor, out var sourceCount, out failure, "sourceCount"))
+            {
+                return failure;
+            }
+            if (sourceCount > (uint)((body.Length - cursor) / SourceRecordBytes))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_sourceEntries", cursor - 4,
+                    (body.Length - cursor) / SourceRecordBytes, sourceCount);
+            }
+            HircBump(groups, "sourceEntries", sourceCount);
+            HircBump(groups, "sourceParamBytes", 0);
+            for (var source = 0U; source < sourceCount; source++)
+            {
+                if (!HircTake(body, ref cursor, 4, out failure, "sourcePluginId"))
+                {
+                    return failure;
+                }
+                var pluginId = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor - 4, 4));
+                if (!HircTake(body, ref cursor, SourceRecordBytes - 4, out failure, "sourceInfo"))
+                {
+                    return failure;
+                }
+                if ((pluginId & 0x0F) == 2 && pluginId != 0)
+                {
+                    if (!HircReadUInt32(body, ref cursor, out var parameterLength, out failure, "sourceParamLength"))
+                    {
+                        return failure;
+                    }
+                    if (parameterLength > (uint)(body.Length - cursor))
+                    {
+                        return HircFrameOutcome(
+                            "failed", "range_sourceParams", cursor, parameterLength, body.Length - cursor);
+                    }
+                    cursor = checked(cursor + (int)parameterLength);
+                    HircBump(groups, "sourceParamBytes", parameterLength);
+                }
+            }
+            if (!HircReadUInt32(body, ref cursor, out var playlistCount, out failure, "playlistCount"))
+            {
+                return failure;
+            }
+            if (playlistCount > (uint)((body.Length - cursor) / 44))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_playlistEntries", cursor - 4, (body.Length - cursor) / 44, playlistCount);
+            }
+            cursor = checked(cursor + (int)playlistCount * 44);
+            HircBump(groups, "playlistEntries", playlistCount);
+            // The engine skips the whole playlist block, sub-track count included,
+            // when there are no playlist items; two shipped bodies have none.
+            var subTrackCount = 0U;
+            if (playlistCount > 0
+                && !HircReadUInt32(body, ref cursor, out subTrackCount, out failure, "subTrackCount"))
+            {
+                return failure;
+            }
+            HircBump(groups, "subTrackCount", subTrackCount);
+            if (!HircReadUInt32(body, ref cursor, out var clipCount, out failure, "clipAutomationCount"))
+            {
+                return failure;
+            }
+            if (clipCount > (uint)((body.Length - cursor) / 12))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_clipAutomationEntries", cursor - 4, (body.Length - cursor) / 12, clipCount);
+            }
+            HircBump(groups, "clipAutomationEntries", clipCount);
+            HircBump(groups, "clipAutomationPoints", 0);
+            for (var clip = 0U; clip < clipCount; clip++)
+            {
+                if (!HircTake(body, ref cursor, 8, out failure, "clipAutomationHead"))
+                {
+                    return failure;
+                }
+                if (!HircReadUInt32(body, ref cursor, out var pointCount, out failure, "clipAutomationPointCount"))
+                {
+                    return failure;
+                }
+                if (pointCount > (uint)((body.Length - cursor) / 12))
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_clipAutomationPoints", cursor - 4, (body.Length - cursor) / 12, pointCount);
+                }
+                cursor = checked(cursor + (int)pointCount * 12);
+                HircBump(groups, "clipAutomationPoints", pointCount);
+            }
+            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var trackType, out failure, "trackType"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"trackType_{trackType:X2}", 1);
+            HircBump(groups, "switchAssocEntries", 0);
+            if (trackType == 3)
+            {
+                if (!HircTake(body, ref cursor, 9, out failure, "trackSwitchHead"))
+                {
+                    return failure;
+                }
+                if (!HircReadUInt32(body, ref cursor, out var assocCount, out failure, "switchAssocCount"))
+                {
+                    return failure;
+                }
+                if (assocCount > (uint)((body.Length - cursor) / 4))
+                {
+                    return HircFrameOutcome(
+                        "failed", "range_switchAssocEntries", cursor - 4, (body.Length - cursor) / 4, assocCount);
+                }
+                cursor = checked(cursor + (int)assocCount * 4);
+                HircBump(groups, "switchAssocEntries", assocCount);
+                if (!HircTake(body, ref cursor, 32, out failure, "trackTransitionParams"))
+                {
+                    return failure;
+                }
+            }
+            if (!HircTake(body, ref cursor, 4, out failure, "lookAheadTime"))
+            {
+                return failure;
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        // Numeric HIRC type 0x0C is CAkMusicSwitchCntr: the transition-aware music
+        // node parameters, u8 bIsContinuePlayback, u32 uTreeDepth, that many u32
+        // argument group ids then that many u8 group types, u32 uTreeDataSize, u8
+        // uMode, and uTreeDataSize bytes of decision tree handed whole to
+        // AkDecisionTree::SetTree. The tree's own node layout is not framed here.
+        internal static EndfieldHircBodyFrameResult FrameType0CBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameMusicTransNodeParams(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var continuePlayback, out failure, "continuePlayback"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"continuePlayback_{continuePlayback:X2}", 1);
+            if (!HircReadUInt32(body, ref cursor, out var depth, out failure, "decisionArgumentCount"))
+            {
+                return failure;
+            }
+            if (depth > (uint)((body.Length - cursor) / 5))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_decisionArgumentEntries", cursor - 4, (body.Length - cursor) / 5, depth);
+            }
+            cursor = checked(cursor + (int)depth * 5);
+            HircBump(groups, "decisionArgumentEntries", depth);
+            if (!HircReadUInt32(body, ref cursor, out var treeSize, out failure, "decisionTreeSize"))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var mode, out failure, "decisionMode"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"decisionMode_{mode:X2}", 1);
+            if (treeSize > (uint)(body.Length - cursor))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_decisionTreeBytes", cursor - 5, body.Length - cursor, treeSize);
+            }
+            if (treeSize % 12 != 0)
+            {
+                return HircFrameOutcome("failed", "decisionTree_not_whole_nodes", cursor, 12, (int)(treeSize % 12));
+            }
+            cursor = checked(cursor + (int)treeSize);
+            HircBump(groups, "decisionTreeBytes", treeSize);
+            HircBump(groups, "decisionTreeNodes", treeSize / 12);
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        // Numeric HIRC type 0x0D is CAkMusicRanSeqCntr: the transition-aware music
+        // node parameters, then u32 numPlaylistItems x 30 bytes (u32 SegmentID, u32
+        // playlistItemID, u32 NumChildren, u32 eRSType, s16 Loop, s16 LoopMin, s16
+        // LoopMax, u32 Weight, u16 wAvoidRepeatCount, u8 bIsUsingWeight, u8
+        // bIsShuffle); the items nest by NumChildren in the engine and are read flat here.
+        internal static EndfieldHircBodyFrameResult FrameType0DBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameMusicTransNodeParams(body, ref cursor, groups, selectors, out var failure))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var itemCount, out failure, "playlistCount"))
+            {
+                return failure;
+            }
+            if (itemCount > (uint)((body.Length - cursor) / 30))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_playlistEntries", cursor - 4, (body.Length - cursor) / 30, itemCount);
+            }
+            cursor = checked(cursor + (int)itemCount * 30);
+            HircBump(groups, "playlistEntries", itemCount);
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+
+        // The effect base every effect-shaped object reads (CAkFxBase::SetInitialValues):
+        // u32 fxID (0xFFFFFFFF = none), u32 uSize and that many plug-in parameter bytes,
+        // u8 numBankData x { u8 index, u32 sourceID }, InitialRTPC (group I), the
+        // StateChunk (group H), then u16 numValues x { varint AkPropID, u8 rtpcAccum,
+        // f32 value }. Numeric types 0x10 (FxShareSet) and 0x11 (FxCustom) are exactly
+        // this; 0x15 (AudioDevice) adds AkOwnedEffectSlots::SetInitialValues: u8 uNumFx,
+        // u8 bitsFXBypass when nonzero, then uNumFx x { u8 index, u32 fxID, u8 flags }.
+        internal static EndfieldHircBodyFrameResult FrameFxBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion,
+            bool withDeviceSlots)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircTake(body, ref cursor, 4, out var failure, "fxPluginId"))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var paramBytes, out failure, "fxParamSize"))
+            {
+                return failure;
+            }
+            if (paramBytes > (uint)(body.Length - cursor))
+            {
+                return HircFrameOutcome("failed", "range_fxParamBytes", cursor - 4, body.Length - cursor, paramBytes);
+            }
+            cursor = checked(cursor + (int)paramBytes);
+            HircBump(groups, "fxParamBytes", paramBytes);
+            if (!HircReadByte(body, ref cursor, out var mediaCount, out failure, "fxMediaCount"))
+            {
+                return failure;
+            }
+            if (!HircTake(body, ref cursor, mediaCount * 5, out failure, "fxMediaEntries"))
+            {
+                return failure;
+            }
+            HircBump(groups, "fxMediaEntries", mediaCount);
+            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (!FrameHircGroupH(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (!HircReadUInt16(body, ref cursor, out var valueCount, out failure, "fxPropertyCount"))
+            {
+                return failure;
+            }
+            // A value is at least a one-byte id, the accumulation byte and a float.
+            if (valueCount > (body.Length - cursor) / 6)
+            {
+                return HircFrameOutcome("failed", "range_fxPropertyEntries", cursor - 2, (body.Length - cursor) / 6, valueCount);
+            }
+            HircBump(groups, "fxPropertyEntries", valueCount);
+            for (var i = 0; i < valueCount; i++)
+            {
+                if (!HircReadVariableSize(body, ref cursor, out _, out failure, "fxPropertyId"))
+                {
+                    return failure;
+                }
+                if (!HircTake(body, ref cursor, 5, out failure, "fxPropertyValue"))
+                {
+                    return failure;
+                }
+            }
+            HircBump(groups, "deviceEffectEntries", 0);
+            if (withDeviceSlots)
+            {
+                if (!HircReadByte(body, ref cursor, out var slotCount, out failure, "deviceEffectCount"))
+                {
+                    return failure;
+                }
+                if (slotCount > 0)
+                {
+                    if (!HircTake(body, ref cursor, 1, out failure, "deviceEffectBypass"))
+                    {
+                        return failure;
+                    }
+                    if (!HircTake(body, ref cursor, slotCount * 6, out failure, "deviceEffectEntries"))
+                    {
+                        return failure;
+                    }
+                }
+                HircBump(groups, "deviceEffectEntries", slotCount);
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        // Modulators (CAkModulator::SetInitialValues) -- numeric types 0x13 (LFO), 0x14
+        // (Envelope) and 0x16 (TimeMod) alike: the property bundle (u8 cProps, that
+        // many u8 AkModulatorPropID keys, then that many u32 values), the ranged
+        // bundle (u8 cProps, keys, then f32 min/max pairs) and InitialRTPC (group I).
+        // The ranged bundle is the byte the earlier 0x16 frame consumed as anonymous.
+        internal static EndfieldHircBodyFrameResult FrameModulatorBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!FrameHircPropertyBundles(body, ref cursor, groups, out var failure))
+            {
+                return failure;
+            }
+            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out failure))
+            {
+                return failure;
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
+        }
+
+        // The two property bundles as CAkParameterNode::SetInitialParams,
+        // CAkModulator::SetInitialValues, CAkAction::SetInitialValues and
+        // CAkDialogueEvent::SetInitialValues all read them: keys then values, twice.
+        private static bool FrameHircPropertyBundles(
+            ReadOnlySpan<byte> body,
+            ref int cursor,
+            Dictionary<string, uint> groups,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            if (!HircReadByte(body, ref cursor, out var propCount, out failure, "groupCCount"))
+            {
+                return false;
+            }
+            if (!HircTake(body, ref cursor, propCount * 5, out failure, "groupCEntries"))
+            {
+                return false;
+            }
+            HircBump(groups, "groupCEntries", propCount);
+            if (!HircReadByte(body, ref cursor, out var rangedCount, out failure, "groupDCount"))
+            {
+                return false;
+            }
+            if (!HircTake(body, ref cursor, rangedCount * 9, out failure, "groupDEntries"))
+            {
+                return false;
+            }
+            HircBump(groups, "groupDEntries", rangedCount);
+            return true;
+        }
+
+        // Numeric HIRC type 0x0F is CAkDialogueEvent: u8 uProbability, u32 uTreeDepth,
+        // that many u32 argument group ids then that many u8 group types, u32
+        // uTreeDataSize, u8 uMode, the tree bytes handed to AkDecisionTree::SetTree,
+        // then the two property bundles.
+        internal static EndfieldHircBodyFrameResult FrameType0FBody(
+            ReadOnlySpan<byte> body,
+            uint? bankVersion)
+        {
+            if (bankVersion != 150)
+            {
+                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
+            }
+            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
+            var cursor = 0;
+            if (!HircTake(body, ref cursor, 1, out var failure, "dialogueProbability"))
+            {
+                return failure;
+            }
+            if (!HircReadUInt32(body, ref cursor, out var depth, out failure, "decisionArgumentCount"))
+            {
+                return failure;
+            }
+            if (depth > (uint)((body.Length - cursor) / 5))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_decisionArgumentEntries", cursor - 4, (body.Length - cursor) / 5, depth);
+            }
+            cursor = checked(cursor + (int)depth * 5);
+            HircBump(groups, "decisionArgumentEntries", depth);
+            if (!HircReadUInt32(body, ref cursor, out var treeSize, out failure, "decisionTreeSize"))
+            {
+                return failure;
+            }
+            if (!HircReadByte(body, ref cursor, out var mode, out failure, "decisionMode"))
+            {
+                return failure;
+            }
+            HircBump(selectors, $"decisionMode_{mode:X2}", 1);
+            if (treeSize > (uint)(body.Length - cursor))
+            {
+                return HircFrameOutcome(
+                    "failed", "range_decisionTreeBytes", cursor - 5, body.Length - cursor, treeSize);
+            }
+            if (treeSize % 12 != 0)
+            {
+                return HircFrameOutcome("failed", "decisionTree_not_whole_nodes", cursor, 12, (int)(treeSize % 12));
+            }
+            cursor = checked(cursor + (int)treeSize);
+            HircBump(groups, "decisionTreeBytes", treeSize);
+            HircBump(groups, "decisionTreeNodes", treeSize / 12);
+            if (!FrameHircPropertyBundles(body, ref cursor, groups, out failure))
+            {
+                return failure;
+            }
+            if (cursor != body.Length)
+            {
+                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
+            }
+            return HircFrameExact(cursor, body.Length, groups, selectors);
         }
 
         // Numeric type 0x0E does not use the shared node frame. Its body is a fixed
@@ -4726,56 +5217,6 @@ namespace AnimeStudio.Endfield
             if (terminator != 0)
             {
                 return HircFrameOutcome("failed", "nonzero_listTerminator", cursor - 2, 0, terminator);
-            }
-            if (cursor != body.Length)
-            {
-                return HircFrameOutcome("failed", "trailing_bytes", cursor, body.Length, cursor);
-            }
-            return HircFrameExact(cursor, body.Length, groups, selectors, null);
-        }
-
-        // Numeric type 0x16 does not use the whole node frame, but it ends with the
-        // node frame's group I structure verbatim. That is why this framer is short:
-        // the only new part is the counted key/value block in front of it, and group I
-        // is reused rather than re-guessed.
-        internal static EndfieldHircBodyFrameResult FrameType22Body(
-            ReadOnlySpan<byte> body,
-            uint? bankVersion)
-        {
-            if (bankVersion != 150)
-            {
-                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
-            }
-
-            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var cursor = 0;
-            if (!HircReadByte(body, ref cursor, out var propertyCount, out var failure, "propertyCount"))
-            {
-                return failure;
-            }
-            // Keys and values are two parallel runs, not interleaved pairs: a key is one
-            // byte and a value is four, and the keys all precede the values.
-            if (propertyCount > (body.Length - cursor) / 5)
-            {
-                return HircFrameOutcome(
-                    "failed", "range_properties", cursor - 1, (body.Length - cursor) / 5, propertyCount);
-            }
-            for (var i = 0; i < propertyCount; i++)
-            {
-                HircBump(selectors, $"propertyKey_{body[cursor + i]:X2}", 1);
-            }
-            cursor = checked(cursor + propertyCount);
-            cursor = checked(cursor + propertyCount * 4);
-            HircBump(groups, "propertyEntries", propertyCount);
-
-            if (!HircTake(body, ref cursor, 1, out failure, "anonymousByte"))
-            {
-                return failure;
-            }
-            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out failure))
-            {
-                return failure;
             }
             if (cursor != body.Length)
             {
@@ -5853,1278 +6294,18 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
-        /// <summary>
-        /// Census numeric type 0x0B's entry elements, and score the trailer anchor.
-        /// </summary>
-        /// <remarks>
-        /// Restricted to bodies carrying exactly one entry with exactly one element,
-        /// because only there is the element's width known without already having the
-        /// frame -- which is the thing under test. That is 3,891 of 4,325 bodies.
-        ///
-        /// The finding is the trailer: its first byte is zero in the short form and one
-        /// in the long, and the two forms differ by five bytes, which is the five-byte
-        /// step the entry widths have shown all along (84/89, 132/137, 168/173).
-        ///
-        /// The evidence is NOT that the trailer parses. Several rival anchors leave
-        /// just as many elements "clean" -- -18/-23 leaves more. The evidence is what
-        /// the anchor leaves behind: under -19/-24 the element bodies are 17 + 12k for
-        /// 3,594 elements, and under every rival pair for at most 32. A wrong anchor
-        /// leaves lengths with no structure, and that is what separates them.
-        ///
-        /// What is still NOT established, and is censused rather than claimed: which
-        /// field carries k. The word at element offset 8 equals it in 575 of the 1,103
-        /// elements that have a nonzero k, so it is part of the answer and not all of
-        /// it. Elements with k = 0 are excluded from that count -- they would agree
-        /// with any all-zero field for free.
-        /// </remarks>
-        private static void CensusType11Elements(
-            EndfieldHircType11ElementCensus census,
-            ReadOnlySpan<byte> body)
-        {
-            census.Bodies = checked(census.Bodies + 1);
-            if (body.Length < 9)
-            {
-                return;
-            }
-            var records = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(1, 4));
-            if (records > Type11MaximumRecords)
-            {
-                return;
-            }
-            var at = checked(5 + (int)records * Type11SourceRecordBytes);
-            if (at + 8 > body.Length)
-            {
-                return;
-            }
-            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(body.Length - 4, 4))
-                != Type11TerminatorValue)
-            {
-                return;
-            }
-            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(at, 4)) != 1)
-            {
-                census.NotASingleEntry = checked(census.NotASingleEntry + 1);
-                return;
-            }
-            var entry = body[(at + 4)..(body.Length - 4)];
-            if (entry.Length < Type11EntryHeaderBytes
-                || BinaryPrimitives.ReadUInt32LittleEndian(
-                    entry.Slice(Type11EntryElementCountOffset, 4)) != 1)
-            {
-                census.NotASingleElement = checked(census.NotASingleElement + 1);
-                return;
-            }
-            var element = entry[Type11EntryHeaderBytes..];
-            census.Elements = checked(census.Elements + 1);
-
-            // Every anchor pair is scored the same way, the chosen one included.
-            foreach (var (shortTrailer, longTrailer) in Type11TrailerRivals)
-            {
-                var label = $"trailer_{shortTrailer}_{longTrailer}";
-                var isShort = element.Length >= shortTrailer
-                    && element[element.Length - shortTrailer] == 0;
-                var isLong = element.Length >= longTrailer
-                    && element[element.Length - longTrailer] == 1;
-                if (isShort == isLong)
-                {
-                    continue;
-                }
-                HircBump(census.AnchorSelectsOneTrailer, label, 1);
-                var bodyBytes = element.Length - (isShort ? shortTrailer : longTrailer);
-                if (bodyBytes >= Type11ElementHeadBytes
-                    && (bodyBytes - Type11ElementHeadBytes) % Type11ElementRecordBytes == 0)
-                {
-                    HircBump(census.AnchorLeavesWholeRecords, label, 1);
-                }
-            }
-
-            var shortForm = element.Length >= Type11ElementShortTrailerBytes
-                && element[element.Length - Type11ElementShortTrailerBytes] == 0;
-            var longForm = element.Length >= Type11ElementLongTrailerBytes
-                && element[element.Length - Type11ElementLongTrailerBytes] == 1;
-            if (shortForm == longForm)
-            {
-                census.TrailerIsAmbiguous = checked(census.TrailerIsAmbiguous + 1);
-                return;
-            }
-            HircBump(census.TrailerForm, shortForm ? "short" : "long", 1);
-            var elementBody = element.Length
-                - (shortForm ? Type11ElementShortTrailerBytes : Type11ElementLongTrailerBytes);
-            // Score every candidate frame, the chosen one included, and keep the
-            // elements that declare no runs apart. An element with no runs closes
-            // under almost any frame whose head and trailing block happen to add up,
-            // and there are 2,491 of them against 1,151 that actually exercise the
-            // run walk -- so a headline rate over all of them measures the corpus, not
-            // the frame. The gate reads the exercising subset.
-            var declaredRuns = element.Length > Type11ElementRunCountField
-                ? element[Type11ElementRunCountField]
-                : (byte)0;
-            if (declaredRuns > 0)
-            {
-                census.ElementsWithRuns = checked(census.ElementsWithRuns + 1);
-            }
-            foreach (var (head, runHeader, countOffset, trailing) in Type11ElementFrameRivals)
-            {
-                var label = $"frame_{head}_{runHeader}_{countOffset}_{trailing}";
-                if (!TryWalkType11Element(
-                        element, elementBody, head, runHeader, countOffset, trailing,
-                        out _, out _))
-                {
-                    continue;
-                }
-                HircBump(census.FrameCloses, label, 1);
-                if (declaredRuns > 0)
-                {
-                    HircBump(census.FrameClosesWithRuns, label, 1);
-                }
-            }
-            if (TryWalkType11Element(
-                    element, elementBody,
-                    Type11ElementHeadBytes5, Type11ElementRunHeaderBytes,
-                    Type11ElementRunCountOffset, Type11ElementTrailingBlockBytes,
-                    out var walkedRuns, out var walkedRecords))
-            {
-                census.ElementFrames = checked(census.ElementFrames + 1);
-                HircBump(census.RunsPerElement, $"runs_{Math.Min(walkedRuns, 8)}", 1);
-                HircBump(census.RecordsPerFramedElement, $"records_{Math.Min(walkedRecords, 16)}", 1);
-            }
-            if (elementBody < Type11ElementHeadBytes
-                || (elementBody - Type11ElementHeadBytes) % Type11ElementRecordBytes != 0)
-            {
-                census.BodyIsNotWholeRecords = checked(census.BodyIsNotWholeRecords + 1);
-                return;
-            }
-            var k = (elementBody - Type11ElementHeadBytes) / Type11ElementRecordBytes;
-            census.Framed = checked(census.Framed + 1);
-            HircBump(census.RecordsPerElement, $"records_{Math.Min(k, 16)}", 1);
-            if (k > 0)
-            {
-                census.ElementsWithRecords = checked(census.ElementsWithRecords + 1);
-            }
-        }
-
-        /// <summary>
-        /// Walk one element body under a candidate frame, or refuse.
-        /// </summary>
-        /// <summary>
-        /// The length of one numeric type 0x0B trailer, from the block that precedes it.
-        /// </summary>
-        /// <remarks>
-        /// Shared by the element trailer and the trailing section that closes a
-        /// multi-entry body, because they are the same eleven-to-thirty-one bytes and
-        /// two copies of this rule would drift apart the first time one was corrected.
-        /// </remarks>
-        private static bool TryReadType11TrailerLength(
-            ReadOnlySpan<byte> body,
-            int blockAt,
-            int end,
-            out int length,
-            out byte opens,
-            out byte flag,
-            out string reason)
-        {
-            length = 0;
-            opens = 0;
-            flag = 0;
-            reason = string.Empty;
-            if (end - blockAt < Type11ElementTrailingBlockBytes + 1)
-            {
-                reason = "range_element_trailing_block";
-                return false;
-            }
-            opens = body[blockAt + Type11ElementTrailingBlockOpenOffset];
-            var at = checked(blockAt + Type11ElementTrailingBlockBytes);
-            flag = body[at];
-            if (opens == Type11ExtendedTrailerOpenValue)
-            {
-                if (end - at <= Type11ExtendedTrailerSelectorOffset)
-                {
-                    reason = "range_extended_trailer_selector";
-                    return false;
-                }
-                var extended = body[at + Type11ExtendedTrailerSelectorOffset];
-                if (extended > Type11ExtendedTrailerMaximumFlag)
-                {
-                    reason = "range_extended_trailer_flag";
-                    return false;
-                }
-                length = checked(
-                    Type11ExtendedTrailerBaseBytes
-                    + Type11TrailerStepBytes * extended
-                    + Type11TrailerCloseBytes);
-                return true;
-            }
-            if (flag > Type11TrailerMaximumFlag)
-            {
-                reason = "range_element_trailer_flag";
-                return false;
-            }
-            length = checked(
-                Type11TrailerBaseBytes + Type11TrailerStepBytes * flag);
-            return true;
-        }
-
-
-        private static bool TryWalkType11Element(
-            ReadOnlySpan<byte> element,
-            int bodyBytes,
-            int head,
-            int runHeader,
-            int countOffset,
-            int trailing,
-            out int runs,
-            out int records)
-        {
-            runs = 0;
-            records = 0;
-            if (element.Length < bodyBytes || bodyBytes < head)
-            {
-                return false;
-            }
-            var declared = element[Type11ElementRunCountField];
-            if (declared > Type11ElementMaximumRuns)
-            {
-                return false;
-            }
-            var cursor = head;
-            for (var run = 0; run < declared; run++)
-            {
-                if (cursor + runHeader > bodyBytes || cursor + countOffset >= bodyBytes)
-                {
-                    return false;
-                }
-                var count = element[cursor + countOffset];
-                if (count > Type11ElementMaximumRecords)
-                {
-                    return false;
-                }
-                cursor = checked(cursor + runHeader);
-                var span = checked(count * Type11ElementRecordBytes + Type11ElementRunTrailingBytes);
-                if (span > bodyBytes - cursor)
-                {
-                    return false;
-                }
-                cursor = checked(cursor + span);
-                records = checked(records + count);
-            }
-            runs = declared;
-            return checked(cursor + trailing) == bodyBytes;
-        }
-
-        // The element trailer is a head of 7 + 5 * flag followed by a fixed 12-byte
-        // close. Flags 0, 1 and 2 are each observed closing bodies exactly -- three
-        // points on the line, not two and an extrapolation -- and anything above the
-        // highest observed flag is refused rather than assumed to continue.
-        //
-        // The split into head and close is not an independent fact for these bodies:
-        // the trailer is the last thing before the terminator, so "the trailer ends
-        // with the block" and "the body ends with the block" say the same thing here.
-        // It is written this way because the block is the same 12 bytes in 4,141 of
-        // the type's 4,325 bodies whether or not the body frames, which makes it a
-        // property of the format rather than of this walk.
-        internal const int Type11TrailerHeadBytes = 7;
-        internal const int Type11TrailerCloseBytes = 12;
-        internal const int Type11TrailerBaseBytes =
-            Type11TrailerHeadBytes + Type11TrailerCloseBytes;
-        internal const int Type11TrailerStepBytes = 5;
-        internal const byte Type11TrailerMaximumFlag = 2;
-        // A second trailer shape, opened by the first byte of the element's trailing
-        // block. When that byte is 1 the head is 14 + 5 * k, where k is the byte seven
-        // into the trailer -- the same five-byte step, one base higher.
-        //
-        // Each part is discriminated rather than asserted. Over the whole corpus the
-        // opening byte is decisive: position 0 reaches 3,861 bodies and the other
-        // eleven positions reach at most 3,719. The base is decisive: 14 reaches
-        // 3,861 and 10, 12, 13, 15, 16 and 19 reach 3,715, which is to say they add
-        // nothing at all. The selector is decisive: byte 7 reaches 3,861 where the
-        // bytes that happen to be zero in this group reach 3,813, closing the k = 0
-        // bodies and failing the k = 1 ones.
-        //
-        // The step of 5 is shared with the plain trailer, not independently
-        // established: only k = 0 and k = 1 are observed, which is two points, so
-        // anything above 1 is refused.
-        // RETIRED: a "trailing section" of one byte plus a block and a trailer used to
-        // close 76 multi-entry bodies here. It was patching the four-byte entry
-        // step-back, and once that is applied the section never fires -- 0 bodies of
-        // 4,325. It is removed rather than left as dead code, because a reading that
-        // compensates for a misplaced field is worse than no reading: it makes the
-        // misplacement look closed.
-        internal const int Type11ElementTrailingBlockOpenOffset = 0;
-        internal const byte Type11ExtendedTrailerOpenValue = 1;
-        internal const int Type11ExtendedTrailerBaseBytes = 14;
-        internal const int Type11ExtendedTrailerSelectorOffset = 7;
-        internal const byte Type11ExtendedTrailerMaximumFlag = 1;
-        internal const uint Type11MaximumEntries = 64;
-        internal const uint Type11MaximumElements = 64;
-
-        /// <summary>
-        /// Frame a whole numeric type 0x0B body.
-        /// </summary>
-        /// <remarks>
-        /// The first frame this type has had. Every counted run in it is a count the
-        /// body declares, and every width was settled by scoring rivals the same way
-        /// rather than by whether the parse closed:
-        ///
-        ///   u8  flag
-        ///   u32 sourceCount, that many 14-byte source records
-        ///   u32 entryCount
-        ///   entryCount x entry:
-        ///       48 header bytes, the element count at +44
-        ///       elementCount x element:
-        ///           5 head bytes, the run count at +0
-        ///           runCount x run: 12 header bytes, the record count at +7,
-        ///                           then that many 12-byte records
-        ///           12 trailing bytes
-        ///           a trailer of 19 + 5 * flag bytes
-        ///   u32 terminator, always 100
-        ///
-        /// This is NOT a closure-gated lane: 3,715 of 4,325 bodies close and the rest
-        /// are fenced by reason. It is censused alongside numeric types 0x08 and 0x12
-        /// for the same reason they are -- the type is understood well enough to say
-        /// where each body stops being understood.
-        /// </remarks>
-        internal static EndfieldHircBodyFrameResult FrameType11Body(
-            ReadOnlySpan<byte> body,
-            uint? bankVersion)
-            => FrameType11Body(body, bankVersion, null);
-
-        // Offsets in the 48-byte entry header whose reading is established enough to
-        // census. Everything else in it is still opaque and is reported as such.
-        internal const int Type11EntryRangeLowOffset = 16;
-        internal const int Type11EntryRangeHighOffset = 24;
-        internal const int Type11EntryFractionOffset = 28;
-        internal const int Type11EntrySecondFractionOffset = 36;
-        // The neighbouring words, scored the same way so the readings above are not
-        // credited for something every word in the header would pass.
-        internal const int Type11EntryRangeControlOffset = 12;
-        // The word at 40 is a float, present in every entry and confined to a narrow
-        // band. It was previously used as the fraction control, which it still serves
-        // as -- it is never a small rational -- but it is not opaque.
-        internal const int Type11EntryFractionControlOffset = 40;
-        internal const int Type11EntryBoundedFloatOffset = 40;
-        internal const float Type11EntryBoundedFloatLow = 1e-3f;
-        internal const float Type11EntryBoundedFloatHigh = 1e4f;
-        // Scored against the source id at 4 and the opaque word at 12, both read the
-        // same way. A float field is not established by its own values being finite;
-        // it is established by neighbouring words not being.
-        internal static readonly int[] Type11EntryFloatControlOffsets = { 4, 12 };
-
-        internal static EndfieldHircBodyFrameResult FrameType11Body(
-            ReadOnlySpan<byte> body,
-            uint? bankVersion,
-            EndfieldHircType11EntryHeaderCensus? structureEntryHeaders)
-        {
-            if (bankVersion != 150)
-            {
-                return HircFrameOutcome("unsupported", "unsupported_bank_version", 0, 0, body.Length);
-            }
-            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var headers = new List<byte[]>();
-            var curves = new List<byte[]>();
-            var closeBlocks = new List<byte[]>();
-            var entryShape = 0u;
-            var sourceIds = new HashSet<uint>();
-            var cursor = 0;
-            if (!HircTake(body, ref cursor, 1, out var failure, "leadingFlag"))
-            {
-                return failure;
-            }
-            HircBump(selectors, $"leadingFlag_{body[0]:X2}", 1);
-            if (!HircReadUInt32(body, ref cursor, out var sources, out failure, "sourceCount"))
-            {
-                return failure;
-            }
-            if (sources > Type11MaximumRecords)
-            {
-                return HircFrameOutcome(
-                    "failed", "range_sources", cursor - 4, (int)Type11MaximumRecords, (int)sources);
-            }
-            var sourceSpan = checked((int)sources * Type11SourceRecordBytes);
-            if (sourceSpan > body.Length - cursor)
-            {
-                return HircFrameOutcome(
-                    "failed", "range_sources", cursor - 4, body.Length - cursor, sourceSpan);
-            }
-            for (var record = 0U; record < sources; record++)
-            {
-                var recordAt = checked(cursor + (int)record * Type11SourceRecordBytes);
-                if (recordAt + Type11SourceRecordIdOffset + 4 <= body.Length)
-                {
-                    sourceIds.Add(BinaryPrimitives.ReadUInt32LittleEndian(
-                        body.Slice(recordAt + Type11SourceRecordIdOffset, 4)));
-                }
-            }
-            cursor = checked(cursor + sourceSpan);
-            HircBump(groups, "sourceRecords", sources);
-            // The terminator is read from the end, so the entry walk has a hard stop
-            // that does not depend on the walk itself being right.
-            if (body.Length - cursor < 4)
-            {
-                return HircFrameOutcome("failed", "no_terminator", cursor, 4, body.Length - cursor);
-            }
-            var end = body.Length - 4;
-            if (BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(end, 4)) != Type11TerminatorValue)
-            {
-                return HircFrameOutcome("failed", "terminator_is_not_the_observed_value", end, 0, 0);
-            }
-            if (end - cursor < 4)
-            {
-                return HircFrameOutcome("failed", "no_entry_count", cursor, 4, end - cursor);
-            }
-            var entries = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(cursor, 4));
-            cursor = checked(cursor + 4);
-            if (entries > Type11MaximumEntries)
-            {
-                return HircFrameOutcome(
-                    "failed", "range_entries", cursor - 4, (int)Type11MaximumEntries, (int)entries);
-            }
-            HircBump(groups, "entries", entries);
-            // Kept because of what it shows about this reader. Every body that frames
-            // has exactly one entry carrying exactly one element -- 3,715 of them,
-            // without exception -- so neither count has ever been read at any other
-            // value by a successful walk. The multi-entry layout is not known to be
-            // 48 bytes per header, or anything else; it has simply never been parsed.
-            entryShape = entries;
-            for (var entry = 0U; entry < entries; entry++)
-            {
-                if (entry > 0)
-                {
-                    if (cursor < Type11EntryStepBackBytes)
-                    {
-                        return HircFrameOutcome(
-                            "failed", "range_entry_step_back",
-                            cursor, Type11EntryStepBackBytes, cursor);
-                    }
-                    cursor = checked(cursor - Type11EntryStepBackBytes);
-                    HircBump(groups, "entryStepBacks", 1);
-                }
-                if (end - cursor < Type11EntryHeaderBytes)
-                {
-                    return HircFrameOutcome(
-                        "failed", "range_entry_header", cursor, Type11EntryHeaderBytes, end - cursor);
-                }
-                var elements = BinaryPrimitives.ReadUInt32LittleEndian(
-                    body.Slice(cursor + Type11EntryElementCountOffset, 4));
-                if (elements > Type11MaximumElements)
-                {
-                    return HircFrameOutcome(
-                        "failed", "range_elements",
-                        cursor + Type11EntryElementCountOffset, (int)Type11MaximumElements, (int)elements);
-                }
-                headers.Add(body.Slice(cursor, Type11EntryHeaderBytes).ToArray());
-                cursor = checked(cursor + Type11EntryHeaderBytes);
-                HircBump(groups, "entryElements", elements);
-                for (var element = 0U; element < elements; element++)
-                {
-                    if (end - cursor < Type11ElementHeadBytes5)
-                    {
-                        return HircFrameOutcome(
-                            "failed", "range_element_head",
-                            cursor, Type11ElementHeadBytes5, end - cursor);
-                    }
-                    var runs = body[cursor];
-                    if (runs > Type11ElementMaximumRuns)
-                    {
-                        return HircFrameOutcome(
-                            "failed", "range_element_runs", cursor, Type11ElementMaximumRuns, runs);
-                    }
-                    foreach (var zero in Type11ElementHeadZeroOffsets)
-                    {
-                        if (body[cursor + zero] != 0)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "element_head_reserved_byte_is_not_zero",
-                                cursor + zero, 0, body[cursor + zero]);
-                        }
-                    }
-                    if (structureEntryHeaders is not null)
-                    {
-                        structureEntryHeaders.ReservedBytesChecked = checked(
-                            structureEntryHeaders.ReservedBytesChecked
-                            + (uint)Type11ElementHeadZeroOffsets.Length);
-                        // The control: the same number of bytes read five further on,
-                        // which is inside the run header rather than the head. If those
-                        // were zero too the invariant would be about the neighbourhood
-                        // and not about these three offsets.
-                        foreach (var zero in Type11ElementHeadZeroOffsets)
-                        {
-                            if (cursor + zero + 5 < end)
-                            {
-                                structureEntryHeaders.ReservedControlsChecked = checked(
-                                    structureEntryHeaders.ReservedControlsChecked + 1);
-                                if (body[cursor + zero + 5] == 0)
-                                {
-                                    structureEntryHeaders.ReservedControlsZero = checked(
-                                        structureEntryHeaders.ReservedControlsZero + 1);
-                                }
-                            }
-                        }
-                    }
-                    cursor = checked(cursor + Type11ElementHeadBytes5);
-                    HircBump(groups, "elementRuns", runs);
-                    for (var run = 0; run < runs; run++)
-                    {
-                        if (end - cursor < Type11ElementRunHeaderBytes)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_run_header",
-                                cursor, Type11ElementRunHeaderBytes, end - cursor);
-                        }
-                        var records = body[cursor + Type11ElementRunCountOffset];
-                        if (records > Type11ElementMaximumRecords)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_run_records",
-                                cursor + Type11ElementRunCountOffset,
-                                Type11ElementMaximumRecords, records);
-                        }
-                        foreach (var zero in Type11RunHeaderZeroOffsets)
-                        {
-                            if (body[cursor + zero] != 0)
-                            {
-                                return HircFrameOutcome(
-                                    "failed", "run_header_reserved_byte_is_not_zero",
-                                    cursor + zero, 0, body[cursor + zero]);
-                            }
-                        }
-                        if (structureEntryHeaders is not null)
-                        {
-                            structureEntryHeaders.ReservedBytesChecked = checked(
-                                structureEntryHeaders.ReservedBytesChecked
-                                + (uint)Type11RunHeaderZeroOffsets.Length);
-                        }
-                        cursor = checked(cursor + Type11ElementRunHeaderBytes);
-                        var recordSpan = checked(records * Type11ElementRecordBytes);
-                        if (recordSpan + Type11ElementRunTrailingBytes > end - cursor)
-                        {
-                            return HircFrameOutcome(
-                                "failed", "range_run_records", cursor, end - cursor, recordSpan);
-                        }
-                        curves.Add(body.Slice(cursor, recordSpan).ToArray());
-                        cursor = checked(cursor + recordSpan + Type11ElementRunTrailingBytes);
-                        HircBump(groups, "runRecords", records);
-                    }
-                    if (!TryReadType11TrailerLength(
-                            body, cursor, end, out var trailer,
-                            out var trailingBlockOpens, out var flag, out var why))
-                    {
-                        return HircFrameOutcome("failed", why, cursor, 0, end - cursor);
-                    }
-                    cursor = checked(cursor + Type11ElementTrailingBlockBytes);
-                    if (trailingBlockOpens == Type11ExtendedTrailerOpenValue)
-                    {
-                        HircBump(
-                            selectors,
-                            "extendedTrailerFlag_"
-                            + body[cursor + Type11ExtendedTrailerSelectorOffset],
-                            1);
-                        // Every element that takes this branch carries flag 0, all 148
-                        // of them. Recorded rather than required: it is an observation
-                        // about the corpus, and making it a rule would hide the day it
-                        // stops being true.
-                        HircBump(selectors, $"extendedTrailerPlainFlag_{flag}", 1);
-                    }
-                    else
-                    {
-                        HircBump(selectors, $"elementTrailerFlag_{flag}", 1);
-                    }
-                    if (trailer > end - cursor)
-                    {
-                        return HircFrameOutcome(
-                            "failed", "range_element_trailer", cursor, end - cursor, trailer);
-                    }
-                    closeBlocks.Add(
-                        body.Slice(checked(cursor + trailer - Type11TrailerCloseBytes),
-                                   Type11TrailerCloseBytes).ToArray());
-                    cursor = checked(cursor + trailer);
-                }
-            }
-            if (cursor != end)
-            {
-                // Two different things land here and they deserve different names.
-                // 104 bodies leave a short run of zeros before the terminator and
-                // nothing else; 218 leave real content -- curve records, object ids,
-                // and the byte pattern an element trailer carries. Reporting both as
-                // one number would hide that the second group is unread structure and
-                // the first may be padding. Neither is framed into a result.
-                var rest = body[cursor..end];
-                var padding = true;
-                foreach (var value in rest)
-                {
-                    if (value != 0)
-                    {
-                        padding = false;
-                        break;
-                    }
-                }
-                return HircFrameOutcome(
-                    "failed",
-                    padding ? "trailing_zero_run_before_the_terminator"
-                            : "entries_do_not_reach_the_terminator",
-                    cursor, 0, end - cursor);
-            }
-            cursor = body.Length;
-            // Censused only now. An entry header from a body that later fails says
-            // nothing, because the walk that reached it may have been desynchronised.
-            if (structureEntryHeaders is not null)
-            {
-                for (var index = 0; index < closeBlocks.Count; index++)
-                {
-                    var close = closeBlocks[index];
-                    var isFinal = index == closeBlocks.Count - 1;
-                    structureEntryHeaders.CloseBlocks =
-                        checked(structureEntryHeaders.CloseBlocks + 1);
-                    if (isFinal)
-                    {
-                        structureEntryHeaders.FinalCloseBlocks =
-                            checked(structureEntryHeaders.FinalCloseBlocks + 1);
-                    }
-                    else
-                    {
-                        structureEntryHeaders.InteriorCloseBlocks =
-                            checked(structureEntryHeaders.InteriorCloseBlocks + 1);
-                    }
-                    var zeroed = true;
-                    for (var at = 4; at < close.Length; at++)
-                    {
-                        if (close[at] != 0)
-                        {
-                            zeroed = false;
-                            break;
-                        }
-                    }
-                    if (zeroed)
-                    {
-                        structureEntryHeaders.CloseBlocksEndingInEightZeros =
-                            checked(structureEntryHeaders.CloseBlocksEndingInEightZeros + 1);
-                        if (isFinal)
-                        {
-                            structureEntryHeaders.FinalCloseBlocksEndingInEightZeros = checked(
-                                structureEntryHeaders.FinalCloseBlocksEndingInEightZeros + 1);
-                        }
-                        else
-                        {
-                            structureEntryHeaders.InteriorCloseBlocksEndingInEightZeros = checked(
-                                structureEntryHeaders.InteriorCloseBlocksEndingInEightZeros + 1);
-                        }
-                    }
-                    // The control that makes the count mean something: the same span
-                    // read four bytes earlier. If eight zeros were simply common here
-                    // the shifted window would score the same way.
-                    var shiftedZero = true;
-                    for (var at = 0; at < close.Length - 4; at++)
-                    {
-                        if (close[at] != 0)
-                        {
-                            shiftedZero = false;
-                            break;
-                        }
-                    }
-                    if (shiftedZero)
-                    {
-                        structureEntryHeaders.CloseBlockControlsEndingInEightZeros = checked(
-                            structureEntryHeaders.CloseBlockControlsEndingInEightZeros + 1);
-                    }
-                    HircBump(
-                        structureEntryHeaders.CloseBlockHeads,
-                        $"head_{BinaryPrimitives.ReadUInt32LittleEndian(close.AsSpan(0, 4)):X8}",
-                        1);
-                }
-            }
-            var headersNamingASource = 0;
-            for (var index = 0; index < headers.Count; index++)
-            {
-                var header = headers[index];
-                CensusType11EntryHeader(structureEntryHeaders, header, index == 0);
-                if (structureEntryHeaders is not null && header.Length >= 8)
-                {
-                    // The join that confirms the entry header's word at 4 is the
-                    // source id: it must be one of the ids this very body declares.
-                    structureEntryHeaders.SourceJoinTested =
-                        checked(structureEntryHeaders.SourceJoinTested + 1);
-                    if (sourceIds.Contains(BinaryPrimitives.ReadUInt32LittleEndian(
-                            header.AsSpan(4, 4))))
-                    {
-                        structureEntryHeaders.SourceJoinMatched =
-                            checked(structureEntryHeaders.SourceJoinMatched + 1);
-                        headersNamingASource = checked(headersNamingASource + 1);
-                    }
-                }
-            }
-            if (structureEntryHeaders is not null && headers.Count > 0)
-            {
-                // Per body, not per header. The word at +4 names a declared source in
-                // every single-entry body, and in exactly one of the two entries of a
-                // two-entry body -- so a per-header rate would read as a regression
-                // where a per-body one reads as the structure it is.
-                structureEntryHeaders.SourceJoinBodies =
-                    checked(structureEntryHeaders.SourceJoinBodies + 1);
-                if (headersNamingASource > 0)
-                {
-                    structureEntryHeaders.SourceJoinBodiesWithAMatch =
-                        checked(structureEntryHeaders.SourceJoinBodiesWithAMatch + 1);
-                }
-            }
-            foreach (var region in curves)
-            {
-                CensusType11Curves(structureEntryHeaders, region);
-            }
-            if (structureEntryHeaders is not null)
-            {
-                HircBump(
-                    structureEntryHeaders.EntryCountValues,
-                    $"entries_{Math.Min(entryShape, 8)}",
-                    1);
-            }
-            return HircFrameExact(cursor, body.Length, groups, selectors, null);
-        }
-
-        /// <summary>
-        /// Census the fields of numeric type 0x0B's 48-byte entry header.
-        /// </summary>
-        /// <remarks>
-        /// Four readings, each scored against a neighbouring word so that none is
-        /// credited for a property every word in the header would satisfy.
-        ///
-        /// The words at 16 and 24 are a symmetric float pair: where either is nonzero
-        /// they are exact negatives of each other in 1,218 of 1,404 entries, and the
-        /// low one is the lesser in 1,264. Values sit around plus or minus five. What
-        /// they bound is not claimed.
-        ///
-        /// The words at 28 and 36 are fixed-point fractions of 2^32, the same encoding
-        /// numeric type 0x0A carries: they read as 0, 1/3, 2/3, 1/2 and 1/6 and almost
-        /// nothing else. A word read at a wrong offset does not land on small
-        /// rationals.
-        ///
-        /// The element count at 44 is censused because of what it shows about this
-        /// reader rather than about the format: it is 1 in **every** entry the frame
-        /// closes. Reading it as a count and reading it as the constant 1 produce the
-        /// same 3,715 bodies, so the corpus does not yet distinguish them, and the
-        /// gate says so instead of the code implying otherwise.
-        /// </remarks>
-        private static void CensusType11EntryHeader(
-            EndfieldHircType11EntryHeaderCensus? census,
-            ReadOnlySpan<byte> header,
-            bool isFirstEntry)
-        {
-            if (census is null || header.Length < Type11EntryHeaderBytes)
-            {
-                return;
-            }
-            census.Entries = checked(census.Entries + 1);
-            var elements = BinaryPrimitives.ReadUInt32LittleEndian(
-                header.Slice(Type11EntryElementCountOffset, 4));
-            HircBump(census.ElementCountValues, $"elements_{Math.Min(elements, 8)}", 1);
-
-            static void ScoreRange(
-                ReadOnlySpan<byte> header, int lowOffset, int highOffset,
-                ref uint tested, ref uint symmetric, ref uint ordered)
-            {
-                var low = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(lowOffset, 4));
-                var high = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(highOffset, 4));
-                if (low == 0 && high == 0)
-                {
-                    // Both zero satisfies every symmetry for free; excluded so the rate
-                    // measures the entries that carry a range rather than the corpus.
-                    return;
-                }
-                tested = checked(tested + 1);
-                var lowFloat = BitConverter.Int32BitsToSingle(unchecked((int)low));
-                var highFloat = BitConverter.Int32BitsToSingle(unchecked((int)high));
-                if (float.IsFinite(lowFloat) && float.IsFinite(highFloat))
-                {
-                    if (lowFloat == -highFloat)
-                    {
-                        symmetric = checked(symmetric + 1);
-                    }
-                    if (lowFloat <= highFloat)
-                    {
-                        ordered = checked(ordered + 1);
-                    }
-                }
-            }
-
-            var tested = census.RangeTested;
-            var symmetric = census.RangeIsSymmetric;
-            var ordered = census.RangeIsOrdered;
-            ScoreRange(header, Type11EntryRangeLowOffset, Type11EntryRangeHighOffset,
-                ref tested, ref symmetric, ref ordered);
-            census.RangeTested = tested;
-            census.RangeIsSymmetric = symmetric;
-            census.RangeIsOrdered = ordered;
-
-            var controlTested = census.RangeControlTested;
-            var controlSymmetric = census.RangeControlIsSymmetric;
-            var controlOrdered = census.RangeControlIsOrdered;
-            ScoreRange(header, Type11EntryRangeControlOffset, Type11EntryRangeHighOffset,
-                ref controlTested, ref controlSymmetric, ref controlOrdered);
-            census.RangeControlTested = controlTested;
-            census.RangeControlIsSymmetric = controlSymmetric;
-            census.RangeControlIsOrdered = controlOrdered;
-
-            foreach (var (offset, isFloatControl) in new[]
-            {
-                (Type11EntryBoundedFloatOffset, false),
-                (Type11EntryFloatControlOffsets[0], true),
-                (Type11EntryFloatControlOffsets[1], true),
-            })
-            {
-                var raw = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
-                if (raw == 0)
-                {
-                    continue;
-                }
-                var value = Math.Abs(BitConverter.Int32BitsToSingle(unchecked((int)raw)));
-                var inBand = float.IsFinite(value)
-                    && value >= Type11EntryBoundedFloatLow
-                    && value <= Type11EntryBoundedFloatHigh;
-                if (isFloatControl)
-                {
-                    census.FloatControlsTested = checked(census.FloatControlsTested + 1);
-                    if (inBand)
-                    {
-                        census.FloatControlsInBand = checked(census.FloatControlsInBand + 1);
-                    }
-                }
-                else
-                {
-                    census.BoundedFloatsTested = checked(census.BoundedFloatsTested + 1);
-                    if (inBand)
-                    {
-                        census.BoundedFloatsInBand = checked(census.BoundedFloatsInBand + 1);
-                    }
-                }
-            }
-            // The word at +32, which nine id populations failed to explain: object
-            // references same-bank and corpus-wide, source ids, media ids, bank ids,
-            // STMG's ids, fixed-point fractions and the 24,231 identifier literal
-            // hashes. It is a float.
-            //
-            // 2,189 of its 2,189 nonzero values are plausible ones -- 865 exactly
-            // NEGATIVE zero, and the other 1,324 in -9.83 to 7.81 with 1,220 of them
-            // negative. Every other offset from 28 to 39 scores between 0 and 17.7%,
-            // the aligned neighbours at 28 and 36 included.
-            //
-            // The -0.0 is the part that took so long. A band test that asks for
-            // `abs(v) > 1e-4` throws away 0x80000000 as "not a float", which is 40% of
-            // the field. *A field whose unset marker is negative zero looks unlike a
-            // float to any test that treats zero as uninteresting.*
-            foreach (var (offset, isControl) in new[]
-            {
-                (Type11EntryGainOffset, false),
-                (Type11EntryGainControlOffset, true),
-                (Type11EntryGainSecondControlOffset, true),
-            })
-            {
-                var raw = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
-                if (raw == 0)
-                {
-                    continue;
-                }
-                var value = BinaryPrimitives.ReadSingleLittleEndian(header.Slice(offset, 4));
-                var plausible = !float.IsNaN(value) && !float.IsInfinity(value)
-                    && (value == 0.0f
-                        || (Math.Abs(value) > 1e-4f && Math.Abs(value) < 1e4f));
-                if (isControl)
-                {
-                    census.GainControlsTested = checked(census.GainControlsTested + 1);
-                    if (plausible)
-                    {
-                        census.GainControlsPlausible =
-                            checked(census.GainControlsPlausible + 1);
-                    }
-                }
-                else if (isFirstEntry)
-                {
-                    census.GainsTested = checked(census.GainsTested + 1);
-                    if (plausible)
-                    {
-                        census.GainsPlausible = checked(census.GainsPlausible + 1);
-                    }
-                    if (raw == 0x80000000u)
-                    {
-                        census.GainsThatAreNegativeZero =
-                            checked(census.GainsThatAreNegativeZero + 1);
-                    }
-                }
-                else
-                {
-                    // The same offset in a LATER entry, and the sharpest control this
-                    // field has: 2 of 26 plausible, the rate of a shifted read. The
-                    // word at +32 is a float in the first entry header and is not one
-                    // after it -- independent evidence that a later entry is not the
-                    // same 48-byte layout as the first.
-                    census.LaterEntryGainsTested =
-                        checked(census.LaterEntryGainsTested + 1);
-                    if (plausible)
-                    {
-                        census.LaterEntryGainsPlausible =
-                            checked(census.LaterEntryGainsPlausible + 1);
-                    }
-                }
-            }
-            // The words at +12 and +20 are the same field twice: equal in 1,102 of the
-            // bodies where both are nonzero. Censused, not claimed -- what the pair is
-            // remains unknown, and nine populations have failed to say.
-            {
-                var first = BinaryPrimitives.ReadUInt32LittleEndian(
-                    header.Slice(Type11EntryPairFirstOffset, 4));
-                var second = BinaryPrimitives.ReadUInt32LittleEndian(
-                    header.Slice(Type11EntryPairSecondOffset, 4));
-                if (first != 0 && second != 0)
-                {
-                    census.PairsTested = checked(census.PairsTested + 1);
-                    if (first == second)
-                    {
-                        census.PairsEqual = checked(census.PairsEqual + 1);
-                    }
-                }
-            }
-            foreach (var (offset, isControl) in new[]
-            {
-                (Type11EntryFractionOffset, false),
-                (Type11EntrySecondFractionOffset, false),
-                (Type11EntryFractionControlOffset, true),
-            })
-            {
-                var value = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(offset, 4));
-                if (value == 0)
-                {
-                    // Zero is a small fraction for free.
-                    continue;
-                }
-                if (isControl)
-                {
-                    census.FractionControlsTested = checked(census.FractionControlsTested + 1);
-                    if (IsSmallFraction(value))
-                    {
-                        census.FractionControlsAreSmall = checked(census.FractionControlsAreSmall + 1);
-                    }
-                    continue;
-                }
-                census.FractionsTested = checked(census.FractionsTested + 1);
-                if (IsSmallFraction(value))
-                {
-                    census.FractionsAreSmall = checked(census.FractionsAreSmall + 1);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Census the interpolation codes of numeric type 0x0B's curve records.
-        /// </summary>
-        /// <remarks>
-        /// This is what settles the run's internal split, because the run's *length*
-        /// does not: 11 + 12n + 1 and 12 + 12n are the same number of bytes, so the
-        /// body frame closes the same 3,715 bodies under either. What differs is what
-        /// the records contain. Under the 11-byte header every record carries a code
-        /// in 0..9; under 12 none does, and the floats are noise.
-        ///
-        /// The rival header widths are scored the same way so the split is
-        /// discriminated rather than asserted, and the contiguity of the code range is
-        /// the discriminator: a 32-bit word read at a wrong offset is not a small
-        /// integer, let alone one drawn from a contiguous ten-value set.
-        /// </remarks>
-        private static void CensusType11Curves(
-            EndfieldHircType11EntryHeaderCensus? census,
-            ReadOnlySpan<byte> region)
-        {
-            if (census is null || region.Length == 0 || region.Length % Type11ElementRecordBytes != 0)
-            {
-                return;
-            }
-            var count = region.Length / Type11ElementRecordBytes;
-            for (var i = 0; i < count; i++)
-            {
-                var record = region.Slice(i * Type11ElementRecordBytes, Type11ElementRecordBytes);
-                census.CurveRecords = checked(census.CurveRecords + 1);
-                var code = BinaryPrimitives.ReadUInt32LittleEndian(
-                    record.Slice(Type11CurveCodeOffset, 4));
-                if (code <= Type11CurveMaximumCode)
-                {
-                    census.CurveCodesInRange = checked(census.CurveCodesInRange + 1);
-                    HircBump(census.CurveCodes, $"code_{code}", 1);
-                }
-            }
-            // The control: read the same region as though the header had been one byte
-            // wider or narrower. Only the chosen split can produce codes in range,
-            // because the others slice the record across its float boundary.
-            foreach (var rival in Type11RunHeaderRivals)
-            {
-                if (rival == Type11ElementRunHeaderBytes)
-                {
-                    continue;
-                }
-                var shift = rival - Type11ElementRunHeaderBytes;
-                for (var i = 0; i < count; i++)
-                {
-                    var at = i * Type11ElementRecordBytes + Type11CurveCodeOffset + shift;
-                    if (at < 0 || at + 4 > region.Length)
-                    {
-                        continue;
-                    }
-                    census.CurveControlsTested = checked(census.CurveControlsTested + 1);
-                    var code = BinaryPrimitives.ReadUInt32LittleEndian(region.Slice(at, 4));
-                    if (code <= Type11CurveMaximumCode)
-                    {
-                        census.CurveControlsInRange = checked(census.CurveControlsInRange + 1);
-                    }
-                }
-            }
-        }
-
-        private const int Type17RunElementBytes = 6;
-
-        // A counted block: one byte of count, that many one-byte keys, then that many
-        // values of the given width. Keys and values are parallel runs, the same shape
-        // numeric type 0x16 uses.
-        private static bool TakeSmallBlock(
-            ReadOnlySpan<byte> body,
-            ref int cursor,
-            int valueBytes,
-            out byte count)
-        {
-            count = 0;
-            if (cursor >= body.Length)
-            {
-                return false;
-            }
-            count = body[cursor];
-            cursor = checked(cursor + 1);
-            var span = checked(count * (1 + valueBytes));
-            if (span > body.Length - cursor)
-            {
-                return false;
-            }
-            cursor = checked(cursor + span);
-            return true;
-        }
-
-        private static void RecordSmallType(
-            EndfieldHircSmallTypeCensus census,
-            ReadOnlySpan<byte> body,
-            byte objectType)
-        {
-            void Fail(string category)
-            {
-                census.Failed = checked(census.Failed + 1);
-                HircBump(census.FailureCounts, category, 1);
-            }
-
-            var cursor = 0;
-            if (objectType == 21)
-            {
-                // Numeric type 0x15 shares the eight-byte header numeric types 0x10 and
-                // 0x11 use, then closes with eight further bytes.
-                if (body.Length < 8)
-                {
-                    Fail("short_header");
-                    return;
-                }
-                var size = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(4, 4));
-                if (size > (uint)(body.Length - 8))
-                {
-                    Fail("range_section");
-                    return;
-                }
-                cursor = checked(8 + (int)size);
-                if (!HircTake(body, ref cursor, 8, out _, "type21Tail"))
-                {
-                    Fail("truncated_type21Tail");
-                    return;
-                }
-            }
-            else
-            {
-                // Numeric types 0x13 and 0x14: a block of four-byte values, a block of
-                // eight-byte values, then two bytes.
-                if (!TakeSmallBlock(body, ref cursor, 4, out _))
-                {
-                    Fail("range_firstBlock");
-                    return;
-                }
-                if (!TakeSmallBlock(body, ref cursor, 8, out var secondCount))
-                {
-                    Fail("range_secondBlock");
-                    return;
-                }
-                if (secondCount > 0)
-                {
-                    census.BodiesWithSecondBlock = checked(census.BodiesWithSecondBlock + 1);
-                    census.SecondBlockEntries = checked(census.SecondBlockEntries + secondCount);
-                }
-                if (!HircTake(body, ref cursor, 2, out _, "smallTypeTail"))
-                {
-                    Fail("truncated_smallTypeTail");
-                    return;
-                }
-            }
-            if (cursor != body.Length)
-            {
-                Fail("trailing_bytes");
-                return;
-            }
-            census.Exact = checked(census.Exact + 1);
-            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
-        }
-
-        private static void RecordType09(
-            EndfieldHircType09Census census,
-            ReadOnlySpan<byte> body,
-            uint? bankVersion)
-        {
-            void Fail(string category)
-            {
-                census.Failed = checked(census.Failed + 1);
-                HircBump(census.FailureCounts, category, 1);
-            }
-
-            if (bankVersion != 150)
-            {
-                Fail("unsupported_bank_version");
-                return;
-            }
-            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var cursor = 0;
-            if (!FrameHircNodeGroups(body, ref cursor, groups, selectors, out var failure))
-            {
-                Fail(failure.Category ?? "nodeFrame");
-                return;
-            }
-            if (!HircReadUInt32(body, ref cursor, out var entryCount, out failure, "type09RunCount"))
-            {
-                Fail(failure.Category ?? "truncated_type09RunCount");
-                return;
-            }
-            if (entryCount > (uint)((body.Length - cursor) / 4))
-            {
-                Fail("range_type09Run");
-                return;
-            }
-            cursor = checked(cursor + (int)entryCount * 4);
-            if (!HircReadUInt32(body, ref cursor, out var secondCount, out failure, "type09SecondCount"))
-            {
-                Fail(failure.Category ?? "truncated_type09SecondCount");
-                return;
-            }
-            if (secondCount != 0)
-            {
-                // A nonzero second count introduces records this reader cannot frame.
-                // Consuming them by guess would produce an exact-looking body that is
-                // not evidence of anything.
-                census.UnestablishedSecondRun = checked(census.UnestablishedSecondRun + 1);
-                return;
-            }
-            if (!HircReadByte(body, ref cursor, out var tailFlag, out failure, "type09TailFlag"))
-            {
-                Fail(failure.Category ?? "truncated_type09TailFlag");
-                return;
-            }
-            HircBump(census.TailFlagCounts, $"tail_{tailFlag:X2}", 1);
-            if (cursor != body.Length)
-            {
-                Fail("trailing_bytes");
-                return;
-            }
-            census.Exact = checked(census.Exact + 1);
-            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
-            census.RunEntries = checked(census.RunEntries + entryCount);
-        }
-
-        // Numeric type 0x10 bodies whose third byte is 0x7F end in something group I
-        // does not describe -- it fails to parse there at every offset tried. They are
-        // fenced under their own reason rather than counted as a failure of the grammar
-        // the other bodies satisfy.
-        private const byte Type16UnestablishedVariant = 0x7F;
-
-        private static void RecordType17(
-            EndfieldHircType17Census census,
-            ReadOnlySpan<byte> body,
-            byte objectType)
-        {
-            void Fence(string reason)
-            {
-                census.Fenced = checked(census.Fenced + 1);
-                HircBump(census.FenceReasons, reason, 1);
-            }
-
-            void Fail(string category)
-            {
-                census.Failed = checked(census.Failed + 1);
-                HircBump(census.FailureCounts, category, 1);
-            }
-
-            if (body.Length < 8)
-            {
-                Fail("short_header");
-                return;
-            }
-            if (objectType == 16 && body[2] == Type16UnestablishedVariant)
-            {
-                Fence("type10_variant7F");
-                return;
-            }
-            var size = BinaryPrimitives.ReadUInt32LittleEndian(body.Slice(4, 4));
-            if (size > (uint)(body.Length - 8))
-            {
-                Fail("range_section");
-                return;
-            }
-            var cursor = checked(8 + (int)size);
-            if (cursor + 1 > body.Length)
-            {
-                Fail("truncated_anonymousByte");
-                return;
-            }
-            cursor = checked(cursor + 1);
-            var groups = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var selectors = new Dictionary<string, uint>(StringComparer.Ordinal);
-            if (!FrameHircGroupI(body, ref cursor, groups, selectors, out var failure))
-            {
-                Fail(failure.Category ?? "groupI");
-                return;
-            }
-            if (cursor + 2 > body.Length)
-            {
-                Fail("truncated_optionalBlockFlag");
-                return;
-            }
-            var flag = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
-            cursor = checked(cursor + 2);
-            if (flag != 0)
-            {
-                // Two block widths fit every flagged body and nothing distinguishes
-                // them, so this body is not framed rather than framed by guess.
-                Fence("tiedOptionalBlockWidth");
-                return;
-            }
-            if (cursor + 2 > body.Length)
-            {
-                Fail("truncated_runCount");
-                return;
-            }
-            var runCount = BinaryPrimitives.ReadUInt16LittleEndian(body.Slice(cursor, 2));
-            cursor = checked(cursor + 2);
-            if (runCount > (body.Length - cursor) / Type17RunElementBytes)
-            {
-                Fail("range_run");
-                return;
-            }
-            cursor = checked(cursor + runCount * Type17RunElementBytes);
-            if (cursor != body.Length)
-            {
-                Fail("trailing_bytes");
-                return;
-            }
-            census.Exact = checked(census.Exact + 1);
-            census.ExactBytes = checked(census.ExactBytes + (uint)body.Length);
-            census.RunElements = checked(census.RunElements + runCount);
-            groups.TryGetValue("groupIEntries", out var entries);
-            census.GroupIEntries = checked(census.GroupIEntries + entries);
-        }
-
+        // Group E = PositioningParams (CAkParameterNodeBase::SetPositioningParams).
+        // u8 uBitsPositioning: bit0 bPositioningInfoOverrideParent, bit1
+        // bHasListenerRelativeRouting, bits 2-3 panner type, bits 5-6 e3DPositionType.
+        // The engine returns as soon as bit0 is clear, and again as soon as bit1 is
+        // clear, so the extension exists only when both are set: u8 uBits3D (bits 0-1
+        // spatialization mode, bit5 bHoldEmitterPosAndOrient, bit6 bHoldListenerOrient
+        // as stored bits), and then, only when e3DPositionType is 1 or 2 (emitter or
+        // listener with automation), u8 ePathMode, s32 TransitionTime, u32 ulNumVertices
+        // x { f32 x, f32 y, f32 z, s32 duration }, u32 ulNumPlayListItem x { u32
+        // ulVerticesOffset, u32 iNumVertices } and then ulNumPlayListItem x { f32 xRange,
+        // f32 yRange, f32 zRange }. The two per-item runs are counted here as one
+        // twenty-byte item so the published inventory keeps its key.
         private static bool FrameHircGroupE(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -7137,18 +6318,9 @@ namespace AnimeStudio.Endfield
                 return false;
             }
             HircBump(selectors, $"groupESelector_{bits:X2}", 1);
-            var low = bits & 0x03;
-            if (low == 0x02)
+            if ((bits & 0x03) != 0x03)
             {
-                // Selector bit 1 alone is never observed, so this body cannot choose a
-                // branch: bit-1-only and both-bits-set remain indistinguishable predicates.
-                failure = HircFrameOutcome(
-                    "unsupported", "unsupported_groupE_selector", cursor - 1, 0x03, low);
-                return false;
-            }
-            if ((low & 0x02) == 0)
-            {
-                // Selector 0x01 bodies carry no extension, which rules out a bit-0 predicate.
+                // Override cleared, or no listener-relative routing: nothing more is read.
                 return true;
             }
             if (!HircTake(body, ref cursor, 1, out failure, "groupEFlags"))
@@ -7157,15 +6329,10 @@ namespace AnimeStudio.Endfield
             }
             var branch = (bits >> 5) & 0x03;
             HircBump(selectors, $"groupEBranch_{branch}", 1);
-            if (branch == 0)
+            if (branch is 0 or 3)
             {
+                // e3DPositionType 0 (emitter) and 3 carry no automation block.
                 return true;
-            }
-            if (branch == 3)
-            {
-                failure = HircFrameOutcome(
-                    "unsupported", "unsupported_groupE_branch", cursor - 2, 2, branch);
-                return false;
             }
             if (!HircTake(body, ref cursor, 5, out failure, "groupEBranchHeader"))
             {
@@ -7192,12 +6359,18 @@ namespace AnimeStudio.Endfield
                     "failed", "range_groupEItems", cursor - 4, (body.Length - cursor) / 20, itemCount);
                 return false;
             }
-            cursor = checked(cursor + (int)itemCount * 20);
+            // Playlist items, then their range triples: two runs, one counted key.
+            cursor = checked(cursor + (int)itemCount * 8);
+            cursor = checked(cursor + (int)itemCount * 12);
             HircBump(groups, "groupEVertices", vertexCount);
             HircBump(groups, "groupEItems", itemCount);
             return true;
         }
 
+        // Group F = AuxParams (CAkParameterNodeBase::SetAuxParams): u8 byBitVector with
+        // bit0 bOverrideGameAuxSends, bit1 bUseGameAuxSends, bit2 bOverrideUserAuxSends,
+        // bit3 bHasAux, bit4 bOverrideReflectionsAuxBus; when bit3 is set 4 x u32 aux
+        // bus id; then always u32 reflectionsAuxBus.
         private static bool FrameHircGroupF(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -7220,6 +6393,14 @@ namespace AnimeStudio.Endfield
         // selector inventory with one key per observed element count.
         private const int HircStateWidthHistogramLimit = 8;
 
+        // Group H = StateChunk (CAkStateAware::ReadStateChunk). Every count here is a
+        // seven-bit continuation value in the engine, so the byte the current corpus
+        // spends on each is the short form, not a fixed width: varint ulNumStateProps
+        // x { varint AkPropID, u8 accumType, u8 inDb }, varint ulNumStateGroups x
+        // { u32 ulStateGroupID, u8 eStateSyncType, varint ulNumStates x { u32
+        // ulStateID, u16 count, count x u16 AkPropID, count x u32 value } }. A state's
+        // property ids must be strictly increasing; the engine rejects the bank
+        // otherwise, and that ordering is not re-checked here.
         private static bool FrameHircGroupH(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -7227,19 +6408,28 @@ namespace AnimeStudio.Endfield
             Dictionary<string, uint> selectors,
             out EndfieldHircBodyFrameResult failure)
         {
-            if (!HircReadByte(body, ref cursor, out var propCount, out failure, "groupHPropCount"))
+            if (!HircReadVariableSize(body, ref cursor, out var propCountWide, out failure, "groupHPropCount"))
             {
                 return false;
             }
-            if (!HircTake(body, ref cursor, propCount * 3, out failure, "groupHProps"))
+            var propCount = checked((uint)propCountWide);
+            for (var i = 0U; i < propCount; i++)
             {
-                return false;
+                if (!HircReadVariableSize(body, ref cursor, out _, out failure, "groupHPropId"))
+                {
+                    return false;
+                }
+                if (!HircTake(body, ref cursor, 2, out failure, "groupHProps"))
+                {
+                    return false;
+                }
             }
             HircBump(groups, "groupHProps", propCount);
-            if (!HircReadByte(body, ref cursor, out var groupCount, out failure, "groupHGroupCount"))
+            if (!HircReadVariableSize(body, ref cursor, out var groupCountWide, out failure, "groupHGroupCount"))
             {
                 return false;
             }
+            var groupCount = checked((uint)groupCountWide);
             HircBump(groups, "groupHGroups", groupCount);
             // Seed both state counters so a body that frames no group still publishes the
             // rows; an absent row and a zero row must not look different to a consumer.
@@ -7251,16 +6441,16 @@ namespace AnimeStudio.Endfield
                 {
                     return false;
                 }
-                if (!HircReadByte(body, ref cursor, out var stateCount, out failure, "groupHStateCount"))
+                if (!HircReadVariableSize(body, ref cursor, out var stateCountWide, out failure, "groupHStateCount"))
                 {
                     return false;
                 }
+                var stateCount = checked((uint)stateCountWide);
                 HircBump(groups, "groupHStates", stateCount);
-                // Each state is a four-byte key and its own counted vector of six-byte
-                // elements, not a fixed twelve bytes. Every state in types 0x02, 0x05 and
-                // 0x07 carries exactly one element, so a fixed width survived all three
-                // corpora; type 0x09 bodies carry two and disprove it.
-                for (var state = 0; state < stateCount; state++)
+                // Each state is a four-byte id and its own u16-counted property list,
+                // stored as a run of u16 ids then a run of u32 values: six bytes per
+                // property, counted here as one element.
+                for (var state = 0U; state < stateCount; state++)
                 {
                     if (!HircTake(body, ref cursor, 4, out failure, "groupHStateKey"))
                     {
@@ -7295,6 +6485,11 @@ namespace AnimeStudio.Endfield
             return true;
         }
 
+        // Group I = InitialRTPC (AK::RTPC::ReadRtpcCurves): u16 uNumCurves x { u32
+        // RTPCID, u8 rtpcType, u8 rtpcAccum, varint ParamID, u32 rtpcCurveID, u8
+        // eScaling, u16 ulSize x { f32 from, f32 to, u32 interpolation } }. The engine
+        // accumulates the varint most-significant group first and has no width cap;
+        // this reader follows that order and adds a five-byte cap of its own.
         private static bool FrameHircGroupI(
             ReadOnlySpan<byte> body,
             ref int cursor,
@@ -7319,8 +6514,8 @@ namespace AnimeStudio.Endfield
                 {
                     return false;
                 }
-                // One anonymous variable-size key. Type 0x02 bodies only ever spend one
-                // byte here, so a fixed width survived that corpus; type 0x07 bodies
+                // The ParamID is a variable-size key. Type 0x02 bodies only ever spend
+                // one byte here, so a fixed width survived that corpus; type 0x07 bodies
                 // carry continued values and disprove it.
                 var keyStart = cursor;
                 if (!HircReadVariableSize(body, ref cursor, out _, out failure, "groupIKey"))
@@ -7417,7 +6612,8 @@ namespace AnimeStudio.Endfield
                 }
                 var current = body[cursor];
                 cursor = checked(cursor + 1);
-                value |= (ulong)(current & 0x7F) << (index * 7);
+                // Most-significant group first, as the engine's readers accumulate it.
+                value = (value << 7) | (ulong)(current & 0x7F);
                 if ((current & 0x80) == 0)
                 {
                     failure = null;
@@ -7436,13 +6632,13 @@ namespace AnimeStudio.Endfield
                 failure = HircFrameOutcome("failed", $"unterminated_{what}", cursor - 1, 1, 1);
                 return false;
             }
-            // Byte five contributes bits 28..34, so bits 4..6 would exceed 32 bits.
-            if ((last & 0x70) != 0)
+            // Five groups carry 35 bits; anything above 32 is an overflow.
+            value = (value << 7) | (ulong)(last & 0x7F);
+            if (value > uint.MaxValue)
             {
                 failure = HircFrameOutcome("failed", $"overflow_{what}", cursor - 1, 1, 1);
                 return false;
             }
-            value |= (ulong)(last & 0x7F) << 28;
             failure = null;
             return true;
         }
@@ -7534,8 +6730,19 @@ namespace AnimeStudio.Endfield
                 return;
             }
 
-            var entryCount = body[0];
-            var expectedBytes = checked(1 + entryCount * sizeof(uint));
+            // CAkEvent::SetInitialValues reads the action count as a seven-bit
+            // continuation value; every shipped event spends one byte on it.
+            var countCursor = 0;
+            if (!HircReadVariableSize(body, ref countCursor, out var entryCountWide, out _, "eventActionCount"))
+            {
+                RecordType4U32VectorFailure(
+                    "truncated_count", 1, body.Length, bankId, ordinal, objectId, structure);
+                structure.Type4U32VectorFailedBodyBytes = checked(
+                    structure.Type4U32VectorFailedBodyBytes + (uint)body.Length);
+                return;
+            }
+            var entryCount = checked((int)entryCountWide);
+            var expectedBytes = checked(countCursor + entryCount * sizeof(uint));
             if (expectedBytes > body.Length)
             {
                 RecordType4U32VectorFailure(
@@ -7554,7 +6761,7 @@ namespace AnimeStudio.Endfield
             structure.Type4U32VectorPrefixBytes = checked(
                 structure.Type4U32VectorPrefixBytes + (uint)expectedBytes);
             structure.Type4U32VectorEntryCount = checked(
-                structure.Type4U32VectorEntryCount + entryCount);
+                structure.Type4U32VectorEntryCount + (uint)entryCount);
             if (expectedBytes == body.Length)
             {
                 structure.Type4U32VectorExactCount = checked(
@@ -7564,12 +6771,12 @@ namespace AnimeStudio.Endfield
                 // Only an exact body's entries reach the reference census, so publish
                 // that subset rather than the total the gate would otherwise tie against.
                 structure.Type4U32VectorExactEntryCount = checked(
-                    structure.Type4U32VectorExactEntryCount + entryCount);
+                    structure.Type4U32VectorExactEntryCount + (uint)entryCount);
                 var references = new List<uint>(entryCount);
                 for (var entry = 0; entry < entryCount; entry++)
                 {
                     references.Add(BinaryPrimitives.ReadUInt32LittleEndian(
-                        body.Slice(checked(1 + entry * 4), 4)));
+                        body.Slice(checked(countCursor + entry * 4), 4)));
                 }
                 ResolveHircReferences(
                     structure.ReferenceCensus,
@@ -7748,14 +6955,10 @@ namespace AnimeStudio.Endfield
         public EndfieldHircReferenceCensus ReferenceCensus { get; } = new();
         public EndfieldHircNamedReachCensus NamedReachCensus { get; } = new();
         public EndfieldHircBodyCensus Type08Body { get; } = new();
-        public EndfieldHircBodyCensus Type11Body { get; } = new();
         public EndfieldHircBodyCensus Type12Body { get; } = new();
         public EndfieldHircBodyCensus Type14Body { get; } = new();
         public EndfieldHircBodyCensus Type22Body { get; } = new();
         public EndfieldHircMusicHeadReferenceCensus MusicHeadReferences { get; } = new();
-        public EndfieldHircType11SourceCensus Type11Sources { get; } = new();
-        public EndfieldHircType11ElementCensus Type11Elements { get; } = new();
-        public EndfieldHircType11EntryHeaderCensus Type11EntryHeaders { get; } = new();
         public EndfieldHircType08HeadCensus Type08Head { get; } = new();
         public EndfieldHircType08TailCensus Type08Tail { get; } = new();
         public EndfieldHircType08TailCensus Type12Tail { get; } = new();
@@ -7795,9 +6998,6 @@ namespace AnimeStudio.Endfield
         // carries cannot become an edge, only a count.
         public List<(uint Id, byte[] Body)> Type0ABodies { get; } = new();
         public List<(uint Predicted, uint Fixed, uint Plus, uint Minus, bool Discriminant, uint HeadWord, uint LeadBad, uint PadBad, ushort[] Values, int TailBytes, float TailFloat, float NeighbourFloat, uint Fraction, uint FractionControl, float Decibel, float DecibelControl, uint HeadWordFive)> Type0AHeadPredictions { get; } = new();
-        public EndfieldHircType17Census Type17 { get; } = new();
-        public EndfieldHircType09Census Type09 { get; } = new();
-        public EndfieldHircSmallTypeCensus SmallTypes { get; } = new();
         // (plug-in id -> source ids) for numeric type 0x02, kept so the package can
         // join them against its own media entries once every sector is parsed.
         public Dictionary<uint, HashSet<uint>> Type2SourcesByPlugin { get; } = new();
@@ -7817,6 +7017,17 @@ namespace AnimeStudio.Endfield
         public EndfieldHircBodyCensus Type5Body { get; } = new();
         public EndfieldHircBodyCensus Type6Body { get; } = new();
         public EndfieldHircBodyCensus Type7Body { get; } = new();
+        public EndfieldHircBodyCensus Type9Body { get; } = new();
+        public EndfieldHircBodyCensus Type0ABody { get; } = new();
+        public EndfieldHircBodyCensus Type0BBody { get; } = new();
+        public EndfieldHircBodyCensus Type0CBody { get; } = new();
+        public EndfieldHircBodyCensus Type0DBody { get; } = new();
+        public EndfieldHircBodyCensus Type0FBody { get; } = new();
+        public EndfieldHircBodyCensus Type10Body { get; } = new();
+        public EndfieldHircBodyCensus Type11Body { get; } = new();
+        public EndfieldHircBodyCensus Type13Body { get; } = new();
+        public EndfieldHircBodyCensus Type14ModBody { get; } = new();
+        public EndfieldHircBodyCensus Type15Body { get; } = new();
     }
 
     // One numeric HIRC type's whole-body census. Every type that opens with the shared
@@ -7940,47 +7151,6 @@ namespace AnimeStudio.Endfield
         // plug-in decides the outcome instead of assuming it.
         public Dictionary<string, SortedSet<uint>> SourceIdsByPlugin { get; } =
             new(StringComparer.Ordinal);
-    }
-
-    public sealed class EndfieldHircSmallTypeCensus
-    {
-        public uint Bodies { get; set; }
-        public uint Exact { get; set; }
-        public uint Failed { get; set; }
-        public uint ExactBytes { get; set; }
-        public uint BodyBytes { get; set; }
-        public uint BodiesWithSecondBlock { get; set; }
-        public uint SecondBlockEntries { get; set; }
-        public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
-    }
-
-    public sealed class EndfieldHircType09Census
-    {
-        public uint Bodies { get; set; }
-        public uint Exact { get; set; }
-        public uint UnestablishedSecondRun { get; set; }
-        public uint Failed { get; set; }
-        public uint ExactBytes { get; set; }
-        public uint BodyBytes { get; set; }
-        public uint RunEntries { get; set; }
-        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> TailFlagCounts { get; } = new(StringComparer.Ordinal);
-    }
-
-    public sealed class EndfieldHircType17Census
-    {
-        public uint Bodies { get; set; }
-        public uint Exact { get; set; }
-        public uint Fenced { get; set; }
-        public Dictionary<string, uint> FenceReasons { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> BodiesByType { get; } = new(StringComparer.Ordinal);
-        public uint Failed { get; set; }
-        public uint ExactBytes { get; set; }
-        public uint BodyBytes { get; set; }
-        public uint RunElements { get; set; }
-        public uint GroupIEntries { get; set; }
-        public Dictionary<string, uint> FailureCounts { get; } = new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircType08HeadCensus
@@ -8110,98 +7280,6 @@ namespace AnimeStudio.Endfield
         // be decided after the packages are summed.
         public Dictionary<string, uint> ZeroTrailerByCandidate { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ClosesByCandidate { get; } = new(StringComparer.Ordinal);
-    }
-
-    // The fields of numeric type 0x0B's 48-byte entry header that read as something.
-    public sealed class EndfieldHircType11EntryHeaderCensus
-    {
-        public uint Entries { get; set; }
-        public uint RangeTested { get; set; }
-        public uint RangeIsSymmetric { get; set; }
-        public uint RangeIsOrdered { get; set; }
-        public uint RangeControlTested { get; set; }
-        public uint RangeControlIsSymmetric { get; set; }
-        public uint RangeControlIsOrdered { get; set; }
-        public uint FractionsTested { get; set; }
-        public uint FractionsAreSmall { get; set; }
-        public uint FractionControlsTested { get; set; }
-        public uint FractionControlsAreSmall { get; set; }
-        // How many elements each entry declares. Censused because it is 1 in every
-        // entry the frame closes, which is what makes the "count" reading untested.
-        public Dictionary<string, uint> ElementCountValues { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> EntryCountValues { get; } = new(StringComparer.Ordinal);
-        // The 12 bytes every element trailer ends with. Four bytes that vary and
-        // eight that are zero, in every element of every body that frames.
-        public uint CloseBlocks { get; set; }
-        public uint CloseBlocksEndingInEightZeros { get; set; }
-        public uint CloseBlockControlsEndingInEightZeros { get; set; }
-        // Split once multi-element bodies began to frame, which is when the question
-        // "per element or per body?" finally had an answer.
-        public uint FinalCloseBlocks { get; set; }
-        public uint FinalCloseBlocksEndingInEightZeros { get; set; }
-        public uint InteriorCloseBlocks { get; set; }
-        public uint InteriorCloseBlocksEndingInEightZeros { get; set; }
-        // Every framed body must have at least one entry header naming a source the
-        // same body declares. In two-entry bodies exactly one of the two does.
-        public uint SourceJoinBodies { get; set; }
-        public uint SourceJoinBodiesWithAMatch { get; set; }
-        public Dictionary<string, uint> CloseBlockHeads { get; } = new(StringComparer.Ordinal);
-        // The curve records the element runs carry, and their interpolation codes.
-        public uint CurveRecords { get; set; }
-        public uint CurveCodesInRange { get; set; }
-        public uint CurveControlsTested { get; set; }
-        public uint CurveControlsInRange { get; set; }
-        public Dictionary<string, uint> CurveCodes { get; } = new(StringComparer.Ordinal);
-        public uint BoundedFloatsTested { get; set; }
-        public uint BoundedFloatsInBand { get; set; }
-        // The word at +32, and the pair at +12 and +20.
-        public uint GainsTested { get; set; }
-        public uint GainsPlausible { get; set; }
-        public uint GainsThatAreNegativeZero { get; set; }
-        public uint GainControlsTested { get; set; }
-        public uint GainControlsPlausible { get; set; }
-        public uint LaterEntryGainsTested { get; set; }
-        public uint LaterEntryGainsPlausible { get; set; }
-        public uint PairsTested { get; set; }
-        public uint PairsEqual { get; set; }
-        // The twelve bytes an element carries that are always zero.
-        public uint ReservedBytesChecked { get; set; }
-        public uint ReservedControlsChecked { get; set; }
-        public uint ReservedControlsZero { get; set; }
-        public uint FloatControlsTested { get; set; }
-        public uint FloatControlsInBand { get; set; }
-        public uint SourceJoinTested { get; set; }
-        public uint SourceJoinMatched { get; set; }
-    }
-
-    // Numeric type 0x0B's entry elements: how they end, and what that leaves.
-    public sealed class EndfieldHircType11ElementCensus
-    {
-        public uint Bodies { get; set; }
-        public uint NotASingleEntry { get; set; }
-        public uint NotASingleElement { get; set; }
-        public uint Elements { get; set; }
-        public uint TrailerIsAmbiguous { get; set; }
-        public uint BodyIsNotWholeRecords { get; set; }
-        public uint Framed { get; set; }
-        public uint ElementsWithRecords { get; set; }
-        public uint CountFieldAgrees { get; set; }
-        public Dictionary<string, uint> TrailerForm { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> RecordsPerElement { get; } = new(StringComparer.Ordinal);
-        // Per rival anchor pair: how many elements it picks one trailer for, and how
-        // many of those it leaves a whole number of records behind. The second is the
-        // test; the first is the control that shows the second is not just closure.
-        public Dictionary<string, uint> AnchorSelectsOneTrailer { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> AnchorLeavesWholeRecords { get; } = new(StringComparer.Ordinal);
-        // The element's own frame. FrameCloses counts every element a candidate frame
-        // closes; FrameClosesWithRuns counts only the elements that declare at least
-        // one run, which are the ones whose run walk is exercised at all.
-        public uint ElementsWithRuns { get; set; }
-        public uint ElementFrames { get; set; }
-        public Dictionary<string, uint> FrameCloses { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> FrameClosesWithRuns { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> RunsPerElement { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> RecordsPerFramedElement { get; } = new(StringComparer.Ordinal);
     }
 
     // The STMG section's header and first record run.
@@ -8419,45 +7497,6 @@ namespace AnimeStudio.Endfield
         public uint HeadIsNotTheObservedWidth { get; set; }
         public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, uint> ThirdFieldCounts { get; } = new(StringComparer.Ordinal);
-    }
-
-    public sealed class EndfieldHircType11SourceCensus
-    {
-        public uint Bodies { get; set; }
-        public uint BodiesWithRecords { get; set; }
-        public uint Records { get; set; }
-        public uint RecordsOutOfRange { get; set; }
-        public uint TooShort { get; set; }
-        // Every body observed ends with the same four bytes. Counted rather than
-        // assumed, so a body without it is visible instead of silently framed.
-        public uint EndsWithTerminator { get; set; }
-        public Dictionary<string, uint> TerminatorCounts { get; } = new(StringComparer.Ordinal);
-        // The counted run of variable-width entries between the source run and the
-        // terminator. The entries are not walked; only their count and the source ids
-        // they echo are.
-        public uint BodiesWithATail { get; set; }
-        public uint NoTailAfterTheRun { get; set; }
-        public uint TailCountOutOfRange { get; set; }
-        public uint TailEntriesDeclared { get; set; }
-        public uint TailEntriesEchoed { get; set; }
-        public uint TailEchoesMatchTheCount { get; set; }
-        public uint TailEchoesExceedTheCount { get; set; }
-        public uint FirstTailEntryNamesADeclaredSource { get; set; }
-        public uint FirstTailEntryTooShort { get; set; }
-        // The twelve-byte records inside a tail entry: two floats and an
-        // interpolation code, the same shape numeric types 0x08 and 0x12 carry.
-        public uint EntriesInspected { get; set; }
-        public uint EntriesWithNoRecords { get; set; }
-        public uint EntriesWhoseRecordsFit { get; set; }
-        public uint EntriesWhoseCountIsNotUsable { get; set; }
-        public uint EntriesWhoseRecordsRunPastTheEnd { get; set; }
-        public uint CurveRecords { get; set; }
-        public Dictionary<string, uint> InterpolationCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> TailEntryCountCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> FirstTailEntryLeadingWordCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> PluginIdCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> StreamTypeCounts { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, uint> RecordCountCounts { get; } = new(StringComparer.Ordinal);
     }
 
     public sealed class EndfieldHircMusicHeadReferenceCensus

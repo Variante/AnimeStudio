@@ -300,7 +300,6 @@ namespace AnimeStudio.CLI
                             ["hircType07BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type7Body),
                             ["hircType14BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14Body),
                             ["hircType08BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type08Body),
-                            ["hircType11BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type11Body),
                             ["hircType12BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type12Body),
                             ["hircType08Tail"] = BuildType08TailSummary(package.BnkStructures),
                             ["hircType12Tail"] = BuildType08TailSummary(package.BnkStructures, x => x.Type12Tail),
@@ -314,77 +313,6 @@ namespace AnimeStudio.CLI
                                 ["secondWordResolves"] = package.Type08TailWords.SecondWordResolves,
                                 ["firstWordTargetTypeCounts"] = package.Type08TailWords.FirstWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
                                 ["secondWordTargetTypeCounts"] = package.Type08TailWords.SecondWordTargetTypeCounts.OrderBy(z => z.Key, StringComparer.Ordinal).ToDictionary(z => z.Key, z => z.Value),
-                            },
-                            ["hircType11EntryHeaders"] = new Dictionary<string, object?>
-                            {
-                                ["entries"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.Entries),
-                                ["rangeTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeTested),
-                                ["rangeIsSymmetric"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeIsSymmetric),
-                                ["rangeIsOrdered"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeIsOrdered),
-                                ["rangeControlTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlTested),
-                                ["rangeControlIsSymmetric"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlIsSymmetric),
-                                ["rangeControlIsOrdered"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.RangeControlIsOrdered),
-                                ["fractionsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionsTested),
-                                ["fractionsAreSmall"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionsAreSmall),
-                                ["fractionControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsTested),
-                                ["fractionControlsAreSmall"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FractionControlsAreSmall),
-                                ["elementCountValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.ElementCountValues)),
-                                ["entryCountValues"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.EntryCountValues)),
-                                ["closeBlocks"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CloseBlocks),
-                                ["finalCloseBlocks"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FinalCloseBlocks),
-                                ["finalCloseBlocksEndingInEightZeros"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FinalCloseBlocksEndingInEightZeros),
-                                ["interiorCloseBlocks"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.InteriorCloseBlocks),
-                                ["interiorCloseBlocksEndingInEightZeros"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.InteriorCloseBlocksEndingInEightZeros),
-                                ["sourceJoinBodies"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinBodies),
-                                ["sourceJoinBodiesWithAMatch"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinBodiesWithAMatch),
-                                ["closeBlocksEndingInEightZeros"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CloseBlocksEndingInEightZeros),
-                                ["closeBlockControlsEndingInEightZeros"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CloseBlockControlsEndingInEightZeros),
-                                ["closeBlockHeads"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.CloseBlockHeads)),
-                                ["curveRecords"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveRecords),
-                                ["curveCodesInRange"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveCodesInRange),
-                                ["curveControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveControlsTested),
-                                ["curveControlsInRange"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.CurveControlsInRange),
-                                ["curveCodes"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11EntryHeaders.CurveCodes)),
-                                ["gainsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.GainsTested),
-                                ["gainsPlausible"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.GainsPlausible),
-                                ["gainsThatAreNegativeZero"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.GainsThatAreNegativeZero),
-                                ["gainControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.GainControlsTested),
-                                ["gainControlsPlausible"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.GainControlsPlausible),
-                                ["laterEntryGainsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.LaterEntryGainsTested),
-                                ["laterEntryGainsPlausible"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.LaterEntryGainsPlausible),
-                                ["pairsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.PairsTested),
-                                ["pairsEqual"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.PairsEqual),
-                                ["reservedBytesChecked"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.ReservedBytesChecked),
-                                ["reservedControlsChecked"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.ReservedControlsChecked),
-                                ["reservedControlsZero"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.ReservedControlsZero),
-                                ["boundedFloatsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.BoundedFloatsTested),
-                                ["boundedFloatsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.BoundedFloatsInBand),
-                                ["floatControlsTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsTested),
-                                ["floatControlsInBand"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.FloatControlsInBand),
-                                ["sourceJoinTested"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinTested),
-                                ["sourceJoinMatched"] = package.BnkStructures.Sum(b => (long)b.Type11EntryHeaders.SourceJoinMatched),
-                            },
-                            ["hircType11Elements"] = new Dictionary<string, object?>
-                            {
-                                ["bodies"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Bodies),
-                                ["notASingleEntry"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.NotASingleEntry),
-                                ["notASingleElement"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.NotASingleElement),
-                                ["elements"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Elements),
-                                ["trailerIsAmbiguous"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.TrailerIsAmbiguous),
-                                ["bodyIsNotWholeRecords"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.BodyIsNotWholeRecords),
-                                ["framed"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.Framed),
-                                ["elementsWithRecords"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.ElementsWithRecords),
-                                ["countFieldAgrees"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.CountFieldAgrees),
-                                ["elementsWithRuns"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.ElementsWithRuns),
-                                ["elementFrames"] = package.BnkStructures.Sum(b => (long)b.Type11Elements.ElementFrames),
-                                ["frameCloses"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.FrameCloses)),
-                                ["frameClosesWithRuns"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.FrameClosesWithRuns)),
-                                ["runsPerElement"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.RunsPerElement)),
-                                ["recordsPerFramedElement"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.RecordsPerFramedElement)),
-                                ["trailerForm"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.TrailerForm)),
-                                ["recordsPerElement"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.RecordsPerElement)),
-                                ["anchorSelectsOneTrailer"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorSelectsOneTrailer)),
-                                ["anchorLeavesWholeRecords"] = MergeCensus(package.BnkStructures.SelectMany(b => b.Type11Elements.AnchorLeavesWholeRecords)),
                             },
                             ["hircParentField"] = new Dictionary<string, object?>
                             {
@@ -535,11 +463,18 @@ namespace AnimeStudio.CLI
                             },
                             ["hircType22BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type22Body),
                             ["hircMusicHeadReferences"] = BuildMusicHeadSummary(package.BnkStructures),
-                            ["hircType11Sources"] = BuildType11SourceSummary(package.BnkStructures),
                             ["hircType08Head"] = BuildType08HeadSummary(package.BnkStructures),
-                            ["hircType17"] = BuildType17Summary(package.BnkStructures),
-                            ["hircType09"] = BuildType09Summary(package.BnkStructures),
-                            ["hircSmallTypes"] = BuildSmallTypeSummary(package.BnkStructures),
+                            ["hircType09BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type9Body),
+                            ["hircType0ABodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type0ABody),
+                            ["hircType0BBodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type0BBody),
+                            ["hircType0CBodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type0CBody),
+                            ["hircType0DBodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type0DBody),
+                            ["hircType0FBodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type0FBody),
+                            ["hircType10BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type10Body),
+                            ["hircType11BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type11Body),
+                            ["hircType13BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type13Body),
+                            ["hircType14ModBodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type14ModBody),
+                            ["hircType15BodyFrame"] = BuildBodyFrameSummary(package.BnkStructures, x => x.Type15Body),
                             ["hircType03Targets"] = new Dictionary<string, object?>
                             {
                                 ["objects"] = package.Type03Targets.Objects,
@@ -650,11 +585,18 @@ namespace AnimeStudio.CLI
                                 ["hircType08Tail"] = BuildType08TailSummary(new[] { x }),
                                 ["hircType22BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type22Body),
                                 ["hircMusicHeadReferences"] = BuildMusicHeadSummary(new[] { x }),
-                                ["hircType11Sources"] = BuildType11SourceSummary(new[] { x }),
                                 ["hircType08Head"] = BuildType08HeadSummary(new[] { x }),
-                                ["hircType17"] = BuildType17Summary(new[] { x }),
-                                ["hircType09"] = BuildType09Summary(new[] { x }),
-                                ["hircSmallTypes"] = BuildSmallTypeSummary(new[] { x }),
+                                ["hircType09BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type9Body),
+                                ["hircType0ABodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type0ABody),
+                                ["hircType0BBodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type0BBody),
+                                ["hircType0CBodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type0CBody),
+                                ["hircType0DBodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type0DBody),
+                                ["hircType0FBodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type0FBody),
+                                ["hircType10BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type10Body),
+                                ["hircType11BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type11Body),
+                                ["hircType13BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type13Body),
+                                ["hircType14ModBodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type14ModBody),
+                                ["hircType15BodyFrame"] = BuildBodyFrameSummary(new[] { x }, y => y.Type15Body),
                                 ["hircObjectTypeStats"] = x.HircObjectTypeStats
                                     .OrderBy(pair => pair.Key)
                                     .ToDictionary(
@@ -1076,141 +1018,6 @@ namespace AnimeStudio.CLI
 
 
 
-        private static Dictionary<string, object?> BuildSmallTypeSummary(
-            IEnumerable<EndfieldBnkStructure> structures)
-        {
-            var bodies = 0U; var exact = 0U; var failed = 0U;
-            var exactBytes = 0U; var bodyBytes = 0U; var withSecond = 0U; var secondEntries = 0U;
-            var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var failures = new Dictionary<string, uint>(StringComparer.Ordinal);
-            foreach (var structure in structures)
-            {
-                var census = structure.SmallTypes;
-                bodies = checked(bodies + census.Bodies);
-                exact = checked(exact + census.Exact);
-                failed = checked(failed + census.Failed);
-                exactBytes = checked(exactBytes + census.ExactBytes);
-                bodyBytes = checked(bodyBytes + census.BodyBytes);
-                withSecond = checked(withSecond + census.BodiesWithSecondBlock);
-                secondEntries = checked(secondEntries + census.SecondBlockEntries);
-                foreach (var pair in census.BodiesByType)
-                {
-                    byType.TryGetValue(pair.Key, out var existing);
-                    byType[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.FailureCounts)
-                {
-                    failures.TryGetValue(pair.Key, out var existing);
-                    failures[pair.Key] = checked(existing + pair.Value);
-                }
-            }
-            return new Dictionary<string, object?>
-            {
-                ["bodies"] = bodies,
-                ["exact"] = exact,
-                ["failed"] = failed,
-                ["exactBytes"] = exactBytes,
-                ["bodyBytes"] = bodyBytes,
-                ["bodiesWithSecondBlock"] = withSecond,
-                ["secondBlockEntries"] = secondEntries,
-                ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["failureCounts"] = failures.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-            };
-        }
-
-        private static Dictionary<string, object?> BuildType09Summary(
-            IEnumerable<EndfieldBnkStructure> structures)
-        {
-            var bodies = 0U; var exact = 0U; var open = 0U; var failed = 0U;
-            var exactBytes = 0U; var bodyBytes = 0U; var entries = 0U;
-            var failures = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var flags = new Dictionary<string, uint>(StringComparer.Ordinal);
-            foreach (var structure in structures)
-            {
-                var census = structure.Type09;
-                bodies = checked(bodies + census.Bodies);
-                exact = checked(exact + census.Exact);
-                open = checked(open + census.UnestablishedSecondRun);
-                failed = checked(failed + census.Failed);
-                exactBytes = checked(exactBytes + census.ExactBytes);
-                bodyBytes = checked(bodyBytes + census.BodyBytes);
-                entries = checked(entries + census.RunEntries);
-                foreach (var pair in census.FailureCounts)
-                {
-                    failures.TryGetValue(pair.Key, out var existing);
-                    failures[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.TailFlagCounts)
-                {
-                    flags.TryGetValue(pair.Key, out var existing);
-                    flags[pair.Key] = checked(existing + pair.Value);
-                }
-            }
-            return new Dictionary<string, object?>
-            {
-                ["bodies"] = bodies,
-                ["exact"] = exact,
-                ["unestablishedSecondRun"] = open,
-                ["failed"] = failed,
-                ["exactBytes"] = exactBytes,
-                ["bodyBytes"] = bodyBytes,
-                ["runEntries"] = entries,
-                ["failureCounts"] = failures.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["tailFlagCounts"] = flags.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-            };
-        }
-
-        private static Dictionary<string, object?> BuildType17Summary(
-            IEnumerable<EndfieldBnkStructure> structures)
-        {
-            var bodies = 0U; var exact = 0U; var fenced = 0U; var failed = 0U;
-            var exactBytes = 0U; var bodyBytes = 0U; var run = 0U; var entries = 0U;
-            var failures = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var reasons = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var byType = new Dictionary<string, uint>(StringComparer.Ordinal);
-            foreach (var structure in structures)
-            {
-                var census = structure.Type17;
-                bodies = checked(bodies + census.Bodies);
-                exact = checked(exact + census.Exact);
-                fenced = checked(fenced + census.Fenced);
-                failed = checked(failed + census.Failed);
-                exactBytes = checked(exactBytes + census.ExactBytes);
-                bodyBytes = checked(bodyBytes + census.BodyBytes);
-                run = checked(run + census.RunElements);
-                entries = checked(entries + census.GroupIEntries);
-                foreach (var pair in census.FailureCounts)
-                {
-                    failures.TryGetValue(pair.Key, out var existing);
-                    failures[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.FenceReasons)
-                {
-                    reasons.TryGetValue(pair.Key, out var existing);
-                    reasons[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.BodiesByType)
-                {
-                    byType.TryGetValue(pair.Key, out var existing);
-                    byType[pair.Key] = checked(existing + pair.Value);
-                }
-            }
-            return new Dictionary<string, object?>
-            {
-                ["bodies"] = bodies,
-                ["exact"] = exact,
-                ["fenced"] = fenced,
-                ["fenceReasons"] = reasons.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["bodiesByType"] = byType.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["failed"] = failed,
-                ["exactBytes"] = exactBytes,
-                ["bodyBytes"] = bodyBytes,
-                ["runElements"] = run,
-                ["groupIEntries"] = entries,
-                ["failureCounts"] = failures.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-            };
-        }
-
         private static Dictionary<string, object?> BuildType08HeadSummary(
             IEnumerable<EndfieldBnkStructure> structures)
         {
@@ -1287,116 +1094,6 @@ namespace AnimeStudio.CLI
                 ["headIsNotTheObservedWidth"] = otherWidth,
                 ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
                 ["thirdFieldCounts"] = codes.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-            };
-        }
-
-        private static Dictionary<string, object?> BuildType11SourceSummary(
-            IEnumerable<EndfieldBnkStructure> structures)
-        {
-            var bodies = 0U; var withRecords = 0U; var records = 0U;
-            var outOfRange = 0U; var tooShort = 0U; var endsWith = 0U;
-            var terms = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var plugins = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var streams = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var counts = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var tailCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var leadWords = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var withTail = 0U; var noTail = 0U; var tailOutOfRange = 0U;
-            var inspected = 0U; var noRecords = 0U; var recordsFit = 0U;
-            var countUnusable = 0U; var recordsPastEnd = 0U; var curveRecords = 0U;
-            var interps = new Dictionary<string, uint>(StringComparer.Ordinal);
-            var tailDeclared = 0U; var tailEchoed = 0U; var tailMatches = 0U;
-            var tailExceeds = 0U; var firstNames = 0U; var firstShort = 0U;
-            foreach (var structure in structures)
-            {
-                var census = structure.Type11Sources;
-                withTail = checked(withTail + census.BodiesWithATail);
-                inspected = checked(inspected + census.EntriesInspected);
-                noRecords = checked(noRecords + census.EntriesWithNoRecords);
-                recordsFit = checked(recordsFit + census.EntriesWhoseRecordsFit);
-                countUnusable = checked(countUnusable + census.EntriesWhoseCountIsNotUsable);
-                recordsPastEnd = checked(recordsPastEnd + census.EntriesWhoseRecordsRunPastTheEnd);
-                curveRecords = checked(curveRecords + census.CurveRecords);
-                foreach (var pair in census.InterpolationCounts)
-                {
-                    interps.TryGetValue(pair.Key, out var existing);
-                    interps[pair.Key] = checked(existing + pair.Value);
-                }
-                noTail = checked(noTail + census.NoTailAfterTheRun);
-                tailOutOfRange = checked(tailOutOfRange + census.TailCountOutOfRange);
-                tailDeclared = checked(tailDeclared + census.TailEntriesDeclared);
-                tailEchoed = checked(tailEchoed + census.TailEntriesEchoed);
-                tailMatches = checked(tailMatches + census.TailEchoesMatchTheCount);
-                tailExceeds = checked(tailExceeds + census.TailEchoesExceedTheCount);
-                firstNames = checked(firstNames + census.FirstTailEntryNamesADeclaredSource);
-                firstShort = checked(firstShort + census.FirstTailEntryTooShort);
-                foreach (var pair in census.TailEntryCountCounts)
-                {
-                    tailCounts.TryGetValue(pair.Key, out var existing);
-                    tailCounts[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.FirstTailEntryLeadingWordCounts)
-                {
-                    leadWords.TryGetValue(pair.Key, out var existing);
-                    leadWords[pair.Key] = checked(existing + pair.Value);
-                }
-                bodies = checked(bodies + census.Bodies);
-                withRecords = checked(withRecords + census.BodiesWithRecords);
-                records = checked(records + census.Records);
-                outOfRange = checked(outOfRange + census.RecordsOutOfRange);
-                tooShort = checked(tooShort + census.TooShort);
-                endsWith = checked(endsWith + census.EndsWithTerminator);
-                foreach (var pair in census.TerminatorCounts)
-                {
-                    terms.TryGetValue(pair.Key, out var existing);
-                    terms[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.PluginIdCounts)
-                {
-                    plugins.TryGetValue(pair.Key, out var existing);
-                    plugins[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.StreamTypeCounts)
-                {
-                    streams.TryGetValue(pair.Key, out var existing);
-                    streams[pair.Key] = checked(existing + pair.Value);
-                }
-                foreach (var pair in census.RecordCountCounts)
-                {
-                    counts.TryGetValue(pair.Key, out var existing);
-                    counts[pair.Key] = checked(existing + pair.Value);
-                }
-            }
-            return new Dictionary<string, object?>
-            {
-                ["bodies"] = bodies,
-                ["bodiesWithRecords"] = withRecords,
-                ["records"] = records,
-                ["recordsOutOfRange"] = outOfRange,
-                ["tooShort"] = tooShort,
-                ["endsWithTerminator"] = endsWith,
-                ["terminatorCounts"] = terms.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["pluginIdCounts"] = plugins.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["streamTypeCounts"] = streams.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["recordCountCounts"] = counts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["bodiesWithATail"] = withTail,
-                ["noTailAfterTheRun"] = noTail,
-                ["tailCountOutOfRange"] = tailOutOfRange,
-                ["tailEntriesDeclared"] = tailDeclared,
-                ["tailEntriesEchoed"] = tailEchoed,
-                ["tailEchoesMatchTheCount"] = tailMatches,
-                ["tailEchoesExceedTheCount"] = tailExceeds,
-                ["firstTailEntryNamesADeclaredSource"] = firstNames,
-                ["firstTailEntryTooShort"] = firstShort,
-                ["entriesInspected"] = inspected,
-                ["entriesWithNoRecords"] = noRecords,
-                ["entriesWhoseRecordsFit"] = recordsFit,
-                ["entriesWhoseCountIsNotUsable"] = countUnusable,
-                ["entriesWhoseRecordsRunPastTheEnd"] = recordsPastEnd,
-                ["curveRecords"] = curveRecords,
-                ["interpolationCounts"] = interps.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["tailEntryCountCounts"] = tailCounts.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
-                ["firstTailEntryLeadingWordCounts"] = leadWords.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value),
             };
         }
 
