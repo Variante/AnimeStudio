@@ -97,6 +97,14 @@ namespace AnimeStudio.CLI
                     Environment.ExitCode = 1;
                     return;
                 }
+                if (o.DocumentStore != null
+                    && o.AssetExportType != ExportType.JSON
+                    && o.SecondaryAssetExportType != ExportType.JSON)
+                {
+                    Console.Error.WriteLine("--document_store requires a JSON export target.");
+                    Environment.ExitCode = 1;
+                    return;
+                }
                 if (o.ManagedReferenceDiagnosticsJsonl != null && !HasMonoBehaviourJsonTarget(o, typeFilterPlan))
                 {
                     Console.Error.WriteLine(
@@ -140,6 +148,7 @@ namespace AnimeStudio.CLI
                 );
                 using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
                 using var exportManifest = ExportManifestJsonlWriter.Open(o.ExportManifestJsonl, o.Output);
+                using var documentStore = UnityDocumentStoreWriter.Open(o.DocumentStore);
 
                 if (o.Key != default)
                 {
@@ -190,6 +199,7 @@ namespace AnimeStudio.CLI
                 managedReferenceDiagnostics?.Complete(indexComplete);
                 rendererIndex?.Complete(indexComplete);
                 exportManifest?.Complete(indexComplete);
+                documentStore?.Complete();
                 if (Properties.Settings.Default.scrapeMonos)
                 {
                     File.WriteAllLines("./Maps/PathStrings_Sorted.txt", PathStrings.Distinct().OrderBy(p => p));

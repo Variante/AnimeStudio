@@ -167,7 +167,7 @@ namespace AnimeStudio.CLI
                 streamPath = streamData?.path ?? string.Empty,
                 byteSize = item.FullSize
             };
-            File.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
+            DocumentOutput.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
             return true;
         }
 
@@ -194,7 +194,7 @@ namespace AnimeStudio.CLI
             sb.AppendLine($"# index_count: {mesh.m_Indices?.Count ?? 0}");
             sb.AppendLine($"# byte_size: {item.FullSize}");
             sb.AppendLine("g " + mesh.m_Name);
-            File.WriteAllText(exportFullPath, sb.ToString());
+            DocumentOutput.WriteAllText(exportFullPath, sb.ToString());
             return true;
         }
 
@@ -259,7 +259,7 @@ namespace AnimeStudio.CLI
                 animationCount = convert.AnimationList?.Count ?? 0,
                 byteSize = item.FullSize
             };
-            File.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
+            DocumentOutput.WriteAllText(exportFullPath, JsonConvert.SerializeObject(marker, Formatting.Indented));
             return true;
         }
 
@@ -298,7 +298,7 @@ namespace AnimeStudio.CLI
             {
                 if (!TryExportFile(exportPath, item, ".tex", out var exportFullPath))
                     return false;
-                File.WriteAllBytes(exportFullPath, m_Texture2D.image_data.GetData());
+                DocumentOutput.WriteAllBytes(exportFullPath, m_Texture2D.image_data.GetData());
                 return true;
             }
         }
@@ -588,13 +588,13 @@ namespace AnimeStudio.CLI
                 var buffer = converter.ConvertToWav();
                 if (buffer == null)
                     return false;
-                File.WriteAllBytes(exportFullPath, buffer);
+                DocumentOutput.WriteAllBytes(exportFullPath, buffer);
             }
             else
             {
                 if (!TryExportFile(exportPath, item, converter.GetExtensionName(), out var exportFullPath))
                     return false;
-                File.WriteAllBytes(exportFullPath, m_AudioData);
+                DocumentOutput.WriteAllBytes(exportFullPath, m_AudioData);
             }
             return true;
         }
@@ -611,7 +611,7 @@ namespace AnimeStudio.CLI
                 bytecodeSidecarRoot = null;
             }
             var str = m_Shader.Convert(bytecodeSidecarRoot);
-            File.WriteAllText(exportFullPath, str);
+            DocumentOutput.WriteAllText(exportFullPath, str);
             return true;
         }
 
@@ -628,7 +628,7 @@ namespace AnimeStudio.CLI
             }
             if (!TryExportFile(exportPath, item, extension, out var exportFullPath))
                 return false;
-            File.WriteAllBytes(exportFullPath, m_TextAsset.m_Script);
+            DocumentOutput.WriteAllBytes(exportFullPath, m_TextAsset.m_Script);
             return true;
         }
 
@@ -993,7 +993,7 @@ namespace AnimeStudio.CLI
                             return false;
                         }
                         var fallbackText = JsonConvert.SerializeObject(fallback, Formatting.Indented);
-                        File.WriteAllText(exportFullPath, fallbackText);
+                        DocumentOutput.WriteAllText(exportFullPath, fallbackText);
                         return true;
                     }
                     return false;
@@ -1163,7 +1163,7 @@ namespace AnimeStudio.CLI
                 }
                 type.Insert(0, "$animestudio", meta);
                 var str = JsonConvert.SerializeObject(type, Formatting.Indented);
-                File.WriteAllText(exportFullPath, str);
+                DocumentOutput.WriteAllText(exportFullPath, str);
             }
 
              return true;
@@ -21751,6 +21751,7 @@ namespace AnimeStudio.CLI
             }
 
             var sidecarPath = Path.ChangeExtension(exportFullPath, ".raw.bin");
+            DocumentOutput.EnsureDirectoryFor(sidecarPath);
             File.WriteAllBytes(sidecarPath, rawData);
             return Path.GetFileName(sidecarPath);
         }
@@ -21806,7 +21807,7 @@ namespace AnimeStudio.CLI
                         var json = m_MiHoYoBinData.Dump() as string;
                         if (json.Length != 0)
                         {
-                            File.WriteAllText(exportFullPath, json);
+                            DocumentOutput.WriteAllText(exportFullPath, json);
                             return true;
                         }
                         break;
@@ -21824,7 +21825,7 @@ namespace AnimeStudio.CLI
                         var bytes = m_MiHoYoBinData.Dump() as byte[];
                         if (!bytes.IsNullOrEmpty())
                         {
-                            File.WriteAllBytes(exportFullPath, bytes);
+                            DocumentOutput.WriteAllBytes(exportFullPath, bytes);
                             return true;
                         }
                         break;
@@ -21845,7 +21846,7 @@ namespace AnimeStudio.CLI
                 }
                 if (!TryExportFile(exportPath, item, extension, out var exportFullPath))
                     return false;
-                File.WriteAllBytes(exportFullPath, m_Font.m_FontData);
+                DocumentOutput.WriteAllBytes(exportFullPath, m_Font.m_FontData);
                 return true;
             }
             return false;
@@ -21935,7 +21936,7 @@ namespace AnimeStudio.CLI
             #endregion
 
             sb.Replace("NaN", "0");
-            File.WriteAllText(exportFullPath, sb.ToString());
+            DocumentOutput.WriteAllText(exportFullPath, sb.ToString());
             return true;
         }
 
@@ -21957,7 +21958,7 @@ namespace AnimeStudio.CLI
             var m_MovieTexture = (MovieTexture)item.Asset;
             if (!TryExportFile(exportPath, item, ".ogv", out var exportFullPath))
                 return false;
-            File.WriteAllBytes(exportFullPath, m_MovieTexture.m_MovieData);
+            DocumentOutput.WriteAllBytes(exportFullPath, m_MovieTexture.m_MovieData);
             return true;
         }
 
@@ -21985,16 +21986,23 @@ namespace AnimeStudio.CLI
         {
             if (!TryExportFile(exportPath, item, ".dat", out var exportFullPath))
                 return false;
-            File.WriteAllBytes(exportFullPath, item.Asset.GetRawData());
+            DocumentOutput.WriteAllBytes(exportFullPath, item.Asset.GetRawData());
             return true;
         }
 
         private static bool TryExportFile(string dir, AssetItem item, string extension, out string fullPath)
         {
-            Directory.CreateDirectory(dir);
             var fileName = FixFileName(item.Text);
             var pathIdFileName = $"{fileName}_p{item.m_PathID:X16}";
             fullPath = Path.Combine(dir, $"{pathIdFileName}{extension}");
+            if (DocumentOutput.Routes(fullPath))
+            {
+                // --document_store: the document becomes a store row, so no
+                // folder or file is created and the existence checks run
+                // against the store.
+                return DocumentOutput.Claim(item, dir, pathIdFileName, extension, Properties.Settings.Default.allowDuplicates, out fullPath);
+            }
+            Directory.CreateDirectory(dir);
             if (!Properties.Settings.Default.allowDuplicates)
             {
                 if (Directory.Exists(fullPath))
@@ -22074,7 +22082,7 @@ namespace AnimeStudio.CLI
             var str = m_AnimationClip.Convert();
             if (string.IsNullOrEmpty(str)) 
                 return false;
-            File.WriteAllText(exportFullPath, str);
+            DocumentOutput.WriteAllText(exportFullPath, str);
             return true;
         }
 
@@ -22185,7 +22193,7 @@ namespace AnimeStudio.CLI
             var str = item.Asset.Dump();
             if (str != null)
             {
-                File.WriteAllText(exportFullPath, str);
+                DocumentOutput.WriteAllText(exportFullPath, str);
                 return true;
             }
             return false;
@@ -22371,7 +22379,7 @@ namespace AnimeStudio.CLI
                 }
             }
             var str = JsonConvert.SerializeObject(payload, Formatting.Indented, settings);
-            File.WriteAllText(exportFullPath, str);
+            DocumentOutput.WriteAllText(exportFullPath, str);
             return true;
         }
 

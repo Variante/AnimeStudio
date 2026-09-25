@@ -46,6 +46,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.ManagedReferenceDiagnosticsIncludeExactMatches,
                 optionsBinder.RendererIndexJsonl,
                 optionsBinder.ExportManifestJsonl,
+                optionsBinder.DocumentStore,
                 optionsBinder.CabMapDir,
                 optionsBinder.SkipSourcesFile,
                 optionsBinder.AllowPartialJson,
@@ -93,6 +94,7 @@ namespace AnimeStudio.CLI
         public bool ManagedReferenceDiagnosticsIncludeExactMatches { get; set; }
         public FileInfo RendererIndexJsonl { get; set; }
         public FileInfo ExportManifestJsonl { get; set; }
+        public FileInfo DocumentStore { get; set; }
         public DirectoryInfo CabMapDir { get; set; }
         public FileInfo SkipSourcesFile { get; set; }
         public bool AllowPartialJson { get; set; }
@@ -129,6 +131,7 @@ namespace AnimeStudio.CLI
         public readonly Option<bool> ManagedReferenceDiagnosticsIncludeExactMatches;
         public readonly Option<FileInfo> RendererIndexJsonl;
         public readonly Option<FileInfo> ExportManifestJsonl;
+        public readonly Option<FileInfo> DocumentStore;
         public readonly Option<DirectoryInfo> CabMapDir;
         public readonly Option<FileInfo> SkipSourcesFile;
         public readonly Option<bool> AllowPartialJson;
@@ -177,6 +180,7 @@ namespace AnimeStudio.CLI
             SkipSourcesFile = new Option<FileInfo>("--skip_sources_file", "JSON array of {Source, Offset} bundle slots to load for reference resolution but not export.");
             CabMapDir = new Option<DirectoryInfo>("--cab_map_dir", "Folder that holds CABMap *.bin files. Defaults to ./Maps under the working directory.");
             ExportManifestJsonl = new Option<FileInfo>("--export_manifest_jsonl", "Write one JSONL row per exported path with the serialized file, VFS chunk, and bundle offset that produced it.");
+            DocumentStore = new Option<FileInfo>("--document_store", "Write the JSON export target's .json/.anim documents as rows of this SQLite file (endfield.unity-object-store.v1, keyed by type folder and file name) instead of loose files; other outputs stay on disk. The file is replaced when the export completes.");
             FilterDataFile = new Option<FileInfo>("--filter_data", "Path to a JSON file of {Source, Offset, Name, PathID, Type} items used to load only specific bundle offsets within input chk/blk files.").LegalFilePathsOnly();
             Texture2DNativePayload = new Option<bool>(
                 "--texture2d_native_payload",
@@ -343,6 +347,7 @@ namespace AnimeStudio.CLI
             ManagedReferenceDiagnosticsIncludeExactMatches = bindingContext.ParseResult.GetValueForOption(ManagedReferenceDiagnosticsIncludeExactMatches),
             RendererIndexJsonl = bindingContext.ParseResult.GetValueForOption(RendererIndexJsonl),
             ExportManifestJsonl = bindingContext.ParseResult.GetValueForOption(ExportManifestJsonl),
+            DocumentStore = bindingContext.ParseResult.GetValueForOption(DocumentStore),
             CabMapDir = bindingContext.ParseResult.GetValueForOption(CabMapDir),
             SkipSourcesFile = bindingContext.ParseResult.GetValueForOption(SkipSourcesFile),
             AllowPartialJson = bindingContext.ParseResult.GetValueForOption(AllowPartialJson),

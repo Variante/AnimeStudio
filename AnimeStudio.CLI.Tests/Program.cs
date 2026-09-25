@@ -15,6 +15,10 @@ static class Program
         {
             return RunTableSweep(args[1], args[2], args[3], args.Length >= 5 ? args[4] : null);
         }
+        if (args.Length >= 2 && string.Equals(args[0], "document-store-fixture", StringComparison.OrdinalIgnoreCase))
+        {
+            return DocumentStoreTests.WriteFixture(args[1]);
+        }
         if (args.Length >= 3 && string.Equals(args[0], "lua-sweep", StringComparison.OrdinalIgnoreCase))
         {
             return RunLuaSweep(args[1], args[2]);
@@ -59,6 +63,7 @@ static class Program
         TestEndfieldUsmInspectionAndFramingGuards();
         EndfieldSparkBufferTests.Run();
         EndfieldAkpkTests.Run();
+        DocumentStoreTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
     }
