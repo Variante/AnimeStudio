@@ -2846,13 +2846,15 @@ namespace AnimeStudio.Endfield
                         7 => FrameType7Body(bodySpan, structure.Version),
                         9 => FrameType9Body(bodySpan, structure.Version),
                         10 => FrameType0ABody(bodySpan, structure.Version),
-                        12 => FrameType0CBody(bodySpan, structure.Version),
+                        12 => FrameType0CBody(
+                            bodySpan, structure.Version, bankObjectTypes, duplicateObjectIds),
                         13 => FrameType0DBody(bodySpan, structure.Version),
                         8 => FrameSharedBody(bodySpan, structure.Version),
                         11 => FrameType0BBody(bodySpan, structure.Version),
                         18 => FrameSharedBody(bodySpan, structure.Version),
                         14 => FrameType14Body(bodySpan, structure.Version),
-                        15 => FrameType0FBody(bodySpan, structure.Version),
+                        15 => FrameType0FBody(
+                            bodySpan, structure.Version, bankObjectTypes, duplicateObjectIds),
                         16 => FrameFxBody(bodySpan, structure.Version, withDeviceSlots: false),
                         17 => FrameFxBody(bodySpan, structure.Version, withDeviceSlots: false),
                         19 => FrameModulatorBody(bodySpan, structure.Version),
@@ -4807,14 +4809,148 @@ namespace AnimeStudio.Endfield
             return HircFrameExact(cursor, body.Length, groups, selectors);
         }
 
+        // AkDecisionTree::_ResolvePath reads a 12-byte Node, taking the u16 child
+        // array index at +4 and the u16 child count at +6. Its binary search uses
+        // the child keys at +0, so each sibling range must be strictly sorted.
+        // The root is a sentinel: it is the leaf only when uTreeDepth is zero.
+        // This checks reachable topology without evaluating a runtime argument
+        // path, selecting a leaf, or requiring every stored node to be reachable.
+        private static bool FrameDecisionTreeNodes(
+            ReadOnlySpan<byte> tree,
+            uint depth,
+            Dictionary<string, uint> groups,
+            Dictionary<string, uint> selectors,
+            int treeOffset,
+            Dictionary<uint, byte> bankObjectTypes,
+            HashSet<uint> duplicateObjectIds,
+            out EndfieldHircBodyFrameResult failure)
+        {
+            failure = null;
+            var nodeCount = tree.Length / 12;
+            if (nodeCount == 0)
+            {
+                HircBump(selectors, "decisionTreeStructure_empty", 1);
+                return true;
+            }
+
+            var pending = new Queue<(int Index, uint Level)>();
+            var states = new HashSet<(int Index, uint Level)>();
+            var reached = new HashSet<int>();
+            pending.Enqueue((0, 0));
+            uint branchVisits = 0;
+            uint leafVisits = 0;
+            uint zeroLeaves = 0;
+            uint childLinks = 0;
+            uint fallbackBranches = 0;
+            uint probabilityOver100 = 0;
+            uint sameBankLeaves = 0;
+            uint sameBankAmbiguousLeaves = 0;
+            uint sameBankMissingLeaves = 0;
+            uint unjoinedLeaves = 0;
+            while (pending.Count != 0)
+            {
+                var (index, level) = pending.Dequeue();
+                if (!states.Add((index, level)))
+                {
+                    continue;
+                }
+                reached.Add(index);
+                var at = checked(index * 12);
+                if (level == depth)
+                {
+                    leafVisits++;
+                    var leafId = BinaryPrimitives.ReadUInt32LittleEndian(tree.Slice(at + 4, 4));
+                    if (leafId == 0)
+                    {
+                        zeroLeaves++;
+                    }
+                    else if (bankObjectTypes == null)
+                    {
+                        unjoinedLeaves++;
+                    }
+                    else if (duplicateObjectIds != null && duplicateObjectIds.Contains(leafId))
+                    {
+                        sameBankAmbiguousLeaves++;
+                    }
+                    else if (bankObjectTypes.TryGetValue(leafId, out var targetType))
+                    {
+                        sameBankLeaves++;
+                        HircBump(selectors, $"decisionTreeLeafTargetType_{targetType:X2}", 1);
+                    }
+                    else
+                    {
+                        sameBankMissingLeaves++;
+                    }
+                    if (BinaryPrimitives.ReadUInt16LittleEndian(tree.Slice(at + 10, 2)) > 100)
+                    {
+                        probabilityOver100++;
+                    }
+                    continue;
+                }
+
+                branchVisits++;
+                var first = BinaryPrimitives.ReadUInt16LittleEndian(tree.Slice(at + 4, 2));
+                var count = BinaryPrimitives.ReadUInt16LittleEndian(tree.Slice(at + 6, 2));
+                if (count == 0)
+                {
+                    continue;
+                }
+                if (first + count > nodeCount)
+                {
+                    failure = HircFrameOutcome(
+                        "failed", "decisionTree_child_range_outside_tree",
+                        treeOffset + at + 4, nodeCount, first + count);
+                    return false;
+                }
+                if (BinaryPrimitives.ReadUInt32LittleEndian(tree.Slice(first * 12, 4)) == 0)
+                {
+                    fallbackBranches++;
+                }
+                uint previous = 0;
+                for (var child = first; child < first + count; child++)
+                {
+                    var childKey = BinaryPrimitives.ReadUInt32LittleEndian(
+                        tree.Slice(child * 12, 4));
+                    if (child > first && childKey <= previous)
+                    {
+                        failure = HircFrameOutcome(
+                            "failed", "decisionTree_child_keys_not_strict_ascending",
+                            treeOffset + child * 12, previous, childKey);
+                        return false;
+                    }
+                    previous = childKey;
+                    childLinks++;
+                    pending.Enqueue((child, level + 1));
+                }
+            }
+
+            HircBump(groups, "decisionTreeReachableNodes", (uint)reached.Count);
+            HircBump(groups, "decisionTreeUnreachableNodes", (uint)(nodeCount - reached.Count));
+            HircBump(groups, "decisionTreeBranchVisits", branchVisits);
+            HircBump(groups, "decisionTreeLeafVisits", leafVisits);
+            HircBump(groups, "decisionTreeZeroLeafVisits", zeroLeaves);
+            HircBump(groups, "decisionTreeSameBankLeafVisits", sameBankLeaves);
+            HircBump(groups, "decisionTreeAmbiguousSameBankLeafVisits", sameBankAmbiguousLeaves);
+            HircBump(groups, "decisionTreeMissingSameBankLeafVisits", sameBankMissingLeaves);
+            HircBump(groups, "decisionTreeUnjoinedLeafVisits", unjoinedLeaves);
+            HircBump(groups, "decisionTreeChildLinks", childLinks);
+            HircBump(groups, "decisionTreeFallbackBranches", fallbackBranches);
+            HircBump(groups, "decisionTreeProbabilityOver100", probabilityOver100);
+            HircBump(selectors, "decisionTreeStructure_walked", 1);
+            return true;
+        }
+
         // Numeric HIRC type 0x0C is CAkMusicSwitchCntr: the transition-aware music
         // node parameters, u8 bIsContinuePlayback, u32 uTreeDepth, that many u32
         // argument group ids then that many u8 group types, u32 uTreeDataSize, u8
         // uMode, and uTreeDataSize bytes of decision tree handed whole to
-        // AkDecisionTree::SetTree. The tree's own node layout is not framed here.
+        // AkDecisionTree::SetTree. FrameDecisionTreeNodes checks the stored
+        // topology and same-bank leaf identities after the sized bytes.
         internal static EndfieldHircBodyFrameResult FrameType0CBody(
             ReadOnlySpan<byte> body,
-            uint? bankVersion)
+            uint? bankVersion,
+            Dictionary<uint, byte> bankObjectTypes = null,
+            HashSet<uint> duplicateObjectIds = null)
         {
             if (bankVersion != 150)
             {
@@ -4860,6 +4996,12 @@ namespace AnimeStudio.Endfield
             if (treeSize % 12 != 0)
             {
                 return HircFrameOutcome("failed", "decisionTree_not_whole_nodes", cursor, 12, (int)(treeSize % 12));
+            }
+            if (!FrameDecisionTreeNodes(body.Slice(cursor, (int)treeSize), depth,
+                    groups, selectors, cursor, bankObjectTypes, duplicateObjectIds,
+                    out failure))
+            {
+                return failure;
             }
             cursor = checked(cursor + (int)treeSize);
             HircBump(groups, "decisionTreeBytes", treeSize);
@@ -5075,7 +5217,9 @@ namespace AnimeStudio.Endfield
         // then the two property bundles.
         internal static EndfieldHircBodyFrameResult FrameType0FBody(
             ReadOnlySpan<byte> body,
-            uint? bankVersion)
+            uint? bankVersion,
+            Dictionary<uint, byte> bankObjectTypes = null,
+            HashSet<uint> duplicateObjectIds = null)
         {
             if (bankVersion != 150)
             {
@@ -5116,6 +5260,12 @@ namespace AnimeStudio.Endfield
             if (treeSize % 12 != 0)
             {
                 return HircFrameOutcome("failed", "decisionTree_not_whole_nodes", cursor, 12, (int)(treeSize % 12));
+            }
+            if (!FrameDecisionTreeNodes(body.Slice(cursor, (int)treeSize), depth,
+                    groups, selectors, cursor, bankObjectTypes, duplicateObjectIds,
+                    out failure))
+            {
+                return failure;
             }
             cursor = checked(cursor + (int)treeSize);
             HircBump(groups, "decisionTreeBytes", treeSize);

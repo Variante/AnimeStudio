@@ -2052,9 +2052,11 @@ internal static class EndfieldAkpkTests
     private static byte[] BuildType0CBody(
         (uint sources, uint destinations, bool transObject)[]? rules = null,
         uint arguments = 0,
-        uint treeBytes = 0)
+        uint treeBytes = 0,
+        byte[]? tree = null)
     {
         rules ??= Array.Empty<(uint, uint, bool)>();
+        tree ??= new byte[checked((int)treeBytes)];
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
         writer.Write(BuildMusicNodeParams());
@@ -2062,9 +2064,24 @@ internal static class EndfieldAkpkTests
         writer.Write((byte)1); // bIsContinuePlayback.
         writer.Write(arguments);
         writer.Write(new byte[checked((int)arguments * 5)]);
-        writer.Write(treeBytes);
+        writer.Write((uint)tree.Length);
         writer.Write((byte)0); // uMode.
-        writer.Write(new byte[checked((int)treeBytes)]);
+        writer.Write(tree);
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildDecisionTree(params (uint key, uint value, ushort weight, ushort probability)[] nodes)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        foreach (var (key, value, weight, probability) in nodes)
+        {
+            writer.Write(key);
+            writer.Write(value);
+            writer.Write(weight);
+            writer.Write(probability);
+        }
         writer.Flush();
         return stream.ToArray();
     }
@@ -2164,6 +2181,40 @@ internal static class EndfieldAkpkTests
             throw new InvalidOperationException("type 0x0C minimal body length mismatch");
         }
 
+        // The root is a sentinel; depth two reaches only the two leaves.
+        var tree = BuildDecisionTree(
+            (0, 1 | (2U << 16), 100, 100),
+            (0, 3 | (1U << 16), 100, 100),
+            (10, 4 | (1U << 16), 100, 100),
+            (5, 0, 80, 70),
+            (20, 0x1234, 20, 100));
+        var walked = FrameMusicFixture(0x0C, BuildType0CBody(arguments: 2, tree: tree)).Type0CBody;
+        if (walked.ExactCount != 1
+            || walked.GroupCounts["decisionTreeNodes"] != 5
+            || walked.GroupCounts["decisionTreeReachableNodes"] != 5
+            || walked.GroupCounts["decisionTreeUnreachableNodes"] != 0
+            || walked.GroupCounts["decisionTreeBranchVisits"] != 3
+            || walked.GroupCounts["decisionTreeLeafVisits"] != 2
+            || walked.GroupCounts["decisionTreeZeroLeafVisits"] != 1
+            || walked.GroupCounts["decisionTreeMissingSameBankLeafVisits"] != 1
+            || walked.GroupCounts["decisionTreeChildLinks"] != 4
+            || walked.GroupCounts["decisionTreeFallbackBranches"] != 1
+            || walked.SelectorCounts["decisionTreeStructure_walked"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0C decision-tree topology mismatch");
+        }
+        var joined = EndfieldAkpkPackage.Parse(BuildEncryptedBankPackage(
+            0xA300, BuildBnk(
+                (0x0C, 0xA301U, BuildType0CBody(arguments: 2, tree: tree)),
+                (0x0A, 0x1234U, BuildType0ABody())))).BnkStructures[0].Type0CBody;
+        if (joined.ExactCount != 1
+            || joined.GroupCounts["decisionTreeSameBankLeafVisits"] != 1
+            || joined.GroupCounts["decisionTreeMissingSameBankLeafVisits"] != 0
+            || joined.SelectorCounts["decisionTreeLeafTargetType_0A"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0C same-bank leaf identity mismatch");
+        }
+
         var ranSeq = FrameMusicFixture(0x0D, BuildType0DBody(rules, playlistEntries: 3)).Type0DBody;
         if (ranSeq.ExactCount != 1
             || ranSeq.GroupCounts["playlistEntries"] != 3
@@ -2195,6 +2246,19 @@ internal static class EndfieldAkpkTests
         if (!FrameMusicFixture(0x0C, BuildType0CBody(treeBytes: 10)).Type0CBody.FailureCounts.ContainsKey("decisionTree_not_whole_nodes"))
         {
             throw new InvalidOperationException("partial decision tree node was not rejected");
+        }
+        var badRange = BuildDecisionTree((0, 2 | (1U << 16), 100, 100), (10, 41, 100, 100));
+        if (!FrameMusicFixture(0x0C, BuildType0CBody(arguments: 1, tree: badRange))
+                .Type0CBody.FailureCounts.ContainsKey("decisionTree_child_range_outside_tree"))
+        {
+            throw new InvalidOperationException("decision-tree child overrun was not rejected");
+        }
+        var unsorted = BuildDecisionTree(
+            (0, 1 | (2U << 16), 100, 100), (10, 41, 100, 100), (0, 42, 100, 100));
+        if (!FrameMusicFixture(0x0C, BuildType0CBody(arguments: 1, tree: unsorted))
+                .Type0CBody.FailureCounts.ContainsKey("decisionTree_child_keys_not_strict_ascending"))
+        {
+            throw new InvalidOperationException("decision-tree unsorted sibling keys were not rejected");
         }
 
         var trailing = new byte[BuildType0DBody().Length + 1];
@@ -2296,16 +2360,19 @@ internal static class EndfieldAkpkTests
         return stream.ToArray();
     }
 
-    private static byte[] BuildDialogueBody(uint arguments = 0, uint treeBytes = 0, byte props = 0, byte ranged = 0)
+    private static byte[] BuildDialogueBody(
+        uint arguments = 0, uint treeBytes = 0, byte props = 0, byte ranged = 0,
+        byte[]? tree = null)
     {
+        tree ??= new byte[checked((int)treeBytes)];
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, true);
         writer.Write((byte)100); // uProbability.
         writer.Write(arguments);
         writer.Write(new byte[checked((int)arguments * 5)]);
-        writer.Write(treeBytes);
+        writer.Write((uint)tree.Length);
         writer.Write((byte)0); // uMode.
-        writer.Write(new byte[checked((int)treeBytes)]);
+        writer.Write(tree);
         writer.Write(BuildPropertyBundles(props, ranged));
         writer.Flush();
         return stream.ToArray();
@@ -2364,6 +2431,20 @@ internal static class EndfieldAkpkTests
         if (FrameMusicFixture(0x0F, BuildDialogueBody()).Type0FBody.MinExactBytes != 12)
         {
             throw new InvalidOperationException("type 0x0F minimal body length mismatch");
+        }
+        var dialogueTree = BuildDecisionTree(
+            (0, 1 | (2U << 16), 100, 100),
+            (0, 0, 50, 101),
+            (10, 0x1234, 50, 100));
+        var dialogueWalked = FrameMusicFixture(
+            0x0F, BuildDialogueBody(arguments: 1, tree: dialogueTree)).Type0FBody;
+        if (dialogueWalked.ExactCount != 1
+            || dialogueWalked.GroupCounts["decisionTreeReachableNodes"] != 3
+            || dialogueWalked.GroupCounts["decisionTreeLeafVisits"] != 2
+            || dialogueWalked.GroupCounts["decisionTreeZeroLeafVisits"] != 1
+            || dialogueWalked.GroupCounts["decisionTreeProbabilityOver100"] != 1)
+        {
+            throw new InvalidOperationException("type 0x0F decision-tree topology mismatch");
         }
     }
 
