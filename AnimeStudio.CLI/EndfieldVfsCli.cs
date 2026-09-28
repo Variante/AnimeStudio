@@ -147,14 +147,18 @@ namespace AnimeStudio.CLI
         private static void RunDump(VfsOptions options)
         {
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+            using var packedStore = UnityDocumentStoreWriter.Open(
+                options.PackedGameStore == null ? null : new FileInfo(options.PackedGameStore),
+                "endfield.game-file-store.v1");
             foreach (var block in LoadSelectedBlocks(
                 loader,
                 options,
                 blockType => Console.WriteLine($"Dumping {blockType.GetName()} files..."),
                 (_, e) => Console.WriteLine($"  Warning: Block {e.HashDirectory} not found, skipping")))
             {
-                DumpBlock(loader, block, options.Output, options);
+                DumpBlock(loader, block, options.Output, options, packedStore);
             }
+            packedStore?.Complete();
         }
 
         private static void RunStream(VfsOptions options)
@@ -943,7 +947,7 @@ namespace AnimeStudio.CLI
         private static IEnumerable<EndfieldVfsFileInfo> SelectedFiles(VfsOptions options, EndfieldVfsChunkInfo chunk) =>
             chunk.Files.Where(file => IsSelectedFile(options, file));
 
-        private static void DumpBlock(EndfieldVfsLoader loader, VfsBlockSelection block, string output, VfsOptions options)
+        private static void DumpBlock(EndfieldVfsLoader loader, VfsBlockSelection block, string output, VfsOptions options, UnityDocumentStoreWriter packedStore)
         {
             var blockType = block.BlockType;
             var blockInfo = block.Info;
@@ -976,7 +980,8 @@ namespace AnimeStudio.CLI
                             selectedChunk.Chunk,
                             file,
                             output,
-                            options.VerifyMd5 && ShouldFailOnFileErrors(options, blockType));
+                            options.VerifyMd5 && ShouldFailOnFileErrors(options, blockType),
+                            packedStore);
                         Interlocked.Increment(ref successCount);
                     }
                     catch (Exception e)
@@ -1018,7 +1023,8 @@ namespace AnimeStudio.CLI
             EndfieldVfsChunkInfo chunk,
             EndfieldVfsFileInfo file,
             string output,
-            bool verifyMd5)
+            bool verifyMd5,
+            UnityDocumentStoreWriter packedStore)
         {
             string outputPath;
             if (blockType == EndfieldVfsBlockType.Table)
@@ -1039,6 +1045,17 @@ namespace AnimeStudio.CLI
             else
             {
                 outputPath = EndfieldDumpProcessors.ResolveContainedPath(output, file.FileName);
+                var relative = Path.GetRelativePath(Path.GetFullPath(output), outputPath).Replace('\\', '/');
+                const string packedPrefix = "Data/Json/LipSync/";
+                if (blockType == EndfieldVfsBlockType.JsonData
+                    && packedStore != null
+                    && relative.StartsWith(packedPrefix, StringComparison.OrdinalIgnoreCase)
+                    && relative.Length > packedPrefix.Length)
+                {
+                    var data = loader.ExtractFileToBytes(blockType, chunk, file, verifyMd5);
+                    packedStore.Put("Json/LipSync", relative[packedPrefix.Length..], data);
+                    return;
+                }
                 var parent = Path.GetDirectoryName(outputPath);
                 if (!string.IsNullOrEmpty(parent))
                 {
@@ -1741,6 +1758,11 @@ namespace AnimeStudio.CLI
                     case "--output":
                         options.Output = value ?? NextValue(args, ref i, token);
                         break;
+                    case "--packed-game-store":
+                        if (!string.Equals(args[0], "dump", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("--packed-game-store is only valid for dump");
+                        options.PackedGameStore = value ?? NextValue(args, ref i, token);
+                        break;
                     case "-b":
                     case "--block-type":
                         var rawBlock = value ?? NextValue(args, ref i, token);
@@ -1846,6 +1868,8 @@ namespace AnimeStudio.CLI
                         "          ",
                         "  -o, --output <OUTPUT>",
                         "          [default: ./output]",
+                        "      --packed-game-store <SQLITE>",
+                        "          Write Json/LipSync files directly into a staged GameFiles.sqlite store.",
                         "  -b, --block-type <BLOCK_TYPE>",
                         $"          {blockTypeValues}",
                         "          May be repeated to dump multiple block types.",
@@ -1912,6 +1936,10 @@ namespace AnimeStudio.CLI
                         "          [default: ./output]",
                         "      --shared-output <OUTPUT>",
                         "          Route shared Audio/InitAudio/AuditAudio blocks separately from language voice.",
+                        "      --category-map <JSON>",
+                        "          Route named Wwise media directly to category folders.",
+                        "      --source-manifest <JSON>",
+                        "          Record final audio paths and source banks for the caller.",
                         "  -l, --language <LANGUAGE>",
                         "          [default: all] [possible values: all, chinese, english, japanese, korean]",
                         "  -f, --format <FORMAT>",
@@ -2062,6 +2090,7 @@ namespace AnimeStudio.CLI
             public string StreamingAssets { get; set; }
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
+            public string PackedGameStore { get; set; }
             public string OutputDisplay { get; set; }
             public bool VerifyMd5 { get; set; }
             public bool UseJsonLines { get; set; }

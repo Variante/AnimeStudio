@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -661,6 +662,12 @@ namespace AnimeStudio.CLI
         {
             var options = ParseOptions(args);
             var loader = new EndfieldVfsLoader(options.StreamingAssets, options.FallbackAssets);
+            var categories = string.IsNullOrEmpty(options.CategoryMap)
+                ? new Dictionary<string, string>()
+                : JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(options.CategoryMap))
+                    ?? throw new InvalidDataException("audio category map is empty");
+            var outputRecords = new ConcurrentDictionary<string, (string SourceBank, string Block)>(
+                StringComparer.OrdinalIgnoreCase);
 
             Console.WriteLine("Loading AudioDialog.json...");
             var audioDialog = LoadAudioDialog(loader);
@@ -779,20 +786,22 @@ namespace AnimeStudio.CLI
                                 else
                                 {
                                     Interlocked.Increment(ref unmappedCount);
-                                    // The language is already encoded in the output root
-                                    // (Audio/<LANG> or Audio/shared); unmapped media are
-                                    // grouped by their source bank instead of a redundant
-                                    // language subfolder. A Wwise event-category subfolder
-                                    // is added later by the Python indexer where resolvable.
+                                    var category = categories.TryGetValue(entry.Id.ToString(), out var selected)
+                                        ? selected : "unknown";
                                     outputPath = Path.Combine(
                                         outputRoot,
-                                        "unmapped",
-                                        UnmappedBankFolder(pckName),
+                                        "wwise",
+                                        category,
                                         $"{entry.Id}.{options.Format.Extension()}"
                                     );
                                 }
 
                                 WriteAudioFile(wemData, outputPath, options.Format, converter);
+                                if (!string.IsNullOrEmpty(options.SourceManifest))
+                                {
+                                    outputRecords[Path.GetFullPath(outputPath)] = (
+                                        UnmappedBankFolder(pckName), blockType.GetName());
+                                }
                                 Interlocked.Increment(ref successCount);
                             }
                             catch (Exception e)
@@ -823,11 +832,19 @@ namespace AnimeStudio.CLI
                 $"{totalDuplicatePathUnavailablePackages} duplicate-path packages unavailable, " +
                 $"{totalPackageErrors + totalErrors} errors)"
             );
+            if (!string.IsNullOrEmpty(options.SourceManifest))
+            {
+                var parent = Path.GetDirectoryName(Path.GetFullPath(options.SourceManifest));
+                if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+                File.WriteAllText(options.SourceManifest, JsonSerializer.Serialize(outputRecords
+                    .OrderBy(row => row.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(row => new { path = row.Key, sourceBank = row.Value.SourceBank, block = row.Value.Block })));
+            }
         }
 
         public static void PrintHelp()
         {
-            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [--shared-output <output>] [-l <language>] [-f <flac|wav|wem>] [-b <block>] [-j <jobs>] [--fallback-assets <StreamingAssets>]");
+            Console.WriteLine("Usage: AnimeStudio.CLI audio -s <StreamingAssets> [-o <output>] [--shared-output <output>] [-l <language>] [-f <flac|wav|wem>] [-b <block>] [-j <jobs>] [--fallback-assets <StreamingAssets>] [--category-map <json>] [--source-manifest <json>]");
         }
 
         private static JToken LoadAudioDialog(EndfieldVfsLoader loader)
@@ -1570,6 +1587,12 @@ namespace AnimeStudio.CLI
                     case "--shared-output":
                         options.SharedOutput = value ?? NextValue(args, ref i, token);
                         break;
+                    case "--category-map":
+                        options.CategoryMap = value ?? NextValue(args, ref i, token);
+                        break;
+                    case "--source-manifest":
+                        options.SourceManifest = value ?? NextValue(args, ref i, token);
+                        break;
                     case "-l":
                     case "--language":
                         options.LanguageMode = value ?? NextValue(args, ref i, token);
@@ -1606,6 +1629,14 @@ namespace AnimeStudio.CLI
             {
                 throw new ArgumentException("--jobs must be greater than zero");
             }
+            if (!string.IsNullOrEmpty(options.CategoryMap))
+            {
+                var categories = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(options.CategoryMap))
+                    ?? throw new InvalidDataException("audio category map is empty");
+                var allowed = new HashSet<string>(new[] { "unknown", "sfx", "voice_events", "music", "cues", "ambience", "ui" }, StringComparer.Ordinal);
+                if (categories.Any(row => !uint.TryParse(row.Key, out _) || !allowed.Contains(row.Value)))
+                    throw new ArgumentException("audio category map contains an invalid media id or folder");
+            }
 
             return options;
         }
@@ -1640,6 +1671,8 @@ namespace AnimeStudio.CLI
             public string FallbackAssets { get; set; }
             public string Output { get; set; }
             public string SharedOutput { get; set; }
+            public string CategoryMap { get; set; }
+            public string SourceManifest { get; set; }
             public string LanguageMode { get; set; }
             public AudioOutputFormat Format { get; set; }
             public AudioBlockMode BlockMode { get; set; }

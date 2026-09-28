@@ -119,7 +119,33 @@ namespace AnimeStudio.Endfield
             {
                 normalized = normalized[(slash + 1)..];
             }
-            return $"voice/{normalized}";
+            var parts = normalized.Split('/');
+            if (parts.Length == 0)
+            {
+                return "voice/other";
+            }
+            if (parts[0] == "narrating")
+            {
+                var bucket = parts.Length > 1 ? parts[1] : "unknown";
+                var group = bucket.StartsWith("episode_", StringComparison.Ordinal) ? "main_episodes"
+                    : bucket.StartsWith("hs_part", StringComparison.Ordinal) ? "hongshan"
+                    : bucket == "submission" ? "side_missions"
+                    : bucket == "subchar" ? "character_stories"
+                    : bucket == "subfac" ? "facility_base"
+                    : bucket == "commonextra" ? "common_extras"
+                    : bucket == "fragment" ? "fragments_archives"
+                    : "other";
+                return $"voice/story/{group}/{string.Join("/", parts, 1, parts.Length - 1)}";
+            }
+            if (parts[0] == "enemy")
+            {
+                return $"voice/enemies/{string.Join("/", parts, 1, parts.Length - 1)}".TrimEnd('/');
+            }
+            if (parts[0] is "story" or "characters" or "enemies" or "other")
+            {
+                return $"voice/{normalized}";
+            }
+            return $"voice/other/{normalized}";
         }
 
         private static bool IsBatchFolder(string segment)
