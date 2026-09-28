@@ -6,6 +6,7 @@ using System.Text;
 using AnimeStudio;
 using AnimeStudio.CLI;
 using AnimeStudio.Endfield;
+using SevenZip;
 
 static class Program
 {
@@ -23,6 +24,7 @@ static class Program
         {
             return RunLuaSweep(args[1], args[2]);
         }
+        TestStringCacheCollisionSafety();
         TestTexture2DNativeMipLayout();
         TestEnemySettlementBattleGraphPayload();
         TestObservedEnemySettlementBattleGraphVariants();
@@ -66,6 +68,24 @@ static class Program
         DocumentStoreTests.Run();
         Console.WriteLine("Managed-reference and VFS recovery tests passed.");
         return 0;
+    }
+
+    private static void TestStringCacheCollisionSafety()
+    {
+        const string first = "asset/test_956a9f617d.asset";
+        const string second = "asset/test_9f360143da.asset";
+        AssertEqual(CRC.CalculateDigestUTF8(first), CRC.CalculateDigestUTF8(second),
+            "AssetMap CRC32 collision fixture");
+
+        var firstEntry = new AssetEntry { Container = first };
+        var secondEntry = new AssetEntry { Container = second };
+        AssertEqual(first, firstEntry.Container, "first AssetMap container");
+        AssertEqual(second, secondEntry.Container, "distinct colliding AssetMap container");
+        AssertEqual(false, ReferenceEquals(firstEntry.Container, secondEntry.Container),
+            "colliding AssetMap paths remain distinct");
+        AssertEqual(true, ReferenceEquals(firstEntry.Container, StringCache.Get(new string(first.ToCharArray()))),
+            "exact AssetMap path still interns");
+        AssertEqual<string>(null, StringCache.Get(null), "null AssetMap path");
     }
 
     private static void TestTexture2DNativeMipLayout()
