@@ -96,7 +96,7 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         private volatile Exception failure;
         private bool completed;
 
-        private UnityDocumentStoreWriter(FileInfo store)
+        private UnityDocumentStoreWriter(FileInfo store, string schema, bool current)
         {
             finalPath = Path.GetFullPath(store.FullName);
             partialPath = finalPath + ".partial";
@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
             using (var meta = connection.CreateCommand())
             {
                 meta.CommandText = "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', $schema)";
-                meta.Parameters.AddWithValue("$schema", Schema);
+                meta.Parameters.AddWithValue("$schema", schema);
                 meta.ExecuteNonQuery();
             }
             insert = connection.CreateCommand();
@@ -140,9 +140,10 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
             exists.Parameters.Add(new SqliteParameter { ParameterName = "$name" });
             writerThread = new Thread(WriterLoop) { IsBackground = true, Name = "document-store-writer" };
             writerThread.Start();
-            Current = this;
+            if (current) Current = this;
         }
 
+        /// <summary>The store <see cref="DocumentOutput"/> routes exported documents into.</summary>
         public static UnityDocumentStoreWriter Current { get; private set; }
 
         public string FinalPath => finalPath;
@@ -150,11 +151,18 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         /// <summary>Rows inserted so far (a replaced name counts again).</summary>
         public long DocumentCount => Interlocked.Read(ref documentCount);
 
-        public static UnityDocumentStoreWriter Open(FileInfo store)
+        public static UnityDocumentStoreWriter Open(FileInfo store, string schema = Schema)
         {
             if (store == null) return null;
             if (Current != null) throw new InvalidOperationException("A document store writer is already active.");
-            return new UnityDocumentStoreWriter(store);
+            return new UnityDocumentStoreWriter(store, schema, current: true);
+        }
+
+        /// <summary>A second store of the same format that export routing never writes to; its owner calls <see cref="Put(string, string, byte[])"/>.</summary>
+        public static UnityDocumentStoreWriter OpenDetached(FileInfo store, string schema)
+        {
+            if (store == null) return null;
+            return new UnityDocumentStoreWriter(store, schema, current: false);
         }
 
         /// <summary>True for an exported file name the store owns (<c>unity_store.is_store_file</c>).</summary>
@@ -177,6 +185,13 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             var (type, name) = KeyOf(exportFullPath);
+            Put(type, name, data);
+        }
+
+        /// <summary>Store bytes under an explicit folder and relative name (used by packed VFS files).</summary>
+        public void Put(string type, string name, byte[] data)
+        {
+            if (data == null) throw new ArgumentNullException(nameof(data));
             var mtimeNs = (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
             Submit(Task.Run(() => Prepare(type, name, data, mtimeNs)));
         }
@@ -197,8 +212,8 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
             return answer.Task.GetAwaiter().GetResult();
         }
 
-        /// <summary>Apply every queued document, commit, close, and publish the store at its final path.</summary>
-        public void Complete()
+        /// <summary>Apply every queued document, write <paramref name="meta"/> rows, commit, close, and publish the store at its final path.</summary>
+        public void Complete(IReadOnlyDictionary<string, string> meta = null)
         {
             lock (sync)
             {
@@ -207,6 +222,21 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
                 if (failure != null)
                 {
                     throw new InvalidOperationException($"document store {finalPath} was not completed: {failure.Message}", failure);
+                }
+                if (meta != null && meta.Count > 0)
+                {
+                    EnsureTransaction();
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = "INSERT OR REPLACE INTO meta (key, value) VALUES ($key, $value)";
+                    var key = command.Parameters.Add(new SqliteParameter { ParameterName = "$key" });
+                    var value = command.Parameters.Add(new SqliteParameter { ParameterName = "$value" });
+                    foreach (var (metaKey, metaValue) in meta)
+                    {
+                        key.Value = metaKey;
+                        value.Value = metaValue;
+                        command.ExecuteNonQuery();
+                    }
                 }
                 CloseConnection(commit: true);
                 if (File.Exists(finalPath)) File.Delete(finalPath);
@@ -513,13 +543,13 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
         private static readonly UTF8Encoding FileWriteAllTextEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
         [ThreadStatic]
-        private static bool jsonTargetActive;
+        private static bool documentTargetActive;
 
-        /// <summary>Mark the current thread's export loop as a JSON target for its lifetime.</summary>
-        public static IDisposable Route(bool jsonTarget) => new RouteScope(jsonTarget);
+        /// <summary>Route documents from a JSON or Convert export loop for its lifetime.</summary>
+        public static IDisposable Route(bool documentTarget) => new RouteScope(documentTarget);
 
         public static bool Routes(string exportFullPath)
-            => jsonTargetActive
+            => documentTargetActive
                 && UnityDocumentStoreWriter.Current != null
                 && UnityDocumentStoreWriter.IsDocumentName(Path.GetFileName(exportFullPath));
 
@@ -588,16 +618,16 @@ CREATE INDEX IF NOT EXISTS objects_script ON objects (script_path_id) WHERE scri
             private readonly bool previous;
             private bool disposed;
 
-            public RouteScope(bool jsonTarget)
+            public RouteScope(bool documentTarget)
             {
-                previous = jsonTargetActive;
-                jsonTargetActive = jsonTarget;
+                previous = documentTargetActive;
+                documentTargetActive = documentTarget;
             }
 
             public void Dispose()
             {
                 if (disposed) return;
-                jsonTargetActive = previous;
+                documentTargetActive = previous;
                 disposed = true;
             }
         }

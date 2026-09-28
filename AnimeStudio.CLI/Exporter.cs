@@ -410,7 +410,7 @@ namespace AnimeStudio.CLI
                     path = texture.m_StreamData?.path,
                 },
             };
-            File.WriteAllText(
+            DocumentOutput.WriteAllText(
                 payloadPath + ".manifest.json",
                 JsonConvert.SerializeObject(manifest, Formatting.Indented));
         }
@@ -570,7 +570,7 @@ namespace AnimeStudio.CLI
                     path = cubemap.m_StreamData?.path,
                 },
             };
-            File.WriteAllText(payloadPath + ".manifest.json", JsonConvert.SerializeObject(manifest, Formatting.Indented));
+            DocumentOutput.WriteAllText(payloadPath + ".manifest.json", JsonConvert.SerializeObject(manifest, Formatting.Indented));
             return true;
         }
 
@@ -21962,25 +21962,121 @@ namespace AnimeStudio.CLI
             return true;
         }
 
+        public const string SpriteCropSchema = "endfield.sprite-crop.v1";
+
+        /// <summary>
+        /// A Sprite is a crop of a Texture2D, so it is exported as the crop, not
+        /// as a second copy of the pixels: a <c>.json</c> document naming the
+        /// exported texture file, the rectangle, the flip or rotation and the
+        /// cleared and color-zeroed pixels (<see cref="SpriteCropPlan"/>). Applied to the exported
+        /// texture it reproduces <see cref="SpriteHelper.GetImage"/> exactly;
+        /// <c>--sprite_images</c> checks that for every Sprite.
+        /// </summary>
         public static bool ExportSprite(AssetItem item, string exportPath)
         {
-            var type = Properties.Settings.Default.convertType;
-            if (!TryExportFile(exportPath, item, "." + type.ToString().ToLower(), out var exportFullPath))
-                return false;
-            var image = ((Sprite)item.Asset).GetImage();
-            if (image != null)
+            var sprite = (Sprite)item.Asset;
+            var plan = sprite.GetCropPlan();
+            if (plan == null)
             {
-                using (image)
-                {
-                    using (var file = File.Create(exportFullPath))
-                    {
-                        image.WriteToStream(file, type);
-                    }
-                    return true;
-                }
+                Logger.Warning($"Sprite {item.Text} (PathID {item.m_PathID}) resolves no texture; no crop document written.");
+                return false;
             }
-            return false;
+            if (!TryExportFile(exportPath, item, ".json", out var exportFullPath))
+                return false;
+            // Compact: the clear/zero runs are long integer arrays.
+            DocumentOutput.WriteAllText(exportFullPath, JsonConvert.SerializeObject(BuildSpriteCropDocument(item, sprite, plan), Formatting.None));
+            SpriteImageCheck.Current?.Check(sprite, plan, exportFullPath);
+            return true;
         }
+
+        /// <summary>The file name ExportTexture2D gives a texture (TryExportFile over its AssetItem text).</summary>
+        public static string ConvertedTextureFileName(Texture2D texture)
+        {
+            var text = string.IsNullOrEmpty(texture.Name) ? ClassIDType.Texture2D.ToString() : texture.Name;
+            var extension = "." + Properties.Settings.Default.convertType.ToString().ToLower();
+            return $"{FixFileName(text)}_p{texture.m_PathID:X16}{extension}";
+        }
+
+        private static OrderedDictionary BuildSpriteCropDocument(AssetItem item, Sprite sprite, SpriteCropPlan plan)
+        {
+            var source = plan.Source;
+            var texture = source.Texture;
+            var rawData = item.Asset.GetRawData();
+            var typeTree = item.Asset.serializedType?.m_Type;
+            var textureDocument = new OrderedDictionary
+            {
+                { "file", ConvertedTextureFileName(texture) },
+                { "name", texture.m_Name ?? "" },
+                { "sourceFile", texture.assetsFile?.fileName ?? "" },
+                { "pathId", texture.m_PathID },
+                { "width", texture.m_Width },
+                { "height", texture.m_Height },
+            };
+            if (source.Atlas != null)
+            {
+                textureDocument["spriteAtlas"] = new OrderedDictionary
+                {
+                    { "name", source.Atlas.m_Name ?? "" },
+                    { "sourceFile", source.Atlas.assetsFile?.fileName ?? "" },
+                    { "pathId", source.Atlas.m_PathID },
+                };
+            }
+            var crop = source.TopDownRect;
+            var header = BuildObjectExportMetadata(item, rawData, typeTree, typeTree != null ? "serializedType" : "none", null, null);
+            // Every Sprite shares one TypeTree; its field list would be most of each document.
+            header.Remove("typeTreeFieldPaths");
+            var document = new OrderedDictionary
+            {
+                { "$animestudio", header },
+                { "schema", SpriteCropSchema },
+                { "texture", textureDocument },
+            };
+            if (source.Downscaled)
+            {
+                document["scale"] = new OrderedDictionary { { "width", source.ScaledWidth }, { "height", source.ScaledHeight } };
+            }
+            document["crop"] = new OrderedDictionary { { "x", crop.X }, { "y", crop.Y }, { "width", crop.Width }, { "height", crop.Height } };
+            document["transform"] = plan.Transform switch
+            {
+                SpriteCropTransform.None => "none",
+                SpriteCropTransform.FlipX => "flipX",
+                SpriteCropTransform.FlipY => "flipY",
+                SpriteCropTransform.Rotate180 => "rotate180",
+                SpriteCropTransform.RotateClockwise90 => "rotateCW90",
+                SpriteCropTransform.RotateCounterClockwise90 => "rotateCCW90",
+                _ => throw new InvalidDataException($"unknown sprite transform {plan.Transform}"),
+            };
+            document["width"] = plan.Width;
+            document["height"] = plan.Height;
+            document["clear"] = plan.ClearRows;
+            document["zero"] = plan.ZeroRows;
+            var settings = source.Settings;
+            document["unity"] = new OrderedDictionary
+            {
+                { "rect", SpriteRect(sprite.m_Rect) },
+                { "offset", new[] { sprite.m_Offset.X, sprite.m_Offset.Y } },
+                { "border", new[] { sprite.m_Border.X, sprite.m_Border.Y, sprite.m_Border.Z, sprite.m_Border.W } },
+                { "pivot", new[] { sprite.m_Pivot.X, sprite.m_Pivot.Y } },
+                { "pixelsToUnits", sprite.m_PixelsToUnits },
+                { "textureRect", SpriteRect(source.TextureRect) },
+                { "textureRectOffset", new[] { source.TextureRectOffset.X, source.TextureRectOffset.Y } },
+                { "downscaleMultiplier", source.DownscaleMultiplier },
+                { "settingsRaw", settings.settingsRaw },
+                { "packed", settings.packed },
+                { "packingMode", settings.packingMode.ToString() },
+                { "packingRotation", settings.packingRotation.ToString() },
+                { "meshType", settings.meshType.ToString() },
+            };
+            return document;
+        }
+
+        private static OrderedDictionary SpriteRect(Rectf rect) => new OrderedDictionary
+        {
+            { "x", rect.x },
+            { "y", rect.y },
+            { "width", rect.width },
+            { "height", rect.height },
+        };
 
         public static bool ExportRawFile(AssetItem item, string exportPath)
         {

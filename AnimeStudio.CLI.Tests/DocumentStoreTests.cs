@@ -20,7 +20,10 @@ internal static class DocumentStoreTests
         TestClaimCreatesNoFilesAndReplacesDuplicates();
         TestFileModeIsUnchanged();
         TestNonJsonTargetStaysOnDisk();
+        TestConvertDocumentsAndMediaSplit();
         TestAbandonedStoreLeavesNothing();
+        TestPackedGameFileRows();
+        TestDetachedStoreIsNotRoutedAndKeepsMeta();
         TestDescribeDocumentPort();
     }
 
@@ -58,6 +61,83 @@ internal static class DocumentStoreTests
         yield return ("AnimationClip", "clip_p00000000000000BB.anim", "%YAML 1.1\n\"$animestudio\": {\"pathId\": 1}\n");
         yield return ("AnimationClip", "Upper_p00000000000000CC.ANIM", "anim");
         yield return ("Material", "m_pabcdefabcdefabcd.json.json", "{\"$animestudio\":{\"pathId\":-9223372036854775808,\"name\":\"min\"}}");
+    }
+
+    private static void TestPackedGameFileRows()
+    {
+        var root = NewTempDirectory();
+        var storePath = Path.Combine(root, "packed.sqlite");
+        var bytes = new byte[] { 0, 1, 2, 255 };
+        using (var store = UnityDocumentStoreWriter.Open(
+            new FileInfo(storePath), "endfield.game-file-store.v1")!)
+        {
+            store.Put("Json/LipSync", "Chinese/example.bytes", bytes);
+            store.Complete();
+        }
+        Assert(!Directory.Exists(Path.Combine(root, "Json")), "packed files have no loose folder");
+        using var connection = OpenReadOnly(storePath);
+        AssertEqual("endfield.game-file-store.v1", Scalar(connection, "SELECT value FROM meta WHERE key='schema'"), "packed schema");
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT type, name, sha256, data FROM objects";
+        using var reader = command.ExecuteReader();
+        Assert(reader.Read(), "one packed row");
+        AssertEqual("Json/LipSync", reader.GetString(0), "packed folder");
+        AssertEqual("Chinese/example.bytes", reader.GetString(1), "relative packed name");
+        AssertEqual(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), reader.GetString(2), "packed SHA256");
+        AssertBytes(bytes, Inflate((byte[])reader.GetValue(3)), "packed bytes");
+        Assert(!reader.Read(), "only one packed row");
+    }
+
+    /// <summary>--sprite_images: a second store export routing never writes to, completed with meta rows.</summary>
+    private static void TestDetachedStoreIsNotRoutedAndKeepsMeta()
+    {
+        var root = NewTempDirectory();
+        var documentsPath = Path.Combine(root, "documents.sqlite");
+        var imagesPath = Path.Combine(root, "images.sqlite");
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47 };
+        using (var documents = UnityDocumentStoreWriter.Open(new FileInfo(documentsPath))!)
+        using (var images = UnityDocumentStoreWriter.OpenDetached(new FileInfo(imagesPath), "endfield.sprite-image-store.v1")!)
+        using (DocumentOutput.Route(true))
+        {
+            Assert(ReferenceEquals(UnityDocumentStoreWriter.Current, documents), "a detached store does not take the route");
+            DocumentOutput.WriteAllText(Path.Combine(root, "Sprite", "icon_p0000000000000001.json"), "{}");
+            images.Put("Sprite", "icon_p0000000000000001.png", png);
+            images.Complete(new Dictionary<string, string> { ["spriteCheck"] = "{\"checked\":1}" });
+            documents.Complete();
+        }
+        using (var connection = OpenReadOnly(imagesPath))
+        {
+            AssertEqual("endfield.sprite-image-store.v1", Scalar(connection, "SELECT value FROM meta WHERE key='schema'"), "image store schema");
+            AssertEqual("{\"checked\":1}", Scalar(connection, "SELECT value FROM meta WHERE key='spriteCheck'"), "image store meta row");
+            AssertEqual("icon_p0000000000000001.png", Scalar(connection, "SELECT name FROM objects"), "image row");
+        }
+        using (var connection = OpenReadOnly(documentsPath))
+        {
+            AssertEqual("icon_p0000000000000001.json", Scalar(connection, "SELECT name FROM objects"), "the crop document is routed to the document store");
+        }
+    }
+
+    private static void TestConvertDocumentsAndMediaSplit()
+    {
+        var root = NewTempDirectory();
+        var storePath = Path.Combine(root, "convert.sqlite");
+        var stage = Path.Combine(root, "convert_by_type", "AnimationClip");
+        var clip = Path.Combine(stage, "clip_p0000000000000001.anim");
+        var marker = Path.Combine(stage, "empty_p0000000000000002.fbx.empty.json");
+        var media = Path.Combine(stage, "image_p0000000000000003.png");
+        using (var store = UnityDocumentStoreWriter.Open(new FileInfo(storePath))!)
+        using (DocumentOutput.Route(true))
+        {
+            DocumentOutput.WriteAllText(clip, "clip");
+            DocumentOutput.WriteAllText(marker, "{}");
+            Directory.CreateDirectory(stage);
+            DocumentOutput.WriteAllBytes(media, new byte[] { 1, 2, 3 });
+            store.Complete();
+        }
+        Assert(!File.Exists(clip) && !File.Exists(marker), "Convert documents have no loose files");
+        Assert(File.Exists(media), "Convert media stays on disk");
+        using var connection = OpenReadOnly(storePath);
+        AssertEqual("2", Scalar(connection, "SELECT COUNT(*) FROM objects"), "two Convert document rows");
     }
 
     private static void TestStoreRowsMatchTheFileExport()

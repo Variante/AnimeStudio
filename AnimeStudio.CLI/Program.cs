@@ -99,9 +99,19 @@ namespace AnimeStudio.CLI
                 }
                 if (o.DocumentStore != null
                     && o.AssetExportType != ExportType.JSON
-                    && o.SecondaryAssetExportType != ExportType.JSON)
+                    && o.SecondaryAssetExportType != ExportType.JSON
+                    && o.AssetExportType != ExportType.Convert
+                    && o.SecondaryAssetExportType != ExportType.Convert)
                 {
-                    Console.Error.WriteLine("--document_store requires a JSON export target.");
+                    Console.Error.WriteLine("--document_store requires a JSON or Convert export target.");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+                if (o.SpriteImages != null
+                    && o.AssetExportType != ExportType.Convert
+                    && o.SecondaryAssetExportType != ExportType.Convert)
+                {
+                    Console.Error.WriteLine("--sprite_images requires a Convert export target.");
                     Environment.ExitCode = 1;
                     return;
                 }
@@ -149,6 +159,7 @@ namespace AnimeStudio.CLI
                 using var rendererIndex = RendererIndexJsonlWriter.Open(o.RendererIndexJsonl, o.Input);
                 using var exportManifest = ExportManifestJsonlWriter.Open(o.ExportManifestJsonl, o.Output);
                 using var documentStore = UnityDocumentStoreWriter.Open(o.DocumentStore);
+                using var spriteImages = SpriteImageCheck.Open(o.SpriteImages);
 
                 if (o.Key != default)
                 {
@@ -200,6 +211,7 @@ namespace AnimeStudio.CLI
                 rendererIndex?.Complete(indexComplete);
                 exportManifest?.Complete(indexComplete);
                 documentStore?.Complete();
+                spriteImages?.Complete();
                 if (Properties.Settings.Default.scrapeMonos)
                 {
                     File.WriteAllLines("./Maps/PathStrings_Sorted.txt", PathStrings.Distinct().OrderBy(p => p));

@@ -542,9 +542,9 @@ namespace AnimeStudio.CLI
             int toExportCount = uniqueExportAssets.Count;
             int exportedCount = 0;
             int errorCount = 0;
-            // --document_store routes this loop's documents into the store only
-            // for a JSON export target; Convert/Raw/Dump targets stay on disk.
-            using var documentRoute = DocumentOutput.Route(exportType == ExportType.JSON);
+            // --document_store routes .json/.anim documents for JSON and Convert
+            // targets into the store; media and Raw/Dump outputs stay on disk.
+            using var documentRoute = DocumentOutput.Route(exportType == ExportType.JSON || exportType == ExportType.Convert);
             foreach (var asset in uniqueExportAssets)
             {
                 string exportPath;
