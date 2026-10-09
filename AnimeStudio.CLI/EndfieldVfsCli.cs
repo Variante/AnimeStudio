@@ -970,7 +970,14 @@ namespace AnimeStudio.CLI
 
             foreach (var selectedChunk in selectedChunks)
             {
-                Parallel.ForEach(selectedChunk.Files, file =>
+                // Packed documents enqueue compression work on the same pool.
+                // Unbounded parallel producers can fill its bounded queue and
+                // occupy every worker, leaving the writer waiting for a task
+                // stranded on a blocked producer's local work queue.
+                Parallel.ForEach(selectedChunk.Files, new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 8),
+                }, file =>
                 {
                     try
                     {

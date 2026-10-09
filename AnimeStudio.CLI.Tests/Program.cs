@@ -12,6 +12,10 @@ static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "packed-dump-stress")
+        {
+            return RunPackedDumpStress();
+        }
         if (args.Length >= 4 && string.Equals(args[0], "table-sweep", StringComparison.OrdinalIgnoreCase))
         {
             return RunTableSweep(args[1], args[2], args[3], args.Length >= 5 ? args[4] : null);
@@ -1434,6 +1438,61 @@ static class Program
         {
             WriteAuditMetadata(root, blockType,
                 BuildAuditMetadata(blockType, writer => writer.Write(0)));
+        }
+    }
+
+    private static int RunPackedDumpStress()
+    {
+        // Limit the shared pool so an unbounded dump cannot hide starvation
+        // behind hundreds of replacement threads. Run this mode in a process
+        // with an external timeout, since the regression is a deadlock.
+        ThreadPool.GetMaxThreads(out _, out var completionThreads);
+        ThreadPool.GetMinThreads(out _, out var minimumCompletionThreads);
+        var workers = Math.Clamp(Environment.ProcessorCount, 1, 8);
+        if (!ThreadPool.SetMinThreads(1, minimumCompletionThreads)
+            || !ThreadPool.SetMaxThreads(workers * 2 + 2, completionThreads))
+            throw new InvalidOperationException("Cannot bound the stress-test thread pool");
+        var root = Path.Combine(Path.GetTempPath(), "animestudio-packed-dump-" + Guid.NewGuid());
+        try
+        {
+            const int fileCount = 2048;
+            var data = Encoding.UTF8.GetBytes("{\"value\":\"" + new string('x', 256) + "\"}");
+            var chunk = Enumerable.Range(0, fileCount).SelectMany(_ => data).ToArray();
+            var chunkDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(chunk));
+            var dataDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(data));
+            var blockType = EndfieldVfsBlockType.JsonData;
+            WriteAuditMetadata(root, blockType, BuildAuditMetadata(blockType, fileCount, chunk.Length, writer =>
+            {
+                writer.Write(1);
+                WriteAuditChunkHeader(writer, chunk.Length, fileCount, chunkDigest, blockType);
+                for (var index = 0; index < fileCount; index++)
+                    WriteAuditFile(writer, $"Data/Json/LipSync/Chinese/line{index:D4}.bytes",
+                        index * data.Length, data.Length, 0, dataDigest, blockType);
+            }));
+            var blockDirectory = Path.Combine(root, "VFS",
+                EndfieldVfsHash.VfsBlockHash(blockType.GetName(), EndfieldVfsKeys.UnityHashSecret));
+            File.WriteAllBytes(Path.Combine(blockDirectory, "00000000000000000000000000000000.chk"), chunk);
+            var storePath = Path.Combine(root, "packed.sqlite");
+            if (!EndfieldVfsCli.TryRun(new[] { "dump", "-s", root, "-o", Path.Combine(root, "out"),
+                    "-b", "json-data", "--packed-game-store", storePath }, out var exitCode) || exitCode != 0)
+                throw new InvalidOperationException("Packed dump stress fixture failed");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={storePath};Mode=ReadOnly;Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM objects WHERE type='Json/LipSync'";
+            AssertEqual((long)fileCount, (long)command.ExecuteScalar()!, "all parallel packed rows are published");
+            command.CommandText = "SELECT DISTINCT sha256 FROM objects";
+            AssertEqual(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)).ToLowerInvariant(),
+                (string)command.ExecuteScalar()!, "packed bytes retain their digest");
+            Console.WriteLine("Packed dump concurrency stress passed.");
+            return 0;
+        }
+        finally
+        {
+            var expectedParent = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
+            if (!string.Equals(Path.GetDirectoryName(Path.GetFullPath(root)), expectedParent, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Unsafe packed dump fixture cleanup target");
+            Directory.Delete(root, recursive: true);
         }
     }
 
