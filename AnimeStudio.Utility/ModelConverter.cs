@@ -778,6 +778,10 @@ namespace AnimeStudio
 
         private void ConvertTexture2D(Texture2D m_Texture2D, string name)
         {
+            if (!options.convertTextures)
+            {
+                return;
+            }
             var iTex = ImportedHelpers.FindTexture(name, TextureList);
             if (iTex != null)
             {
@@ -1186,6 +1190,8 @@ namespace AnimeStudio
             public Game game;
             public bool collectAnimations;
             public bool exportMaterials;
+            /// <summary>False: materials name their textures, but the textures are not decoded into TextureList.</summary>
+            public bool convertTextures = true;
             public HashSet<Material> materials;
             public Dictionary<string, (bool, int)> uvs;
             public Dictionary<string, int> texs; 

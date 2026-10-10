@@ -18,6 +18,8 @@ namespace AnimeStudio.CLI
     internal static class Exporter
     {
         public static bool ExportTexture2DNativePayloads { get; set; }
+        /// <summary>False: model exports name their material textures but do not decode or write them.</summary>
+        public static bool ExportModelTextures { get; set; } = true;
 
         private const int MaxSafeFileNameLength = 120;
         private const int MonoBehaviourBaseTypeTreeNodeCount = 12;
@@ -22191,6 +22193,7 @@ namespace AnimeStudio.CLI
                 game = Studio.Game,
                 collectAnimations = Properties.Settings.Default.collectAnimations,
                 exportMaterials = Properties.Settings.Default.exportMaterials,
+                convertTextures = ExportModelTextures,
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),
@@ -22235,6 +22238,7 @@ namespace AnimeStudio.CLI
                 game = Studio.Game,
                 collectAnimations = Properties.Settings.Default.collectAnimations,
                 exportMaterials = Properties.Settings.Default.exportMaterials,
+                convertTextures = ExportModelTextures,
                 materials = new HashSet<Material>(),
                 uvs = JsonConvert.DeserializeObject<Dictionary<string, (bool, int)>>(Properties.Settings.Default.uvs),
                 texs = JsonConvert.DeserializeObject<Dictionary<string, int>>(Properties.Settings.Default.texs),

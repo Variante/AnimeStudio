@@ -56,6 +56,7 @@ namespace AnimeStudio
         public static void Clear()
         {
             CABMap.Clear();
+            CABsByPath = null;
             Offsets.Clear();
             BaseFolder = string.Empty;
             assetsManager.SpecifyUnityVersion = string.Empty;
@@ -112,10 +113,40 @@ namespace AnimeStudio
             }
         }
 
+        // Path -> CAB names, built lazily so resolving one file per export
+        // does not rescan the whole map. Rebuilt whenever the map instance or
+        // its size changes (load, build, clear and dump all do one of both).
+        private static Dictionary<string, HashSet<string>> CABsByPath;
+        private static Dictionary<string, Entry> CABsByPathSource;
+        private static int CABsByPathCount = -1;
+
+        private static Dictionary<string, HashSet<string>> GetCABsByPath()
+        {
+            if (CABsByPath == null || !ReferenceEquals(CABsByPathSource, CABMap) || CABsByPathCount != CABMap.Count)
+            {
+                var index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (cab, entry) in CABMap)
+                {
+                    if (!index.TryGetValue(entry.Path, out var set))
+                    {
+                        set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        index[entry.Path] = set;
+                    }
+                    set.Add(cab);
+                }
+                CABsByPath = index;
+                CABsByPathSource = CABMap;
+                CABsByPathCount = CABMap.Count;
+            }
+            return CABsByPath;
+        }
+
         public static bool FindCAB(string path, out HashSet<string> cabs)
         {
             var relativePath = Path.GetRelativePath(BaseFolder, path);
-            cabs = CABMap.AsParallel().Where(x => x.Value.Path.Equals(relativePath, StringComparison.OrdinalIgnoreCase)).Select(x => x.Key).Distinct().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            cabs = GetCABsByPath().TryGetValue(relativePath, out var found)
+                ? new HashSet<string>(found, StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             Logger.Verbose($"Found {cabs.Count} that belongs to {relativePath}");
             return cabs.Count != 0;
         }
@@ -156,6 +187,7 @@ namespace AnimeStudio
             try
             {
                 CABMap.Clear();
+                CABsByPath = null;
                 Progress.Reset();
                 var collision = 0;
                 BaseFolder = baseFolder;
@@ -261,6 +293,7 @@ namespace AnimeStudio
             try
             {
                 CABMap.Clear();
+                CABsByPath = null;
                 using var fs = File.OpenRead(Path.Combine(MapName, $"{mapName}.bin"));
                 using var reader = new BinaryReader(fs);
                 ParseCABMap(reader);
@@ -283,6 +316,7 @@ namespace AnimeStudio
             try
             {
                 CABMap.Clear();
+                CABsByPath = null;
                 using var fs = File.OpenRead(path);
                 using var reader = new BinaryReader(fs);
                 ParseCABMap(reader);
@@ -754,6 +788,7 @@ namespace AnimeStudio
         {
             Logger.Info($"Building Both...");
             CABMap.Clear();
+            CABsByPath = null;
             Progress.Reset();
             var collision = 0;
             BaseFolder = baseFolder;

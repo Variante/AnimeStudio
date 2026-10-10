@@ -77,6 +77,7 @@ namespace AnimeStudio.CLI
                 }
                 Studio.MonoBehaviourTypeTreePriorityMode = o.MonoBehaviourTypeTreePriority;
                 Exporter.ExportTexture2DNativePayloads = o.Texture2DNativePayload;
+                Exporter.ExportModelTextures = !o.NoModelTextures;
 
                 var typeFilterPlan = ConfigureTypeFilters(o);
 
@@ -479,6 +480,14 @@ namespace AnimeStudio.CLI
                     && ContainsMonoBehaviour(plan.SecondaryExportTypes));
         }
 
+        private static List<SerializedFile> SelectPrimaryFiles(List<SerializedFile> loaded, string file)
+        {
+            var primary = Path.GetFullPath(file);
+            return loaded
+                .Where(x => string.Equals(Path.GetFullPath(string.IsNullOrEmpty(x.originalPath) ? x.fullName : x.originalPath), primary, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
         private static bool RunExportPlan(
             Options o,
             TypeFilterPlan typeFilterPlan,
@@ -512,11 +521,18 @@ namespace AnimeStudio.CLI
                 if (assetsManager.assetsFileList.Count > 0)
                 {
                     loadedBatchCount++;
-                    ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(assetsManager.assetsFileList);
-                    RendererIndexJsonlWriter.Current?.WriteLoadedRenderers(assetsManager.assetsFileList);
+                    // With dependency resolution the batch also holds the
+                    // bundles this file references; they are loaded only so
+                    // cross-bundle PPtrs (e.g. a SkinnedMeshRenderer's Mesh)
+                    // resolve, and are exported when selected themselves.
+                    var sourceFiles = assetsManager.ResolveDependencies
+                        ? SelectPrimaryFiles(assetsManager.assetsFileList, file)
+                        : assetsManager.assetsFileList;
+                    ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(sourceFiles);
+                    RendererIndexJsonlWriter.Current?.WriteLoadedRenderers(sourceFiles);
                     using (LoadTiming.Measure(LoadTiming.Id.BuildAssetData))
                     {
-                        BuildAssetData(typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);
+                        BuildAssetData(sourceFiles, typeFilterPlan.AssetSelectionTypes, o.NameFilter, o.ContainerFilter, ref i);
                     }
                     foreach (var target in exportTargets)
                     {

@@ -53,6 +53,7 @@ namespace AnimeStudio.CLI
                 optionsBinder.AllowPartialJson,
                 optionsBinder.FilterDataFile,
                 optionsBinder.Texture2DNativePayload,
+                optionsBinder.NoModelTextures,
                 optionsBinder.Input,
                 optionsBinder.Output
             };
@@ -102,6 +103,7 @@ namespace AnimeStudio.CLI
         public bool AllowPartialJson { get; set; }
         public FileInfo FilterDataFile { get; set; }
         public bool Texture2DNativePayload { get; set; }
+        public bool NoModelTextures { get; set; }
         public FileInfo Input { get; set; }
         public DirectoryInfo Output { get; set; }
     }
@@ -140,6 +142,7 @@ namespace AnimeStudio.CLI
         public readonly Option<bool> AllowPartialJson;
         public readonly Option<FileInfo> FilterDataFile;
         public readonly Option<bool> Texture2DNativePayload;
+        public readonly Option<bool> NoModelTextures;
         public readonly Argument<FileInfo> Input;
         public readonly Argument<DirectoryInfo> Output;
 
@@ -189,6 +192,9 @@ namespace AnimeStudio.CLI
             Texture2DNativePayload = new Option<bool>(
                 "--texture2d_native_payload",
                 "Write the exact native Texture2D image payload and a validated mip-layout manifest alongside converted textures.");
+            NoModelTextures = new Option<bool>(
+                "--no_model_textures",
+                "Animator/model export: keep material texture references in the FBX but do not decode or write the textures beside it (export Texture2D for the images).");
             Input = new Argument<FileInfo>("input_path", "Input file/folder.").LegalFilePathsOnly();
             Output = new Argument<DirectoryInfo>("output_path", "Output folder.").LegalFilePathsOnly();
 
@@ -358,6 +364,7 @@ namespace AnimeStudio.CLI
             AllowPartialJson = bindingContext.ParseResult.GetValueForOption(AllowPartialJson),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),
             Texture2DNativePayload = bindingContext.ParseResult.GetValueForOption(Texture2DNativePayload),
+            NoModelTextures = bindingContext.ParseResult.GetValueForOption(NoModelTextures),
             Input = bindingContext.ParseResult.GetValueForArgument(Input),
             Output = bindingContext.ParseResult.GetValueForArgument(Output)
         };

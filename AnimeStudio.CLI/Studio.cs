@@ -251,10 +251,17 @@ namespace AnimeStudio.CLI
 
         public static void BuildAssetData(ClassIDType[] typeFilters, Regex[] nameFilters, Regex[] containerFilters, ref int i)
         {
+            BuildAssetData(assetsManager.assetsFileList, typeFilters, nameFilters, containerFilters, ref i);
+        }
+
+        // sourceFiles limits which loaded files become exportable; dependency
+        // files loaded only to resolve cross-bundle PPtrs stay out of it.
+        public static void BuildAssetData(IEnumerable<SerializedFile> sourceFiles, ClassIDType[] typeFilters, Regex[] nameFilters, Regex[] containerFilters, ref int i)
+        {
             var objectAssetItemDic = new Dictionary<Object, AssetItem>();
             var mihoyoBinDataNames = new List<(PPtr<Object>, string)>();
             var containers = new List<(PPtr<Object>, string)>();
-            foreach (var assetsFile in assetsManager.assetsFileList)
+            foreach (var assetsFile in sourceFiles)
             {
                 foreach (var asset in assetsFile.Objects)
                 {
