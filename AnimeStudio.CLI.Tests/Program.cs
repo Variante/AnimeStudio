@@ -12,6 +12,8 @@ static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "mesh-collision")
+            return MeshCollisionTests.Run();
         if (args.Length == 1 && args[0] == "packed-dump-stress")
         {
             return RunPackedDumpStress();

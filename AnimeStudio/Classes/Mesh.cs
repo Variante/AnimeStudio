@@ -546,7 +546,11 @@ namespace AnimeStudio
         private VertexData m_VertexData;
         private CompressedMesh m_CompressedMesh;
         private StreamingInfo m_StreamData;
-        private bool m_CollisionMeshBaked = false;
+        public bool m_CollisionMeshOnly;
+        public bool m_CollisionMeshBaked;
+        public bool m_CollisionMeshConvex;
+        public CollisionPayloadInfo ConvexCollision { get; private set; } = CollisionPayloadInfo.Describe(null);
+        public CollisionPayloadInfo TriangleCollision { get; private set; } = CollisionPayloadInfo.Describe(null);
 
         public static bool HasVertexColorSkinning(SerializedType type) => type.Match("413A501B79022BF2DF389A82002FC81F");
 
@@ -673,9 +677,9 @@ namespace AnimeStudio
                     }
                     if (reader.Game.Type.IsArknightsEndfieldCB3() || reader.Game.Type.IsArknightsEndfield())
                     {
-                        var m_CollisionMeshOnly = reader.ReadBoolean();
+                        m_CollisionMeshOnly = reader.ReadBoolean();
                         m_CollisionMeshBaked = reader.ReadBoolean();
-                        var m_CollisionMeshConvex = reader.ReadBoolean();
+                        m_CollisionMeshConvex = reader.ReadBoolean();
                     }
                     if (reader.Game.Type.IsHYGCB1())
                     {
@@ -687,9 +691,9 @@ namespace AnimeStudio
                     }
                     if (reader.Game.Type.IsArknightsEndfieldCB2())
                     {
-                        var m_CollisionMeshOnly = reader.ReadBoolean();
+                        m_CollisionMeshOnly = reader.ReadBoolean();
                         m_CollisionMeshBaked = reader.ReadBoolean();
-                        var m_CollisionMeshConvex = reader.ReadBoolean();
+                        m_CollisionMeshConvex = reader.ReadBoolean();
                     }
                 }
                 reader.AlignStream();
@@ -835,9 +839,9 @@ namespace AnimeStudio
 
             if (version[0] >= 5) //5.0 and up
             {
-                var m_BakedConvexCollisionMesh = reader.ReadUInt8Array();
+                ConvexCollision = CollisionPayloadInfo.Describe(reader.ReadUInt8Array());
                 reader.AlignStream();
-                var m_BakedTriangleCollisionMesh = reader.ReadUInt8Array();
+                TriangleCollision = CollisionPayloadInfo.Describe(reader.ReadUInt8Array());
                 reader.AlignStream();
                 if (reader.Game.Type.IsBH3())
                 {

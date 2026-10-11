@@ -8,15 +8,47 @@ namespace AnimeStudio
 {
     public static class TypeTreeHelper
     {
+        // Endfield's serialized Mesh tree describes both branches, but baked collision
+        // meshes omit CompressedMesh entirely (the typed Mesh reader does the same).
+        // Project a per-read node list; never mutate the shared serialized type tree.
+        private static List<TypeTreeNode> SerializedNodes(TypeTree tree, ObjectReader reader, out bool collisionBranch)
+        {
+            collisionBranch = false;
+            var nodes = tree.m_Nodes;
+            if (reader.type != ClassIDType.Mesh || !reader.Game.Type.IsArknightsEndfieldGroup())
+                return nodes;
+            var compressed = nodes.FindIndex(n => n.m_Level == 1 && n.m_Name == "m_CompressedMesh" && n.m_Type == "CompressedMesh");
+            var baked = nodes.FindIndex(n => n.m_Level == 1 && n.m_Name == "m_CollisionMeshBaked" && n.m_Type == "bool");
+            if (baked < 0 || compressed <= baked)
+                return nodes;
+            if (!TryReadTopLevelPrefixBeforeField(tree, reader, "m_CompressedMesh", "CompressedMesh",
+                out var prefix, out var bytesRead, out var error))
+                throw new InvalidDataException($"Cannot read Endfield Mesh prefix before m_CompressedMesh (PathID {reader.m_PathID}, offset {bytesRead}, byteSize {reader.byteSize}).", error);
+            if (prefix["m_CollisionMeshBaked"] is not true)
+                return nodes;
+            var projected = new List<TypeTreeNode>(nodes);
+            projected.RemoveRange(compressed, GetNodes(nodes, compressed).Count);
+            collisionBranch = true;
+            return projected;
+        }
+
+        private static void CheckCollisionBranchSize(ObjectReader reader, bool collisionBranch)
+        {
+            var consumed = reader.Position - reader.byteStart;
+            if (collisionBranch && consumed != reader.byteSize)
+                throw new InvalidDataException($"Endfield baked Mesh type tree consumed {consumed} bytes; expected {reader.byteSize} (PathID {reader.m_PathID}).");
+        }
+
         public static string ReadTypeString(TypeTree m_Type, ObjectReader reader)
         {
+            var m_Nodes = SerializedNodes(m_Type, reader, out var collisionBranch);
             reader.Reset();
             var sb = new StringBuilder();
-            var m_Nodes = m_Type.m_Nodes;
             for (int i = 0; i < m_Nodes.Count; i++)
             {
                 ReadStringValue(sb, m_Nodes, reader, ref i);
             }
+            CheckCollisionBranchSize(reader, collisionBranch);
             var readed = reader.Position - reader.byteStart;
             if (readed != reader.byteSize)
             {
@@ -165,15 +197,16 @@ namespace AnimeStudio
 
         public static OrderedDictionary ReadType(TypeTree m_Types, ObjectReader reader)
         {
+            var m_Nodes = SerializedNodes(m_Types, reader, out var collisionBranch);
             reader.Reset();
             var obj = new OrderedDictionary();
-            var m_Nodes = m_Types.m_Nodes;
             for (int i = 1; i < m_Nodes.Count; i++)
             {
                 var m_Node = m_Nodes[i];
                 var varNameStr = m_Node.m_Name;
                 obj[varNameStr] = ReadValue(m_Nodes, reader, ref i);
             }
+            CheckCollisionBranchSize(reader, collisionBranch);
             var readed = reader.Position - reader.byteStart;
             if (readed != reader.byteSize)
             {

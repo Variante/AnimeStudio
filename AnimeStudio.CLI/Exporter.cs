@@ -79,7 +79,11 @@ namespace AnimeStudio.CLI
         private static string MeshNoOutputReason(Mesh mesh)
         {
             if (mesh.m_VertexCount <= 0)
+            {
+                if (mesh.m_CollisionMeshBaked && (mesh.ConvexCollision.ByteCount > 0 || mesh.TriangleCollision.ByteCount > 0))
+                    return "baked_collision_without_render_vertices";
                 return "zero_vertex_count";
+            }
             if (mesh.m_Vertices == null)
                 return "missing_vertex_buffer";
             if (mesh.m_Vertices.Length == 0)
@@ -133,6 +137,10 @@ namespace AnimeStudio.CLI
                 $"VerticesLength={mesh.m_Vertices?.Length ?? 0} " +
                 $"SubMeshCount={mesh.m_SubMeshes?.Count ?? 0} " +
                 $"IndexCount={mesh.m_Indices?.Count ?? 0} " +
+                $"CollisionOnly={mesh.m_CollisionMeshOnly} CollisionBaked={mesh.m_CollisionMeshBaked} CollisionConvex={mesh.m_CollisionMeshConvex} " +
+                $"ConvexCollisionBytes={mesh.ConvexCollision.ByteCount} TriangleCollisionBytes={mesh.TriangleCollision.ByteCount} " +
+                $"ConvexCollisionHeader={mesh.ConvexCollision.HeaderHex} ConvexCollisionSha256={mesh.ConvexCollision.Sha256} " +
+                $"TriangleCollisionHeader={mesh.TriangleCollision.HeaderHex} TriangleCollisionSha256={mesh.TriangleCollision.Sha256} " +
                 $"ByteSize={item.FullSize}");
         }
 
@@ -183,7 +191,7 @@ namespace AnimeStudio.CLI
 
             var sb = new StringBuilder();
             sb.AppendLine("# AnimeStudio empty Mesh");
-            sb.AppendLine("# The Unity Mesh was parsed but has no vertices, so no OBJ faces can be emitted.");
+            sb.AppendLine("# The Unity Mesh was parsed but has no render vertices, so no render OBJ faces can be emitted.");
             sb.AppendLine($"# reason: {reason}");
             sb.AppendLine($"# name: {mesh.m_Name}");
             sb.AppendLine($"# path_id: {item.m_PathID}");
@@ -194,6 +202,15 @@ namespace AnimeStudio.CLI
             sb.AppendLine($"# vertices_length: {mesh.m_Vertices?.Length ?? 0}");
             sb.AppendLine($"# submesh_count: {mesh.m_SubMeshes?.Count ?? 0}");
             sb.AppendLine($"# index_count: {mesh.m_Indices?.Count ?? 0}");
+            sb.AppendLine($"# collision_only: {mesh.m_CollisionMeshOnly}");
+            sb.AppendLine($"# collision_baked: {mesh.m_CollisionMeshBaked}");
+            sb.AppendLine($"# collision_convex: {mesh.m_CollisionMeshConvex}");
+            foreach (var collision in new[] { ("convex", mesh.ConvexCollision), ("triangle", mesh.TriangleCollision) })
+            {
+                sb.AppendLine($"# {collision.Item1}_collision_bytes: {collision.Item2.ByteCount}");
+                sb.AppendLine($"# {collision.Item1}_collision_header: {collision.Item2.HeaderHex}");
+                sb.AppendLine($"# {collision.Item1}_collision_sha256: {collision.Item2.Sha256}");
+            }
             sb.AppendLine($"# byte_size: {item.FullSize}");
             sb.AppendLine("g " + mesh.m_Name);
             DocumentOutput.WriteAllText(exportFullPath, sb.ToString());
