@@ -58,6 +58,7 @@ static class Program
         TestEndfieldVfsCatalogInvariants();
         TestEndfieldVfsMd5Verification();
         TestEndfieldVfsAuditSyntheticFixtures();
+        TestEndfieldJsonLipBlocks();
         TestEndfieldAudioAuditConditionalMissing();
         StreamExtensionsTests.Run();
         VFSDirectoryInfoTests.Run();
@@ -1292,6 +1293,64 @@ static class Program
         }
     }
 
+    private static void TestEndfieldJsonLipBlocks()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"animestudio-jsonlip-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            PrepareAuditCatalog(root);
+            var languages = new[] { "Chinese", "English", "Japanese", "Korean" };
+            for (var index = 0; index < languages.Length; index++)
+            {
+                var block = (EndfieldVfsBlockType)(105 + index);
+                AssertEqual("JsonLip" + languages[index], block.GetName(), "JsonLip catalog name");
+                AssertEqual(block, EndfieldVfsBlockTypes.FromByte((byte)block), "JsonLip raw ID");
+                WriteAuditBlock(root, block, $"Data/Json/LipSync/{languages[index]}/line.json",
+                    new byte[] { 0x01, 0x00 }, writeChunk: index == 0);
+            }
+            var artifacts = RunAudit(root, "jsonlip", fallback: null, expectSuccess: true);
+            var ledger = ReadGzipText(artifacts.Ledger);
+            foreach (var language in languages)
+                if (!ledger.Contains("\"blockName\":\"JsonLip" + language + "\"", StringComparison.Ordinal))
+                    throw new InvalidOperationException("JsonLip catalog row missing: " + language);
+            if (!ledger.Contains("excluded_missing_voice", StringComparison.Ordinal))
+                throw new InvalidOperationException("Absent language LipSync must retain exclusion rows");
+            if (!EndfieldVfsCli.TryRun(new[] { "dump", "-s", root, "-b", "json-data",
+                    "-o", Path.Combine(root, "out"), "--verify-md5", "--packed-game-store", Path.Combine(root, "packed.sqlite") }, out var exit) || exit != 0)
+                throw new InvalidOperationException("JsonData selection must include the installed JsonLip block");
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(root, "packed.sqlite")};Mode=ReadOnly;Pooling=False"))
+            {
+                connection.Open(); using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM objects WHERE type='Json/LipSync'";
+                AssertEqual(1L, (long)command.ExecuteScalar()!, "JsonLip packed publication");
+            }
+            WriteAuditBlock(root, EndfieldVfsBlockType.JsonLipEnglish,
+                "Data/Json/LipSync/English/bad.json", new byte[] { 0x02 }, chunkContentMd5: 0);
+            RunAudit(root, "present-corrupt-jsonlip", fallback: null, expectSuccess: false);
+            AssertCliFailsForSelectedVfsFile(new[] { "stream", "-s", root, "-b", "json-lip-english", "--verify-md5" },
+                "Present JsonLip chunks must re-enter integrity checks");
+            WriteAuditBlock(root, EndfieldVfsBlockType.JsonLipEnglish,
+                "Data/Json/LipSync/English/line.json", new byte[] { 0x02 });
+            var digest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(new byte[] { 0x01, 0x00 }));
+            WriteAuditMetadata(root, EndfieldVfsBlockType.JsonLipChinese,
+                BuildAuditMetadata(EndfieldVfsBlockType.JsonLipChinese, 2, 4, writer =>
+                {
+                    writer.Write(2);
+                    for (var index = 0; index < 2; index++)
+                    {
+                        WriteAuditChunkHeader(writer, 2, 1, digest, EndfieldVfsBlockType.JsonLipChinese, (UInt128)index);
+                        WriteAuditFile(writer, $"Data/Json/LipSync/Chinese/line{index}.json", 0, 2,
+                            (UInt128)index, digest, EndfieldVfsBlockType.JsonLipChinese);
+                    }
+                }));
+            RunAudit(root, "partly-absent-jsonlip", fallback: null, expectSuccess: false);
+            AssertCliFailsForSelectedVfsFile(new[] { "stream", "-s", root, "-b", "json-lip-chinese", "--verify-md5" },
+                "Partly absent JsonLip blocks must fail");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
     private static void TestEndfieldVfsAuditMissingAuditAudioExclusion()
     {
         var root = Path.Combine(Path.GetTempPath(), $"animestudio-vfs-audit-missing-audit-audio-{Guid.NewGuid():N}");
@@ -1462,7 +1521,7 @@ static class Program
             var chunk = Enumerable.Range(0, fileCount).SelectMany(_ => data).ToArray();
             var chunkDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(chunk));
             var dataDigest = UInt128FromLittleEndian(System.Security.Cryptography.MD5.HashData(data));
-            var blockType = EndfieldVfsBlockType.JsonData;
+            var blockType = EndfieldVfsBlockType.JsonLipChinese;
             WriteAuditMetadata(root, blockType, BuildAuditMetadata(blockType, fileCount, chunk.Length, writer =>
             {
                 writer.Write(1);
@@ -1573,7 +1632,7 @@ static class Program
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true);
-        writer.Write(5);
+        writer.Write(6);
         writer.Write(24764758);
         return stream.ToArray();
     }
@@ -1645,9 +1704,10 @@ static class Program
         long chunkLength,
         int fileCount,
         UInt128 chunkContentMd5 = default,
-        EndfieldVfsBlockType blockType = EndfieldVfsBlockType.Terrain)
+        EndfieldVfsBlockType blockType = EndfieldVfsBlockType.Terrain,
+        UInt128 chunkName = default)
     {
-        WriteUInt128LittleEndian(writer, 0); // chunk MD5 name
+        WriteUInt128LittleEndian(writer, chunkName);
         WriteUInt128LittleEndian(writer, chunkContentMd5);
         writer.Write(chunkLength);
         writer.Write((byte)blockType);

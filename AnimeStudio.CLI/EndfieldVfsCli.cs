@@ -299,7 +299,7 @@ namespace AnimeStudio.CLI
                     var rawId = info.BlockTypeValue;
                     presentRawIds.Add(rawId);
                     if (!IsSelectedRawBlock(options, rawId)) continue;
-                    var excludedMissingAudio = IsAudioBlock(rawId)
+                    var excludedMissingAudio = EndfieldVfsBlockTypes.IsOptionalDownload(rawId)
                         && info.Chunks.Count > 0
                         && info.Chunks.All(chunk => IsChunkMissing(loader, entry, chunk));
                     var excluded = excludedMissingAudio;
@@ -317,7 +317,7 @@ namespace AnimeStudio.CLI
                             {
                                 inputs.Add(CreateProfileInput(
                                     loader, entry, chunk, file, metadataVerified, "excluded",
-                                    "audio block conditionally ignored because every declared chunk is absent from primary and fallback roots"));
+                                    "optional audio or LipSync block conditionally ignored because every declared chunk is absent from primary and fallback roots"));
                             }
                             continue;
                         }
@@ -847,19 +847,7 @@ namespace AnimeStudio.CLI
             };
 
         private static bool IsSelectedRawBlock(VfsOptions options, byte rawId) =>
-            options.UseAllBlockTypes || options.BlockTypes.Any(item => (byte)item == rawId);
-
-        private static bool IsDeferredVoice(byte rawId) => rawId is 102 or 103 or 104;
-
-        private static bool IsAudioBlock(byte rawId) => rawId is
-            (byte)EndfieldVfsBlockType.InitialAudio or
-            (byte)EndfieldVfsBlockType.AuditAudio or
-            (byte)EndfieldVfsBlockType.Audio or
-            (byte)EndfieldVfsBlockType.HotfixAudio or
-            (byte)EndfieldVfsBlockType.AudioChinese or
-            (byte)EndfieldVfsBlockType.AudioEnglish or
-            (byte)EndfieldVfsBlockType.AudioJapanese or
-            (byte)EndfieldVfsBlockType.AudioKorean;
+            options.UseAllBlockTypes || options.SelectedBlockTypes().Any(item => (byte)item == rawId);
 
         private static bool IsChunkMissing(
             EndfieldVfsLoader loader,
@@ -877,12 +865,12 @@ namespace AnimeStudio.CLI
             }
         }
 
-        private static bool ShouldExcludeMissingAuditAudio(
+        private static bool ShouldExcludeAbsentDownload(
             VfsOptions options,
             EndfieldVfsLoader loader,
             EndfieldVfsBlockType blockType,
             EndfieldVfsBlockMainInfo blockInfo) =>
-            IsAudioBlock((byte)blockType)
+            EndfieldVfsBlockTypes.IsOptionalDownload((byte)blockType)
             && blockInfo.Chunks.Count > 0
             && blockInfo.Chunks.All(chunk =>
             {
@@ -928,7 +916,7 @@ namespace AnimeStudio.CLI
         {
             foreach (var block in LoadSelectedBlocks(loader, options, missingBlock: missingBlock))
             {
-                if (ShouldExcludeMissingAuditAudio(options, loader, block.BlockType, block.Info))
+                if (ShouldExcludeAbsentDownload(options, loader, block.BlockType, block.Info))
                 {
                     Console.Error.WriteLine(
                         $"Conditionally ignored {block.BlockType.GetName()} because every declared chunk is absent from primary and fallback roots");
@@ -961,7 +949,7 @@ namespace AnimeStudio.CLI
                 .ToList();
             var totalFiles = selectedChunks.Sum(chunk => chunk.Files.Count);
 
-            if (ShouldExcludeMissingAuditAudio(options, loader, blockType, blockInfo))
+            if (ShouldExcludeAbsentDownload(options, loader, blockType, blockInfo))
             {
                 Console.WriteLine(
                     $"  Conditionally ignored {totalFiles} {blockType.GetName()} files because every declared chunk is absent from primary and fallback roots");
@@ -1054,7 +1042,7 @@ namespace AnimeStudio.CLI
                 outputPath = EndfieldDumpProcessors.ResolveContainedPath(output, file.FileName);
                 var relative = Path.GetRelativePath(Path.GetFullPath(output), outputPath).Replace('\\', '/');
                 const string packedPrefix = "Data/Json/LipSync/";
-                if (blockType == EndfieldVfsBlockType.JsonData
+                if ((blockType == EndfieldVfsBlockType.JsonData || EndfieldVfsBlockTypes.IsLipSync((byte)blockType))
                     && packedStore != null
                     && relative.StartsWith(packedPrefix, StringComparison.OrdinalIgnoreCase)
                     && relative.Length > packedPrefix.Length)
@@ -1144,7 +1132,7 @@ namespace AnimeStudio.CLI
                 var blockFileCount = 0;
                 var blockByteCount = 0L;
                 var blockMissingChunks = 0;
-                var excludeMissingAuditAudio = ShouldExcludeMissingAuditAudio(
+                var excludeMissingAuditAudio = ShouldExcludeAbsentDownload(
                     options, loader, blockType, blockInfo);
 
                 foreach (var chunk in blockInfo.Chunks)
@@ -1494,7 +1482,7 @@ namespace AnimeStudio.CLI
                 var blockInfo = block.Info;
                 var blockName = blockType.GetName();
                 var blockDirName = loader.BlockDirectoryName(blockType);
-                var excludeMissingAuditAudio = ShouldExcludeMissingAuditAudio(
+                var excludeMissingAuditAudio = ShouldExcludeAbsentDownload(
                     options, loader, blockType, blockInfo);
                 totalBlocks++;
 
@@ -1860,7 +1848,7 @@ namespace AnimeStudio.CLI
         private static void PrintCommandHelp(string command)
         {
             const string executable = "AnimeStudio.CLI.exe";
-            const string blockTypeValues = "[default: all] [possible values: all, initial-audio, initial-bundle, initial-extend-data, bundle-manifest, i-fix-patch, audit-streaming, audit-dynamic-streaming, audit-iv, audit-audio, audit-video, bundle, audio, video, iv, streaming, dynamic-streaming, lua, table, json-data, extend-data, hotfix-audio, terrain, audio-chinese, audio-english, audio-japanese, audio-korean]";
+            const string blockTypeValues = "[default: all] [possible values: all, initial-audio, initial-bundle, initial-extend-data, bundle-manifest, i-fix-patch, audit-streaming, audit-dynamic-streaming, audit-iv, audit-audio, audit-video, bundle, audio, video, iv, streaming, dynamic-streaming, lua, table, json-data, extend-data, hotfix-audio, terrain, audio-chinese, audio-english, audio-japanese, audio-korean, json-lip-chinese, json-lip-english, json-lip-japanese, json-lip-korean]";
 
             switch (command.ToLowerInvariant())
             {
@@ -1997,7 +1985,7 @@ namespace AnimeStudio.CLI
                         "  -b, --block <BLOCK>",
                         "          Repeatable: audio, initial-audio, audit-audio, hotfix-audio, audio-chinese,",
                         "          audio-english, audio-japanese, audio-korean",
-                        "          Any selected audio block is conditionally ignored only when all declared chunks are missing.",
+                        "          Any selected audio or JsonLip block is conditionally ignored only when all declared chunks are missing.",
                         "      --hirc-only",
                         "          Skip media magic verification and emit numeric BNK/HIRC framing census",
                         "  -h, --help",
@@ -2008,8 +1996,8 @@ namespace AnimeStudio.CLI
                         $"Usage: {executable} vfs-audit [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
                         "",
                         "Certify every physical VFS catalog file and logical file boundary without writing payloads.",
-                        "Audio blocks are parsed normally whenever physical chunks exist.",
-                        "An audio block is conditionally ignored only when every declared chunk is absent from both roots.",
+                        "Audio and JsonLip blocks are parsed normally whenever physical chunks exist.",
+                        "An audio or JsonLip block is conditionally ignored only when every declared chunk is absent from both roots.",
                         "",
                         "Options:",
                         "  -s, --streaming-assets <PRIMARY_ASSETS>",
@@ -2032,8 +2020,8 @@ namespace AnimeStudio.CLI
                         $"Usage: {executable} vfs-profile [OPTIONS] --streaming-assets <PRIMARY_ASSETS>",
                         "",
                         "Stream bounded structural observations for every selected logical VFS file.",
-                        "Audio blocks are profiled normally whenever physical chunks exist.",
-                        "An audio block is conditionally ignored only when every declared chunk is absent from both roots.",
+                        "Audio and JsonLip blocks are profiled normally whenever physical chunks exist.",
+                        "An audio or JsonLip block is conditionally ignored only when every declared chunk is absent from both roots.",
                         "The summary is moved last as the successful publication marker.",
                         "",
                         "Options:",
@@ -2109,8 +2097,12 @@ namespace AnimeStudio.CLI
             public bool UseAllBlockTypes { get; private set; } = true;
             public string BlockFilterName { get; private set; } = "All";
 
+            // JsonData owns game/Json, including the separately shipped language blocks.
             public IEnumerable<EndfieldVfsBlockType> SelectedBlockTypes() =>
-                UseAllBlockTypes || BlockTypes.Count == 0 ? EndfieldVfsBlockTypes.AllDumpable : BlockTypes;
+                UseAllBlockTypes || BlockTypes.Count == 0 ? EndfieldVfsBlockTypes.AllDumpable
+                    : BlockTypes.SelectMany(block => block == EndfieldVfsBlockType.JsonData
+                        ? EndfieldVfsBlockTypes.AllDumpable.Where(item => item == block || EndfieldVfsBlockTypes.IsLipSync((byte)item))
+                        : new[] { block }).Distinct();
 
             public bool ShouldIncludeFile(string fileName)
             {

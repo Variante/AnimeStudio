@@ -34,10 +34,16 @@ namespace AnimeStudio.Endfield
         AudioEnglish = 102,
         AudioJapanese = 103,
         AudioKorean = 104,
+        JsonLipChinese = 105,
+        JsonLipEnglish = 106,
+        JsonLipJapanese = 107,
+        JsonLipKorean = 108,
         Raw = 255,
     }
 
-    public enum EndfieldVfsFileTag : byte
+    // Version 4 stores 32-bit tags; version 5 stores 64-bit values. Unknown
+    // values are retained verbatim, without assigning historical tag meanings.
+    public enum EndfieldVfsFileTag : ulong
     {
         None = 0,
         Audit = 1,
@@ -73,6 +79,10 @@ namespace AnimeStudio.Endfield
             EndfieldVfsBlockType.AudioEnglish,
             EndfieldVfsBlockType.AudioJapanese,
             EndfieldVfsBlockType.AudioKorean,
+            EndfieldVfsBlockType.JsonLipChinese,
+            EndfieldVfsBlockType.JsonLipEnglish,
+            EndfieldVfsBlockType.JsonLipJapanese,
+            EndfieldVfsBlockType.JsonLipKorean,
         };
 
         public static IReadOnlyList<EndfieldVfsBlockType> AllDumpable => Dumpable;
@@ -106,6 +116,10 @@ namespace AnimeStudio.Endfield
             102 => EndfieldVfsBlockType.AudioEnglish,
             103 => EndfieldVfsBlockType.AudioJapanese,
             104 => EndfieldVfsBlockType.AudioKorean,
+            105 => EndfieldVfsBlockType.JsonLipChinese,
+            106 => EndfieldVfsBlockType.JsonLipEnglish,
+            107 => EndfieldVfsBlockType.JsonLipJapanese,
+            108 => EndfieldVfsBlockType.JsonLipKorean,
             _ => EndfieldVfsBlockType.Raw,
         };
 
@@ -113,7 +127,7 @@ namespace AnimeStudio.Endfield
         {
             0 or 1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or
             11 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or
-            21 or 22 or 101 or 102 or 103 or 104 => true,
+            21 or 22 or 101 or 102 or 103 or 104 or 105 or 106 or 107 or 108 => true,
             _ => false,
         };
 
@@ -121,11 +135,7 @@ namespace AnimeStudio.Endfield
             ? ((EndfieldVfsBlockType)value).GetName()
             : $"Unknown({value})";
 
-        public static EndfieldVfsFileTag FileTagFromByte(byte value) => value switch
-        {
-            1 => EndfieldVfsFileTag.Audit,
-            _ => EndfieldVfsFileTag.None,
-        };
+        public static EndfieldVfsFileTag FileTagFromValue(ulong value) => (EndfieldVfsFileTag)value;
 
         public static string GetName(this EndfieldVfsBlockType blockType) => blockType switch
         {
@@ -156,6 +166,10 @@ namespace AnimeStudio.Endfield
             EndfieldVfsBlockType.AudioEnglish => "AudioEnglish",
             EndfieldVfsBlockType.AudioJapanese => "AudioJapanese",
             EndfieldVfsBlockType.AudioKorean => "AudioKorean",
+            EndfieldVfsBlockType.JsonLipChinese => "JsonLipChinese",
+            EndfieldVfsBlockType.JsonLipEnglish => "JsonLipEnglish",
+            EndfieldVfsBlockType.JsonLipJapanese => "JsonLipJapanese",
+            EndfieldVfsBlockType.JsonLipKorean => "JsonLipKorean",
             EndfieldVfsBlockType.Raw => "Raw",
             _ => "Raw",
         };
@@ -175,6 +189,11 @@ namespace AnimeStudio.Endfield
             blockType = EndfieldVfsBlockType.Raw;
             return false;
         }
+
+        public static bool IsLipSync(byte value) => value is >= 105 and <= 108;
+
+        public static bool IsOptionalDownload(byte value) => value is
+            1 or 9 or 12 or 21 or 101 or 102 or 103 or 104 or 105 or 106 or 107 or 108;
 
         private static string NormalizeCliValue(string value) =>
             value.Replace("-", "", StringComparison.Ordinal)

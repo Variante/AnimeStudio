@@ -82,7 +82,14 @@ namespace AnimeStudio.Endfield
             var cipher = new EndfieldChaCha20(EndfieldVfsKeys.ChaChaKey, nonce, 1);
             cipher.ApplyKeystream(decrypted);
 
-            return ParseBlockInfo(decrypted, true);
+            try
+            {
+                return ParseBlockInfo(decrypted, true);
+            }
+            catch (EndfieldVfsException exception)
+            {
+                throw new EndfieldVfsException($"block metadata '{blockFilePath}': {exception.Message}", exception);
+            }
         }
 
         public IReadOnlyList<EndfieldVfsCatalogEntry> DiscoverCatalog()
@@ -509,7 +516,7 @@ namespace AnimeStudio.Endfield
                 codeVersion = 3;
                 version = rawVersion;
             }
-            if (codeVersion < 1 || codeVersion > 4)
+            if (codeVersion < 1 || codeVersion > 5)
             {
                 throw new EndfieldVfsException($"invalid block data: unsupported code version {codeVersion}");
             }
@@ -545,7 +552,8 @@ namespace AnimeStudio.Endfield
             var parsedFileCount = 0L;
             var summedChunkLength = 0L;
             var virtualFileNames = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
-            var chunkCount = ReadCount(reader, "chunk_count", 45 + (codeVersion > 3 ? 4 : 0));
+            var tagBytes = codeVersion >= 5 ? 8 : codeVersion == 4 ? 4 : 0;
+            var chunkCount = ReadCount(reader, "chunk_count", 45 + tagBytes);
             for (var i = 0; i < chunkCount; i++)
             {
                 var chunkMd5Name = ReadUInt128LittleEndian(reader);
@@ -579,10 +587,11 @@ namespace AnimeStudio.Endfield
 
                 if (codeVersion > 3)
                 {
-                    chunk.MainTag = EndfieldVfsBlockTypes.FileTagFromByte((byte)reader.ReadInt32());
+                    chunk.MainTag = EndfieldVfsBlockTypes.FileTagFromValue(
+                        codeVersion >= 5 ? reader.ReadUInt64() : reader.ReadUInt32());
                 }
 
-                var fileCount = ReadCount(reader, "file_count", 60);
+                var fileCount = ReadCount(reader, "file_count", 60 + tagBytes);
                 for (var j = 0; j < fileCount; j++)
                 {
                     var fileNameLength = reader.ReadUInt16();
@@ -629,7 +638,8 @@ namespace AnimeStudio.Endfield
 
                     if (codeVersion > 3)
                     {
-                        file.FileTag = EndfieldVfsBlockTypes.FileTagFromByte((byte)reader.ReadInt32());
+                        file.FileTag = EndfieldVfsBlockTypes.FileTagFromValue(
+                            codeVersion >= 5 ? reader.ReadUInt64() : reader.ReadUInt32());
                     }
 
                     chunk.Files.Add(file);
