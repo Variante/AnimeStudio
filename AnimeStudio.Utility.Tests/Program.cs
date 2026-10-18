@@ -12,6 +12,7 @@ static class Program
         TestSpirVSnippetBoundsFailClosed();
         TestEndfieldConstantBufferTable();
         TestEndfieldConstantBufferTableFailsClosed();
+        TestEndfieldDescriptorSetId();
         TestEndfieldBufferAndSamplerResourceRows();
         TestEndfieldPartialConstantBufferMetadata();
         TestShaderRecoveryContract();
@@ -240,8 +241,16 @@ static class Program
     }
 
 
+    private static void TestEndfieldDescriptorSetId()
+    {
+        var record = BuildEndfieldParameterRecord(0, 16, descriptorSetId: 2);
+        AssertEqual(true, EndfieldShaderParameterRecord.TryParse(record, out var parsed),
+            "descriptor set ID may differ from row ordinal");
+        AssertEqual(2, parsed.DescriptorSets.Single().SetId, "stored descriptor set ID survives parsing");
+    }
+
     private static byte[] BuildEndfieldParameterRecord(int structCount, int secondFieldOffset,
-        (string Name, uint Kind, uint[] Words)[]? extraResources = null)
+        (string Name, uint Kind, uint[] Words)[]? extraResources = null, int descriptorSetId = 0)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -274,7 +283,7 @@ static class Program
 
         writer.Write(1);
         WriteAlignedString(writer, "Global");
-        writer.Write(0);
+        writer.Write(descriptorSetId);
         writer.Write(1);
         writer.Write(0);
         WriteAlignedString(writer, "_MainTex");

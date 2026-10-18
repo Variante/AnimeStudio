@@ -2501,7 +2501,9 @@ namespace AnimeStudio
                     || !TryReadInt32(record, ref endOffset, out var maxBindingIndex)
                     || setId < 0
                     || setId > byte.MaxValue
-                    || setId != setIndex
+                    // Stored set IDs are keys: valid records can omit a set
+                    // (for example Global=0, PerObject=2). The row ordinal
+                    // cannot establish descriptor-set identity.
                     || !seenSetIds.Add(setId)
                     || bindingCount < 0
                     || bindingCount > MaxBindingCount
