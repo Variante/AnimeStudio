@@ -32,6 +32,9 @@ namespace AnimeStudio.CLI
         {
             try
             {
+                if (o.FallbackCabMap != null &&
+                    (!o.MapOp.HasFlag(MapOpType.CABMap) || !o.MapOp.HasFlag(MapOpType.Load)))
+                    throw new ArgumentException("--fallback_cab_map requires --map_op CABMap,Load.");
                 var game = GameManager.GetGame(o.GameName);
 
                 // See https://github.com/Eleiyas/Z3-Asset-Map 
@@ -84,6 +87,11 @@ namespace AnimeStudio.CLI
                 assetsManager.Silent = o.Silent;
                 assetsManager.Game = game;
                 assetsManager.SpecifyUnityVersion = o.UnityVersion;
+                assetsManager.DependencyFiles = (o.DependencyFiles ?? Array.Empty<FileInfo>()).Select(file => Path.GetFullPath(file.FullName)).ToArray();
+                if (assetsManager.DependencyFiles.Any(path => !File.Exists(path)))
+                    throw new FileNotFoundException("--dependency_files contains a missing file.");
+                if (assetsManager.DependencyFiles.Select(Path.GetFileName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != assetsManager.DependencyFiles.Length)
+                    throw new ArgumentException("--dependency_files contains ambiguous duplicate filenames.");
 
                 var exportTargets = CreateExportTargets(o, typeFilterPlan);
                 if (exportTargets == null)
@@ -409,7 +417,10 @@ namespace AnimeStudio.CLI
             {
                 if (o.MapOp.HasFlag(MapOpType.Load))
                 {
-                    AssetsHelper.LoadCABMapInternal(o.MapName);
+                    if (!AssetsHelper.LoadCABMapInternal(o.MapName))
+                        throw new InvalidDataException($"Primary CABMap {o.MapName} could not be loaded.");
+                    if (o.FallbackCabMap != null && !AssetsHelper.LoadCABMapFallback(o.FallbackCabMap.FullName))
+                        throw new InvalidDataException($"Fallback CABMap {o.FallbackCabMap.FullName} could not be loaded.");
                     assetsManager.ResolveDependencies = true;
                 }
                 else
@@ -525,7 +536,7 @@ namespace AnimeStudio.CLI
                     // bundles this file references; they are loaded only so
                     // cross-bundle PPtrs (e.g. a SkinnedMeshRenderer's Mesh)
                     // resolve, and are exported when selected themselves.
-                    var sourceFiles = assetsManager.ResolveDependencies
+                    var sourceFiles = assetsManager.ResolveDependencies || assetsManager.DependencyFiles.Length > 0
                         ? SelectPrimaryFiles(assetsManager.assetsFileList, file)
                         : assetsManager.assetsFileList;
                     ObjectIndexJsonlWriter.Current?.WriteLoadedMonoScripts(sourceFiles);

@@ -17,6 +17,10 @@ namespace AnimeStudio
         public bool Silent = false;
         public bool SkipProcess = false;
         public bool ResolveDependencies = false;        
+        // Explicit serialized dependency files (e.g. the selected player's
+        // built-in Unity resources). They are parsed with each input batch,
+        // independently of filter_data, but do not select export outputs.
+        public string[] DependencyFiles = Array.Empty<string>();
         public string SpecifyUnityVersion;
         public CancellationTokenSource tokenSource = new CancellationTokenSource();
         public List<SerializedFile> assetsFileList = new List<SerializedFile>();
@@ -84,7 +88,7 @@ namespace AnimeStudio
             MergeSplitAssets(path);
             var toReadFile = ProcessingSplitFiles(files.ToList());
             if (ResolveDependencies)
-                toReadFile = AssetsHelper.ProcessDependencies(toReadFile);
+                toReadFile = AssetsHelper.ProcessDependencies(toReadFile, DependencyRootOffsets(toReadFile));
             Load(toReadFile);
 
             if (Silent)
@@ -104,7 +108,7 @@ namespace AnimeStudio
 
             var toReadFile = files;
             if (ResolveDependencies)
-                toReadFile = AssetsHelper.ProcessDependencies(toReadFile);
+                toReadFile = AssetsHelper.ProcessDependencies(toReadFile, DependencyRootOffsets(toReadFile));
             Load(toReadFile);
 
             if (Silent)
@@ -141,6 +145,16 @@ namespace AnimeStudio
                 Logger.Verbose($"caching {file} path and name to filter out duplicates");
                 importFiles.Add(file);
                 importFilesHash.Add(Path.GetFileName(file));
+            }
+
+            foreach (var dependency in DependencyFiles)
+            {
+                var fullPath = Path.GetFullPath(dependency);
+                if (!File.Exists(fullPath)) throw new FileNotFoundException("Serialized dependency file is missing", fullPath);
+                var name = Path.GetFileName(fullPath);
+                if (importFilesHash.Add(name)) importFiles.Add(fullPath);
+                else if (!importFiles.Any(path => string.Equals(Path.GetFullPath(path), fullPath, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException($"Ambiguous serialized dependency filename: {name}");
             }
 
             Progress.Reset();
@@ -187,7 +201,8 @@ namespace AnimeStudio
         private void LoadFile(FileReader reader)
         {
             OffsetData.Clear();
-            if (FilterData.Items.Count > 0)
+            if (FilterData.Items.Count > 0 && !DependencyFiles.Any(path =>
+                string.Equals(Path.GetFullPath(path), reader.FullPath, StringComparison.OrdinalIgnoreCase)))
             {
                 bool matched;
                 List<long> offsets;
@@ -525,6 +540,24 @@ namespace AnimeStudio
             {
                 reader.Dispose();
             }
+        }
+
+        private Dictionary<string, HashSet<long>> DependencyRootOffsets(string[] files)
+        {
+            // A negative offset is an explicit whole-file selection. Keep the
+            // existing broad behavior rather than silently narrowing it.
+            if (FilterData.Items.Count == 0 || FilterData.Items.Any(item => item.Offset < 0)) return null;
+            EnsureFilterDataIndex();
+            var result = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in files)
+            {
+                var fullPath = Path.GetFullPath(file);
+                var selected = new HashSet<long>();
+                foreach (var key in new[] { file, fullPath, Path.GetFileName(file) })
+                    if (FilterDataOffsetsBySourceKey.TryGetValue(key, out var offsets)) selected.UnionWith(offsets);
+                result[fullPath] = selected;
+            }
+            return result;
         }
 
         private void EnsureFilterDataIndex()

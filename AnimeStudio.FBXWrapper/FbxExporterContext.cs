@@ -126,7 +126,7 @@ namespace AnimeStudio.FbxInterop
 
                 var childNode = AsFbxExportSingleFrame(_pContext, parentNode, frame.Path, frame.Name, frame.LocalPosition, frame.LocalRotation, frame.LocalScale);
 
-                if (meshList != null && ImportedHelpers.FindMesh(frame.Path, meshList) != null)
+                if (meshList != null && ImportedHelpers.FindMesh(frame, meshList) != null)
                 {
                     meshFrames.Add(frame);
                 }
@@ -189,7 +189,7 @@ namespace AnimeStudio.FbxInterop
         internal void ExportMeshFromFrame(ImportedFrame rootFrame, ImportedFrame meshFrame, List<ImportedMesh> meshList, List<ImportedMaterial> materialList, List<ImportedTexture> textureList)
         {
             var meshNode = _frameToNode[meshFrame];
-            var mesh = ImportedHelpers.FindMesh(meshFrame.Path, meshList);
+            var mesh = ImportedHelpers.FindMesh(meshFrame, meshList);
 
             ExportMesh(rootFrame, materialList, textureList, meshNode, mesh);
         }

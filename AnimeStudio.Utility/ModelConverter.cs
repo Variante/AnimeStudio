@@ -279,10 +279,24 @@ namespace AnimeStudio
         {
             var mesh = GetMesh(meshR);
             if (mesh == null)
+            {
+                PPtr<Mesh> pointer = null;
+                if (meshR is SkinnedMeshRenderer skinned) pointer = skinned.m_Mesh;
+                else if (meshR.m_GameObject.TryGet(out var owner) && owner.m_MeshFilter != null) pointer = owner.m_MeshFilter.m_Mesh;
+                if (pointer != null && pointer.m_PathID != 0)
+                {
+                    var slot = pointer.m_FileID;
+                    var external = slot > 0 && slot <= meshR.assetsFile.m_Externals.Count
+                        ? meshR.assetsFile.m_Externals[slot - 1].fileName : meshR.assetsFile.fileName;
+                    Logger.Warning($"Model part omitted: renderer {meshR.assetsFile.fileName}/{meshR.m_PathID}; Mesh PPtr fileId={slot}, PathID={pointer.m_PathID}, target={external}; target is unresolved or not a parsed Mesh.");
+                }
                 return;
+            }
             var iMesh = new ImportedMesh();
             meshR.m_GameObject.TryGet(out var m_GameObject2);
             iMesh.Path = GetTransformPath(m_GameObject2.m_Transform);
+            transformDictionary.TryGetValue(m_GameObject2.m_Transform, out var meshFrame);
+            iMesh.Frame = meshFrame;
             iMesh.SubmeshList = new List<ImportedSubmesh>();
             var subHashSet = new HashSet<int>();
             var combine = false;

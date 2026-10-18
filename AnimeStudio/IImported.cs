@@ -154,6 +154,11 @@ namespace AnimeStudio
     public class ImportedMesh
     {
         public string Path { get; set; }
+        // Unity permits siblings with the same name/path. Preserve the actual
+        // owning frame so FBX export neither steals another renderer's mesh
+        // nor attaches geometry to an unrendered same-path frame.
+        [Newtonsoft.Json.JsonIgnore]
+        public ImportedFrame Frame { get; set; }
         public List<ImportedVertex> VertexList { get; set; }
         public List<ImportedSubmesh> SubmeshList { get; set; }
         public List<ImportedBone> BoneList { get; set; }
@@ -307,6 +312,17 @@ namespace AnimeStudio
 
     public static class ImportedHelpers
     {
+        public static ImportedMesh FindMesh(ImportedFrame frame, List<ImportedMesh> importedMeshList)
+        {
+            ImportedMesh legacy = null;
+            foreach (var mesh in importedMeshList)
+            {
+                if (ReferenceEquals(mesh.Frame, frame)) return mesh;
+                if (mesh.Frame == null && mesh.Path == frame.Path && legacy == null) legacy = mesh;
+            }
+            return legacy;
+        }
+
         public static ImportedMesh FindMesh(string path, List<ImportedMesh> importedMeshList)
         {
             foreach (var mesh in importedMeshList)

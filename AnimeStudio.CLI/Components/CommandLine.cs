@@ -49,6 +49,8 @@ namespace AnimeStudio.CLI
                 optionsBinder.DocumentStore,
                 optionsBinder.SpriteImages,
                 optionsBinder.CabMapDir,
+                optionsBinder.FallbackCabMap,
+                optionsBinder.DependencyFiles,
                 optionsBinder.SkipSourcesFile,
                 optionsBinder.AllowPartialJson,
                 optionsBinder.FilterDataFile,
@@ -99,6 +101,8 @@ namespace AnimeStudio.CLI
         public FileInfo DocumentStore { get; set; }
         public FileInfo SpriteImages { get; set; }
         public DirectoryInfo CabMapDir { get; set; }
+        public FileInfo FallbackCabMap { get; set; }
+        public FileInfo[] DependencyFiles { get; set; }
         public FileInfo SkipSourcesFile { get; set; }
         public bool AllowPartialJson { get; set; }
         public FileInfo FilterDataFile { get; set; }
@@ -138,6 +142,8 @@ namespace AnimeStudio.CLI
         public readonly Option<FileInfo> DocumentStore;
         public readonly Option<FileInfo> SpriteImages;
         public readonly Option<DirectoryInfo> CabMapDir;
+        public readonly Option<FileInfo> FallbackCabMap;
+        public readonly Option<FileInfo[]> DependencyFiles;
         public readonly Option<FileInfo> SkipSourcesFile;
         public readonly Option<bool> AllowPartialJson;
         public readonly Option<FileInfo> FilterDataFile;
@@ -185,6 +191,8 @@ namespace AnimeStudio.CLI
             AllowPartialJson = new Option<bool>("--allow_partial_json", "Diagnostics only: also write partially decoded object JSON and keep $inferred/$partial content.");
             SkipSourcesFile = new Option<FileInfo>("--skip_sources_file", "JSON array of {Source, Offset} bundle slots to load for reference resolution but not export.");
             CabMapDir = new Option<DirectoryInfo>("--cab_map_dir", "Folder that holds CABMap *.bin files. Defaults to ./Maps under the working directory.");
+            FallbackCabMap = new Option<FileInfo>("--fallback_cab_map", "CABMap used only for CAB names absent from the primary map; retains each map's source root.").LegalFilePathsOnly();
+            DependencyFiles = new Option<FileInfo[]>("--dependency_files", "Explicit serialized files loaded only as dependencies, including with filter_data; never select their objects for export.") { AllowMultipleArgumentsPerToken = true };
             ExportManifestJsonl = new Option<FileInfo>("--export_manifest_jsonl", "Write one JSONL row per exported path with the serialized file, VFS chunk, and bundle offset that produced it.");
             DocumentStore = new Option<FileInfo>("--document_store", "Write JSON or Convert target .json/.anim documents as rows of this SQLite file (endfield.unity-object-store.v1, keyed by type folder and file name) instead of loose files; media stays on disk. The file is replaced when the export completes.");
             SpriteImages = new Option<FileInfo>("--sprite_images", "Convert target: also write AnimeStudio's own image of every exported Sprite as a PNG row of this SQLite file (endfield.sprite-image-store.v1), and check that each Sprite crop document reproduces it; the counts and first mismatches are its meta row 'spriteCheck'.");
@@ -360,6 +368,8 @@ namespace AnimeStudio.CLI
             DocumentStore = bindingContext.ParseResult.GetValueForOption(DocumentStore),
             SpriteImages = bindingContext.ParseResult.GetValueForOption(SpriteImages),
             CabMapDir = bindingContext.ParseResult.GetValueForOption(CabMapDir),
+            FallbackCabMap = bindingContext.ParseResult.GetValueForOption(FallbackCabMap),
+            DependencyFiles = bindingContext.ParseResult.GetValueForOption(DependencyFiles),
             SkipSourcesFile = bindingContext.ParseResult.GetValueForOption(SkipSourcesFile),
             AllowPartialJson = bindingContext.ParseResult.GetValueForOption(AllowPartialJson),
             FilterDataFile = bindingContext.ParseResult.GetValueForOption(FilterDataFile),

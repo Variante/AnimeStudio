@@ -93,14 +93,13 @@ namespace AnimeStudio
                 var cab = work.Dequeue();
                 if (CABMap.TryGetValue(cab, out var entry))
                 {
-                    var fullPath = Path.Combine(BaseFolder, entry.Path);
+                    var fullPath = Path.GetFullPath(Path.Combine(BaseFolder, entry.Path));
                     Logger.Verbose($"Found {cab} in {fullPath}");
-                    if (!paths.Contains(fullPath))
-                    {
-                        Offsets.TryAdd(fullPath, new HashSet<long>());
-                        Offsets[fullPath].Add(entry.Offset);
-                        Logger.Verbose($"Added {fullPath} to Offsets, at offset {entry.Offset}");
-                    }
+                    // A filtered input still needs dependency bundles in the
+                    // same chunk. Keep their offsets alongside the input slot.
+                    Offsets.TryAdd(fullPath, new HashSet<long>());
+                    Offsets[fullPath].Add(entry.Offset);
+                    Logger.Verbose($"Added {fullPath} to Offsets, at offset {entry.Offset}");
                     foreach (var dep in entry.Dependencies)
                     {
                         if (!cabs.Contains(dep))
@@ -151,7 +150,7 @@ namespace AnimeStudio
             return cabs.Count != 0;
         }
 
-        public static string[] ProcessFiles(string[] files_list)
+        public static string[] ProcessFiles(string[] files_list, IReadOnlyDictionary<string, HashSet<long>> rootOffsets = null)
         {
             HashSet<string> files = new HashSet<string>(files_list, StringComparer.OrdinalIgnoreCase);
             foreach (var file in files)
@@ -160,6 +159,14 @@ namespace AnimeStudio
                 Logger.Verbose($"Added {file} to Offsets dictionary");
                 if (FindCAB(file, out var cabs))
                 {
+                    // Only the initially selected bundles constrain roots.
+                    // Their transitive dependencies remain complete, including
+                    // dependencies elsewhere in this same physical chunk.
+                    if (rootOffsets != null)
+                    {
+                        rootOffsets.TryGetValue(Path.GetFullPath(file), out var selectedOffsets);
+                        cabs.RemoveWhere(cab => selectedOffsets == null || !CABMap.TryGetValue(cab, out var entry) || !selectedOffsets.Contains(entry.Offset));
+                    }
                     AddCABOffsetsFast(files, cabs);
                 }
             }
@@ -167,7 +174,7 @@ namespace AnimeStudio
             return Offsets.Keys.ToArray();
         }
 
-        public static string[] ProcessDependencies(string[] files)
+        public static string[] ProcessDependencies(string[] files, IReadOnlyDictionary<string, HashSet<long>> rootOffsets = null)
         {
             if (CABMap.Count == 0)
             {
@@ -176,7 +183,7 @@ namespace AnimeStudio
             else
             {
                 Logger.Info("Resolving Dependencies...");
-                files = ProcessFiles(files);
+                files = ProcessFiles(files, rootOffsets);
             }
             return files;
         }
@@ -294,6 +301,7 @@ namespace AnimeStudio
             {
                 CABMap.Clear();
                 CABsByPath = null;
+                BaseFolder = string.Empty;
                 using var fs = File.OpenRead(Path.Combine(MapName, $"{mapName}.bin"));
                 using var reader = new BinaryReader(fs);
                 ParseCABMap(reader);
@@ -317,6 +325,7 @@ namespace AnimeStudio
             {
                 CABMap.Clear();
                 CABsByPath = null;
+                BaseFolder = string.Empty;
                 using var fs = File.OpenRead(path);
                 using var reader = new BinaryReader(fs);
                 ParseCABMap(reader);
@@ -332,16 +341,36 @@ namespace AnimeStudio
             return true;
         }
 
-        private static void ParseCABMap(BinaryReader reader)
+        public static bool LoadCABMapFallback(string path)
         {
-            BaseFolder = reader.ReadString();
+            try
+            {
+                if (string.IsNullOrEmpty(BaseFolder))
+                    throw new InvalidOperationException("Load the primary CABMap before its fallback.");
+                using var reader = new BinaryReader(File.OpenRead(path));
+                ParseCABMap(reader, fallback: true);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Logger.Warning($"Fallback CABMap {path} was not loaded, {e}");
+                return false;
+            }
+        }
+
+        private static void ParseCABMap(BinaryReader reader, bool fallback = false)
+        {
+            var sourceRoot = reader.ReadString();
             var count = reader.ReadInt32();
+            if (count < 0) throw new InvalidDataException("Negative CABMap entry count.");
+            var parsed = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < count; i++)
             {
                 var cab = reader.ReadString();
                 var path = reader.ReadString();
                 var offset = reader.ReadInt64();
                 var depCount = reader.ReadInt32();
+                if (offset < 0 || depCount < 0) throw new InvalidDataException("Invalid CABMap offset or dependency count.");
                 var dependencies = new List<string>();
                 for (int j = 0; j < depCount; j++)
                 {
@@ -349,12 +378,19 @@ namespace AnimeStudio
                 }
                 var entry = new Entry()
                 {
-                    Path = path,
+                    Path = fallback ? Path.GetRelativePath(BaseFolder, Path.Combine(sourceRoot, path)) : path,
                     Offset = offset,
                     Dependencies = dependencies
                 };
-                CABMap.Add(cab, entry);
+                parsed.Add(cab, entry);
             }
+            if (reader.BaseStream.Position != reader.BaseStream.Length)
+                throw new InvalidDataException("Trailing CABMap bytes.");
+            if (!fallback) BaseFolder = sourceRoot;
+            foreach (var (cab, entry) in parsed)
+                if (fallback) CABMap.TryAdd(cab, entry);
+                else CABMap.Add(cab, entry);
+            CABsByPath = null;
         } 
 
         public static async Task BuildAssetMap(string[] files, string mapName, Game game, string savePath, ExportListType exportListType, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null)
