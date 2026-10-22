@@ -952,6 +952,7 @@ namespace AnimeStudio
         private void ReadVertexData()
         {
             m_VertexCount = (int)m_VertexData.m_VertexCount;
+            bool explicitFourBlendWeights = false;
 
             for (var chn = 0; chn < m_VertexData.m_Channels.Count; chn++)
             {
@@ -1082,6 +1083,8 @@ namespace AnimeStudio
                                     {
                                         InitMSkin();
                                     }
+                                    // Four stored weights must survive without complement round trips.
+                                    explicitFourBlendWeights = m_Channel.dimension == 4;
                                     for (int i = 0; i < m_VertexCount; i++)
                                     {
                                         for (int j = 0; j < m_Channel.dimension; j++)
@@ -1089,7 +1092,8 @@ namespace AnimeStudio
                                             m_Skin[i].weight[j] = componentsFloatArray[i * m_Channel.dimension + j];
                                         }
 
-                                        m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
+                                        if (!explicitFourBlendWeights)
+                                            m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
 
                                     }
                                     break;
@@ -1105,7 +1109,8 @@ namespace AnimeStudio
                                             m_Skin[i].boneIndex[j] = componentsIntArray[i * m_Channel.dimension + j];
                                         }
 
-                                        m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
+                                        if (!explicitFourBlendWeights)
+                                            m_Skin[i].weight[0] = 1.0f - m_Skin[i].weight.Sum();
                                     }
                                     break;
                             }
